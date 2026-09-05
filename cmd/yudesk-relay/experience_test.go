@@ -93,10 +93,11 @@ func TestNativeViewerExperience(t *testing.T) {
 	if !strings.Contains(string(data), id.ID) || strings.Contains(string(data), id.PIN) {
 		t.Fatalf("invalid history: %s", data)
 	}
-	f.post(base, "/api/exit", nil)
-	v.exited(t)
-	v = f.viewer(viewerDir)
+	f.post(base, "/api/disconnect", nil)
 	launcher := f.page(filepath.Join(viewerDir, "viewer-launcher.url"))
+	if !v.running() {
+		t.Fatal("ending a session exited the Viewer instead of returning to its launcher")
+	}
 	r, err := client.Get(launcher)
 	if err != nil {
 		t.Fatal(err)

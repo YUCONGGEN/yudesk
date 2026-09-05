@@ -230,6 +230,12 @@ type viewerConnectRequest struct {
 	pin      string
 	control  bool
 	audio    bool
+	webAddr  string
+}
+
+type viewerSessionOutcome struct {
+	webAddr          string
+	returnToLauncher bool
 }
 
 func main() {
@@ -299,7 +305,10 @@ func runViewer(config viewerConfig) error {
 	}
 	defer instanceLock.Close()
 
-	if config.pin == "" || config.deviceID == "" {
+	useLauncher := config.pin == "" || config.deviceID == ""
+	launcherAddr := config.web
+	launcherMessage := ""
+	if useLauncher {
 		if existingURL, fullscreen := currentViewerUI(viewerDirectory, accessToken, config.web); existingURL != "" {
 			if !currentViewerUIVersion(existingURL) {
 				_ = requestExistingViewerExit(existingURL, fullscreen)
@@ -314,20 +323,51 @@ func runViewer(config viewerConfig) error {
 				return nil
 			}
 		}
-		request, connect, err := runViewerLauncher(config.web, config.openUI, viewerDirectory, accessToken)
-		if err != nil || !connect {
-			return err
-		}
-		config.deviceID = request.deviceID
-		config.pin = request.pin
-		config.control = request.control
-		config.audio = request.audio
-		config.web = "127.0.0.1:0"
 	}
-	return runViewerSession(config, viewerDirectory, accessToken)
+	for {
+		if useLauncher {
+			request, connect, err := runViewerLauncherWithMessage(launcherAddr, config.openUI, viewerDirectory, accessToken, launcherMessage)
+			if err != nil || !connect {
+				return err
+			}
+			config.deviceID = request.deviceID
+			config.pin = request.pin
+			config.control = request.control
+			config.audio = request.audio
+			config.web = request.webAddr
+			launcherAddr = request.webAddr
+			// The existing launcher window follows the local mode endpoint into
+			// the session. Opening another browser window here leaves a stale
+			// "connecting" page behind when the session ends.
+			config.openUI = false
+			launcherMessage = ""
+		}
+
+		outcome, err := runViewerSession(config, viewerDirectory, accessToken)
+		if err != nil {
+			if !useLauncher {
+				return err
+			}
+			config.deviceID = ""
+			config.pin = ""
+			config.web = launcherAddr
+			launcherMessage = "连接失败：" + err.Error()
+			continue
+		}
+		if !outcome.returnToLauncher {
+			return nil
+		}
+
+		useLauncher = true
+		launcherAddr = outcome.webAddr
+		config.web = outcome.webAddr
+		config.deviceID = ""
+		config.pin = ""
+		config.openUI = false
+	}
 }
 
-func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) error {
+func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) (viewerSessionOutcome, error) {
 	var raw net.Conn
 	var err error
 	if config.relayAddr != "" {
@@ -336,13 +376,13 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 		raw, err = tls.DialWithDialer(&net.Dialer{Timeout: 8 * time.Second, KeepAlive: 30 * time.Second}, "tcp", config.agentAddr, &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true})
 	}
 	if err != nil {
-		return err
+		return viewerSessionOutcome{}, err
 	}
 	defer raw.Close()
 	wire := &measuredConn{Conn: raw}
 	secured, err := secureconn.Connect(wire, config.deviceID)
 	if err != nil {
-		return fmt.Errorf("end-to-end authentication failed: %w", err)
+		return viewerSessionOutcome{}, fmt.Errorf("end-to-end authentication failed: %w", err)
 	}
 	c := newClient(secured)
 	mode := "view"
@@ -351,7 +391,7 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 	}
 	authResponse, err := c.request("auth", map[string]any{"pin": config.pin, "mode": mode, "audio": config.audio}, nil)
 	if err != nil {
-		return fmt.Errorf("authentication failed: %w", err)
+		return viewerSessionOutcome{}, fmt.Errorf("authentication failed: %w", err)
 	}
 	sessionControl := config.control
 	if value, ok := authResponse.Meta["control"].(bool); ok {
@@ -372,22 +412,32 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 	if config.once != "" {
 		m, err := c.request("get_screenshot", nil, nil)
 		if err != nil {
-			return err
+			return viewerSessionOutcome{}, err
 		}
 		if err := os.WriteFile(config.once, m.Data, 0600); err != nil {
-			return err
+			return viewerSessionOutcome{}, err
 		}
 		fmt.Printf("saved %s\n", config.once)
-		return nil
+		return viewerSessionOutcome{}, nil
 	}
 	options := loadStreamOptions(viewerDirectory, config.fps, config.quality)
 	if _, err := c.request("stream_start", options, nil); err != nil {
-		return fmt.Errorf("start stream: %w", err)
+		return viewerSessionOutcome{}, fmt.Errorf("start stream: %w", err)
 	}
 	mux := http.NewServeMux()
+	var transitioning atomic.Bool
 	mux.HandleFunc("/api/ui/version", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(w, "browser-lifecycle-v1")
+	})
+	mux.HandleFunc("/api/ui/mode", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		if transitioning.Load() {
+			_, _ = io.WriteString(w, "transition")
+			return
+		}
+		_, _ = io.WriteString(w, "session")
 	})
 	mux.HandleFunc("/", serveIndexWithCapabilities(options.FPS, options.Quality, accessToken, sessionControl, config.audio, audioEnabled, audioReason))
 	registerViewerAssets(mux)
@@ -516,35 +566,53 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write(m.Data)
 	})
-	exitRequested := make(chan struct{})
-	var exitOnce sync.Once
-	requestExit := func() { exitOnce.Do(func() { close(exitRequested) }) }
+	sessionDone := make(chan struct{})
+	var sessionOnce sync.Once
+	var returnToLauncher atomic.Bool
+	finishSession := func(shouldReturn bool) {
+		sessionOnce.Do(func() {
+			returnToLauncher.Store(shouldReturn)
+			close(sessionDone)
+		})
+	}
 	uiTracker := uilifecycle.New(3 * time.Second)
 	mux.Handle("/api/ui/watch", uiTracker)
 	go func() {
 		<-uiTracker.Done()
-		requestExit()
+		finishSession(false)
 	}()
+	mux.HandleFunc("/api/disconnect", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		transitioning.Store(true)
+		serveViewerTransitionPage(w, "正在结束远程控制", "即将返回控制端连接界面。", accessToken, "launcher")
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			finishSession(true)
+		}()
+	})
 	mux.HandleFunc("/api/exit", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		serveViewerExitPage(w, "远程控制已结束")
+		serveViewerExitPage(w, "YuDesk 控制端已退出")
 		go func() {
 			time.Sleep(200 * time.Millisecond)
-			requestExit()
+			finishSession(false)
 		}()
 	})
 	listener, err := net.Listen("tcp", config.web)
 	if err != nil {
-		return err
+		return viewerSessionOutcome{}, err
 	}
 	server := &http.Server{Handler: localSecurityHeaders(requireAccessToken(accessToken, mux)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	uiURL := viewerUIURL(listener.Addr().String(), accessToken)
 	if err := writeViewerSession(viewerDirectory, uiURL); err != nil {
 		_ = listener.Close()
-		return err
+		return viewerSessionOutcome{}, err
 	}
 	defer clearViewerSession(viewerDirectory, uiURL)
 	log.Printf("visual remote desktop: %s", uiURL)
@@ -559,20 +627,26 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 	go func() {
 		select {
 		case <-c.closed:
-		case <-exitRequested:
-			_ = raw.Close()
+			finishSession(false)
+		case <-sessionDone:
 		}
+		_ = raw.Close()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}()
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+		return viewerSessionOutcome{}, err
 	}
-	return nil
+	<-sessionDone
+	return viewerSessionOutcome{webAddr: listener.Addr().String(), returnToLauncher: returnToLauncher.Load()}, nil
 }
 
 func runViewerLauncher(addr string, openUI bool, stateDir, token string) (viewerConnectRequest, bool, error) {
+	return runViewerLauncherWithMessage(addr, openUI, stateDir, token, "")
+}
+
+func runViewerLauncherWithMessage(addr string, openUI bool, stateDir, token, initialMessage string) (viewerConnectRequest, bool, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		if existingURL := activeViewerSession(stateDir, token); existingURL != "" {
@@ -598,6 +672,7 @@ func runViewerLauncher(addr string, openUI bool, stateDir, token string) (viewer
 	}
 	var selected viewerConnectRequest
 	var connect bool
+	var transitioning atomic.Bool
 	actionReady := make(chan struct{})
 	var actionOnce sync.Once
 	finish := func(request viewerConnectRequest, shouldConnect bool) {
@@ -612,6 +687,15 @@ func runViewerLauncher(addr string, openUI bool, stateDir, token string) (viewer
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = io.WriteString(w, "browser-lifecycle-v1")
 	})
+	mux.HandleFunc("/api/ui/mode", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		if transitioning.Load() {
+			_, _ = io.WriteString(w, "transition")
+			return
+		}
+		_, _ = io.WriteString(w, "launcher")
+	})
 	uiTracker := uilifecycle.New(3 * time.Second)
 	mux.Handle("/api/ui/watch", uiTracker)
 	go func() {
@@ -625,7 +709,7 @@ func runViewerLauncher(addr string, openUI bool, stateDir, token string) (viewer
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		records, err := loadHistory(stateDir)
-		message := ""
+		message := initialMessage
 		if err != nil {
 			message = "读取连接记录失败"
 		}
@@ -673,10 +757,11 @@ func runViewerLauncher(addr string, openUI bool, stateDir, token string) (viewer
 			return
 		}
 		listenAudio := r.FormValue("audio") == "1"
-		serveViewerConnectingPage(w)
+		transitioning.Store(true)
+		serveViewerTransitionPage(w, "正在连接远程电脑", "连接成功后会自动打开远程桌面，请稍候。", token, "session")
 		go func() {
 			time.Sleep(200 * time.Millisecond)
-			finish(viewerConnectRequest{deviceID: deviceID, pin: pin, control: mode == "control", audio: listenAudio}, true)
+			finish(viewerConnectRequest{deviceID: deviceID, pin: pin, control: mode == "control", audio: listenAudio, webAddr: listener.Addr().String()}, true)
 		}()
 	})
 	mux.HandleFunc("/exit", func(w http.ResponseWriter, r *http.Request) {
@@ -1041,9 +1126,22 @@ func serveViewerExitPage(w http.ResponseWriter, title string) {
 	_, _ = fmt.Fprintf(w, `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>%s</title><style>body{margin:0;background:#07111f;color:#eaf2ff;font:18px system-ui;display:grid;place-items:center;height:100vh}div{text-align:center}p{color:#8ea4bf}</style></head><body><div><h1>%s</h1><p>需要使用时，请再次双击 YuDesk 控制端。</p></div></body></html>`, template.HTMLEscapeString(title), template.HTMLEscapeString(title))
 }
 
-func serveViewerConnectingPage(w http.ResponseWriter) {
+func serveViewerTransitionPage(w http.ResponseWriter, title, detail, token, wantedMode string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>YuDesk 正在连接</title><style>body{margin:0;background:#07111f;color:#eaf2ff;font:18px system-ui;display:grid;place-items:center;height:100vh}div{text-align:center}p{color:#8ea4bf}</style></head><body><div><h1>正在连接远程电脑</h1><p>连接成功后会自动打开远程桌面，请稍候。</p></div></body></html>`)
+	_, _ = fmt.Fprintf(w, `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>YuDesk %s</title><style>body{margin:0;background:#07111f;color:#eaf2ff;font:18px system-ui;display:grid;place-items:center;height:100vh}div{text-align:center}p{color:#8ea4bf}</style></head><body data-token="%s" data-mode="%s"><div><h1>%s</h1><p>%s</p></div><script>
+const token=document.body.dataset.token;
+const wanted=document.body.dataset.mode;
+const target='/?access_token='+encodeURIComponent(token);
+async function follow(){
+  try{
+    const response=await fetch('/api/ui/mode?access_token='+encodeURIComponent(token),{cache:'no-store'});
+    const mode=response.ok?(await response.text()).trim():'';
+    if(mode===wanted||(wanted==='session'&&mode==='launcher')){location.replace(target);return;}
+  }catch(_){ }
+  setTimeout(follow,200);
+}
+setTimeout(follow,300);
+</script></body></html>`, template.HTMLEscapeString(title), template.HTMLEscapeString(token), template.HTMLEscapeString(wantedMode), template.HTMLEscapeString(title), template.HTMLEscapeString(detail))
 }
 
 var viewerLauncherPage = template.Must(template.New("viewer-launcher").Parse(launcherHTML))

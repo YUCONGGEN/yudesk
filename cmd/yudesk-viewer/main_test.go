@@ -133,6 +133,9 @@ func TestViewerLauncherReturnsConnectionInSameProcess(t *testing.T) {
 		if !result.connect || result.request.deviceID != "ABCDEF0123456789ABCDEF01" || result.request.pin != "12345678" || !result.request.control || result.request.audio {
 			t.Fatalf("unexpected connection request: %+v connect=%v", result.request, result.connect)
 		}
+		if result.request.webAddr != addr {
+			t.Fatalf("launcher did not preserve its local address: got %q want %q", result.request.webAddr, addr)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("viewer launcher did not hand off to the same process")
 	}
@@ -254,9 +257,20 @@ func TestIndexUsesRequestedStreamDefaults(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	serveIndex(17, 63, "test-token").ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 	body := recorder.Body.String() + sessionJS
-	for _, expected := range []string{`value="17"`, `value="63"`, `access_token=test-token`, `requestFullscreen()`, `max-height:100%`, `整屏显示`, `结束控制`, `/api/exit?access_token=test-token`} {
+	for _, expected := range []string{`value="17"`, `value="63"`, `access_token=test-token`, `requestFullscreen()`, `max-height:100%`, `整屏显示`, `结束控制`, `退出控制端`, `/api/disconnect?access_token=test-token`, `/api/exit?access_token=test-token`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("index does not contain %q", expected)
+		}
+	}
+}
+
+func TestViewerTransitionPageFollowsLocalMode(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	serveViewerTransitionPage(recorder, "正在连接远程电脑", "请稍候。", "test-token", "session")
+	body := recorder.Body.String()
+	for _, expected := range []string{"/api/ui/mode?access_token=", "location.replace(target)", `data-mode="session"`, "test-token"} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("transition page does not contain %q", expected)
 		}
 	}
 }
