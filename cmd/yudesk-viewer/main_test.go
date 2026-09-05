@@ -205,14 +205,39 @@ func TestViewerStateReopensCurrentSession(t *testing.T) {
 
 func TestViewerLauncherOffersReopenAndExitControls(t *testing.T) {
 	var output bytes.Buffer
-	if err := viewerLauncherPage.Execute(&output, map[string]any{"Token": "test-token"}); err != nil {
+	if err := viewerLauncherPage.Execute(&output, map[string]any{"Token": "test-token", "History": []connectionRecord{{DeviceID: "ABCDEF0123456789ABCDEF01", Name: "会议室"}}}); err != nil {
 		t.Fatal(err)
 	}
 	page := output.String()
-	for _, expected := range []string{"退出控制端", "关闭本窗口会自动结束控制端进程", "仅观看", "听取被控端声音", "/api/ui/watch", "/exit?access_token=test-token"} {
+	for _, expected := range []string{"退出控制端", "关闭本窗口会自动结束控制端进程", "仅观看", "听取被控端声音", "/api/ui/watch", "/api/device/status", "/exit?access_token=test-token", "自动检测在线状态", `data-device-id="ABCDEF0123456789ABCDEF01"`, "在线 · 可以连接", "连接中 · 暂不可连接"} {
 		if !strings.Contains(page, expected) {
 			t.Errorf("viewer launcher does not contain %q", expected)
 		}
+	}
+}
+
+func TestViewerDeviceStatusProxy(t *testing.T) {
+	const deviceID = "ABCDEF0123456789ABCDEF01"
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/device/status" || r.URL.Query().Get("ids") != deviceID {
+			t.Fatalf("unexpected status request: %s", r.URL.String())
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"devices":[{"id":"` + deviceID + `","online":true,"connected":false,"active":true}]}`))
+	}))
+	defer remote.Close()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/device/status?ids="+deviceID, nil)
+	serveViewerDeviceStatus(remote.URL).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"online":true`) || recorder.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unexpected proxied status: code=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	invalid := httptest.NewRecorder()
+	serveViewerDeviceStatus(remote.URL).ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/api/device/status?ids=bad", nil))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid device ID returned %d", invalid.Code)
 	}
 }
 

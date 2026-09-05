@@ -720,13 +720,35 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		deviceID := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("id")))
-		expires, err := b.accounts.DeviceLicenseExpiry(deviceID)
-		if err != nil {
-			writeJSON(w, map[string]any{"ok": true, "id": deviceID, "active": false})
+		w.Header().Set("Cache-Control", "no-store")
+		if rawIDs := strings.TrimSpace(r.URL.Query().Get("ids")); rawIDs != "" {
+			parts := strings.Split(rawIDs, ",")
+			if len(parts) > 50 {
+				writeJSONStatus(w, http.StatusBadRequest, account.PublicError(errors.New("最多查询 50 台设备")))
+				return
+			}
+			statuses := make([]publicDeviceStatus, 0, len(parts))
+			seen := make(map[string]bool, len(parts))
+			for _, part := range parts {
+				deviceID, valid := validPublicDeviceID(part)
+				if !valid {
+					writeJSONStatus(w, http.StatusBadRequest, account.PublicError(errors.New("设备码格式不正确")))
+					return
+				}
+				if !seen[deviceID] {
+					statuses = append(statuses, b.publicDeviceStatus(deviceID))
+					seen[deviceID] = true
+				}
+			}
+			writeJSON(w, map[string]any{"ok": true, "devices": statuses})
 			return
 		}
-		writeJSON(w, map[string]any{"ok": true, "id": deviceID, "active": expires.After(time.Now()), "activeUntil": expires})
+		deviceID, valid := validPublicDeviceID(r.URL.Query().Get("id"))
+		if !valid {
+			writeJSONStatus(w, http.StatusBadRequest, account.PublicError(errors.New("设备码格式不正确")))
+			return
+		}
+		writeJSON(w, b.publicDeviceStatus(deviceID))
 	})
 
 	admin := func(next http.HandlerFunc) http.HandlerFunc {
@@ -984,6 +1006,38 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 		b.accounts.Audit(account.AuditEntry{Action: "admin_activation_key_revoked", RemoteAddr: r.RemoteAddr, Detail: fingerprint})
 		redirectAdmin(w, r, "未使用的授权码已吊销")
 	}))
+}
+
+type publicDeviceStatus struct {
+	OK          bool      `json:"ok"`
+	ID          string    `json:"id"`
+	Active      bool      `json:"active"`
+	Online      bool      `json:"online"`
+	Connected   bool      `json:"connected"`
+	ActiveUntil time.Time `json:"activeUntil,omitempty"`
+}
+
+func validPublicDeviceID(value string) (string, bool) {
+	deviceID := strings.ToUpper(strings.TrimSpace(value))
+	if len(deviceID) != 24 {
+		return "", false
+	}
+	_, err := hex.DecodeString(deviceID)
+	return deviceID, err == nil
+}
+
+func (b *broker) publicDeviceStatus(deviceID string) publicDeviceStatus {
+	expires, licenseErr := b.accounts.DeviceLicenseExpiry(deviceID)
+	b.Lock()
+	waitingDevice, waiting := b.devices[deviceID]
+	_, connected := b.active[deviceID]
+	control := b.controls[deviceID]
+	online := connected || (waiting && waitingDevice.role == "agent") || (control != nil && !control.stopping)
+	b.Unlock()
+	return publicDeviceStatus{
+		OK: true, ID: deviceID, Active: licenseErr == nil && expires.After(time.Now()),
+		Online: online, Connected: connected, ActiveUntil: expires,
+	}
 }
 
 func redirectAdmin(w http.ResponseWriter, r *http.Request, message string) {

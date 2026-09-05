@@ -188,7 +188,7 @@ func (f *lifecycleFixture) agent(directory string) *lifecycleProcess {
 }
 
 func (f *lifecycleFixture) viewer(directory string) *lifecycleProcess {
-	return f.launch("yudesk-viewer", "-state-dir", directory, "-relay", f.address, "-relay-fingerprint", f.fingerprint, "-web", "127.0.0.1:0", "-open=false")
+	return f.launch("yudesk-viewer", "-state-dir", directory, "-relay", f.address, "-relay-fingerprint", f.fingerprint, "-server", f.http.URL, "-web", "127.0.0.1:0", "-open=false")
 }
 
 func (f *lifecycleFixture) prepareAgent() (string, identity.Identity) {
@@ -279,11 +279,25 @@ func (f *lifecycleFixture) assertState(text string) {
 func (f *lifecycleFixture) connectViewer(directory string, id identity.Identity) *lifecycleProcess {
 	p := f.viewer(directory)
 	launcher := f.page(filepath.Join(directory, "viewer-launcher.url"))
+	client := &http.Client{Timeout: 5 * time.Second}
+	statusURL, _ := url.Parse(launcher)
+	statusURL.Path = "/api/device/status"
+	statusQuery := statusURL.Query()
+	statusQuery.Set("ids", id.ID)
+	statusURL.RawQuery = statusQuery.Encode()
+	statusResponse, err := client.Get(statusURL.String())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	statusBody, _ := io.ReadAll(statusResponse.Body)
+	statusResponse.Body.Close()
+	if statusResponse.StatusCode != http.StatusOK || !strings.Contains(string(statusBody), `"online":true`) || !strings.Contains(string(statusBody), `"active":true`) {
+		f.t.Fatalf("launcher device presence: %d %s", statusResponse.StatusCode, statusBody)
+	}
 	f.post(launcher, "/connect", url.Values{"device_id": {id.ID}, "pin": {id.PIN}})
 	sessionURL := f.page(filepath.Join(directory, "viewer-session.url"))
 	u, _ := url.Parse(sessionURL)
 	u.Path = "/api/info"
-	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(u.String())
 	if err != nil {
 		f.t.Fatal(err)

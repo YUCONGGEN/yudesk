@@ -35,6 +35,7 @@ import (
 
 const (
 	defaultRelayAddress     = "www.yucg.cn:8233"
+	defaultStatusServer     = "http://www.yucg.cn:8235"
 	defaultRelayFingerprint = "20FC953E48B6BEED7FB3A5F73BF177CC4E2557CF274C409FF4F0179E5FA0F836"
 )
 
@@ -218,6 +219,7 @@ func (h *audioHub) errorMessage() string {
 
 type viewerConfig struct {
 	agentAddr, pin, relayAddr, deviceID   string
+	statusServer                          string
 	relayToken, relayAuth, relayCA        string
 	relayFingerprint, web, once, stateDir string
 	relayTLS, relayInsecure, openUI       bool
@@ -242,6 +244,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:9347", "agent address")
 	pin := flag.String("pin", "", "agent pairing PIN")
 	relayAddr := flag.String("relay", defaultRelayAddress, "third-party relay address")
+	statusServer := flag.String("server", defaultStatusServer, "device status web server")
 	deviceID := flag.String("device-id", "", "agent device ID")
 	relayToken := flag.String("relay-token", "", "legacy relay token")
 	relayAuth := flag.String("relay-auth", "", "account session token")
@@ -260,7 +263,8 @@ func main() {
 	flag.Parse()
 	config := viewerConfig{
 		agentAddr: *addr, pin: *pin, relayAddr: *relayAddr, deviceID: *deviceID,
-		relayToken: *relayToken, relayAuth: *relayAuth, relayTLS: *relayTLS,
+		statusServer: *statusServer,
+		relayToken:   *relayToken, relayAuth: *relayAuth, relayTLS: *relayTLS,
 		relayCA: *relayCA, relayFingerprint: *relayFingerprint, relayInsecure: *relayInsecure,
 		web: *web, once: *once, fps: *fps, quality: *quality, openUI: *openUI, stateDir: *stateDir,
 		control: !*viewOnly, audio: *audio,
@@ -326,7 +330,7 @@ func runViewer(config viewerConfig) error {
 	}
 	for {
 		if useLauncher {
-			request, connect, err := runViewerLauncherWithMessage(launcherAddr, config.openUI, viewerDirectory, accessToken, launcherMessage)
+			request, connect, err := runViewerLauncherWithMessage(launcherAddr, config.openUI, viewerDirectory, accessToken, launcherMessage, config.statusServer)
 			if err != nil || !connect {
 				return err
 			}
@@ -643,10 +647,10 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 }
 
 func runViewerLauncher(addr string, openUI bool, stateDir, token string) (viewerConnectRequest, bool, error) {
-	return runViewerLauncherWithMessage(addr, openUI, stateDir, token, "")
+	return runViewerLauncherWithMessage(addr, openUI, stateDir, token, "", defaultStatusServer)
 }
 
-func runViewerLauncherWithMessage(addr string, openUI bool, stateDir, token, initialMessage string) (viewerConnectRequest, bool, error) {
+func runViewerLauncherWithMessage(addr string, openUI bool, stateDir, token, initialMessage, statusServer string) (viewerConnectRequest, bool, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		if existingURL := activeViewerSession(stateDir, token); existingURL != "" {
@@ -698,6 +702,7 @@ func runViewerLauncherWithMessage(addr string, openUI bool, stateDir, token, ini
 	})
 	uiTracker := uilifecycle.New(3 * time.Second)
 	mux.Handle("/api/ui/watch", uiTracker)
+	mux.Handle("/api/device/status", serveViewerDeviceStatus(statusServer))
 	go func() {
 		<-uiTracker.Done()
 		finish(viewerConnectRequest{}, false)
@@ -1017,6 +1022,81 @@ func localViewerEndpoint(target, path string) (string, bool) {
 func viewerHTTPClient(timeout time.Duration) (*http.Client, *http.Transport) {
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 2 * time.Second}).DialContext}
 	return &http.Client{Timeout: timeout, Transport: transport}, transport
+}
+
+func serveViewerDeviceStatus(statusServer string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		deviceIDs, err := viewerStatusDeviceIDs(r.URL.Query().Get("ids"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		endpoint, err := viewerStatusEndpoint(statusServer, deviceIDs)
+		if err != nil {
+			http.Error(w, "状态服务器配置无效", http.StatusServiceUnavailable)
+			return
+		}
+		client, transport := viewerHTTPClient(5 * time.Second)
+		defer transport.CloseIdleConnections()
+		response, err := client.Get(endpoint)
+		if err != nil {
+			http.Error(w, "无法连接状态服务器", http.StatusBadGateway)
+			return
+		}
+		defer response.Body.Close()
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 128<<10))
+		if readErr != nil {
+			http.Error(w, "读取状态服务器响应失败", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		if response.StatusCode != http.StatusOK {
+			w.WriteHeader(http.StatusBadGateway)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+		_, _ = w.Write(body)
+	})
+}
+
+func viewerStatusDeviceIDs(raw string) ([]string, error) {
+	parts := strings.Split(raw, ",")
+	if strings.TrimSpace(raw) == "" || len(parts) > 50 {
+		return nil, errors.New("设备码数量无效")
+	}
+	result := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		deviceID := strings.ToUpper(strings.TrimSpace(part))
+		if len(deviceID) != 24 {
+			return nil, errors.New("设备码格式不正确")
+		}
+		if _, err := hex.DecodeString(deviceID); err != nil {
+			return nil, errors.New("设备码格式不正确")
+		}
+		if !seen[deviceID] {
+			result = append(result, deviceID)
+			seen[deviceID] = true
+		}
+	}
+	return result, nil
+}
+
+func viewerStatusEndpoint(statusServer string, deviceIDs []string) (string, error) {
+	endpoint, err := url.Parse(strings.TrimSpace(statusServer))
+	if err != nil || endpoint.User != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+		return "", errors.New("invalid status server")
+	}
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/api/device/status"
+	endpoint.RawPath = ""
+	endpoint.RawQuery = url.Values{"ids": {strings.Join(deviceIDs, ",")}}.Encode()
+	endpoint.Fragment = ""
+	return endpoint.String(), nil
 }
 
 func currentViewerUI(directory, token, launcherAddr string) (string, bool) {

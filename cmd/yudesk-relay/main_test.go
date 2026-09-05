@@ -355,6 +355,17 @@ func TestStandaloneActivationAndAdminWeb(t *testing.T) {
 		t.Fatalf("device activation failed: status=%d body=%s", activation.Code, activation.Body.String())
 	}
 	broker.devices[deviceID] = waiting{role: "agent"}
+	statusResponse := httptest.NewRecorder()
+	mux.ServeHTTP(statusResponse, httptest.NewRequest(http.MethodGet, "/api/device/status?id="+deviceID, nil))
+	var deviceStatus publicDeviceStatus
+	if statusResponse.Code != http.StatusOK || json.Unmarshal(statusResponse.Body.Bytes(), &deviceStatus) != nil || !deviceStatus.Online || deviceStatus.Connected || !deviceStatus.Active {
+		t.Fatalf("unexpected online device status: code=%d status=%+v body=%s", statusResponse.Code, deviceStatus, statusResponse.Body.String())
+	}
+	batchResponse := httptest.NewRecorder()
+	mux.ServeHTTP(batchResponse, httptest.NewRequest(http.MethodGet, "/api/device/status?ids="+deviceID, nil))
+	if batchResponse.Code != http.StatusOK || !strings.Contains(batchResponse.Body.String(), `"online":true`) || !strings.Contains(batchResponse.Body.String(), `"devices"`) {
+		t.Fatalf("unexpected batch device status: code=%d body=%s", batchResponse.Code, batchResponse.Body.String())
+	}
 	unauthorized := httptest.NewRecorder()
 	mux.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/admin", nil))
 	if unauthorized.Code != http.StatusUnauthorized {
@@ -387,6 +398,11 @@ func TestStandaloneActivationAndAdminWeb(t *testing.T) {
 	}
 	delete(broker.devices, deviceID)
 	broker.active[deviceID] = activeSession{}
+	connectedStatus := httptest.NewRecorder()
+	mux.ServeHTTP(connectedStatus, httptest.NewRequest(http.MethodGet, "/api/device/status?id="+deviceID, nil))
+	if json.Unmarshal(connectedStatus.Body.Bytes(), &deviceStatus) != nil || !deviceStatus.Online || !deviceStatus.Connected {
+		t.Fatalf("unexpected connected device status: %+v body=%s", deviceStatus, connectedStatus.Body.String())
+	}
 	connectedRequest := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	connectedRequest.SetBasicAuth("admin", "correct-admin-password")
 	connected := httptest.NewRecorder()
