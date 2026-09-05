@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.yudesk.update</string>
+  <key>ProgramArguments</key><array>
+    <string>REPLACE_WITH_HOME/.local/bin/yudesk-update</string>
+    <string>-manifest</string><string>REPLACE_WITH_HTTPS_MANIFEST_URL</string>
+    <string>-public-key</string><string>REPLACE_WITH_BASE64_ED25519_PUBLIC_KEY</string>
+    <string>-component</string><string>yudesk-agent</string>
+    <string>-destination</string><string>REPLACE_WITH_HOME/.local/bin/yudesk-agent</string>
+  </array>
+  <key>StartInterval</key><integer>86400</integer>
+  <key>StandardOutPath</key><string>REPLACE_WITH_HOME/Library/Logs/yudesk-update.log</string>
+  <key>StandardErrorPath</key><string>REPLACE_WITH_HOME/Library/Logs/yudesk-update.log</string>
+</dict></plist>

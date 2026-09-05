@@ -1,0 +1,16 @@
+[Unit]
+Description=YuDesk remote desktop agent
+After=network-online.target graphical-session.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/yudesk/agent.env
+ExecStart=%h/.local/bin/yudesk-agent -relay ${YUDESK_RELAY} -relay-fingerprint ${YUDESK_RELAY_FINGERPRINT}
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

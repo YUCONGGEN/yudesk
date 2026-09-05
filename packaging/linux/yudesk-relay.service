@@ -1,0 +1,22 @@
+[Unit]
+Description=YuDesk relay and account server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yudesk
+Group=yudesk
+StateDirectory=yudesk
+WorkingDirectory=/var/lib/yudesk
+ExecStart=/opt/yudesk/yudesk-relay -listen :9347 -http 127.0.0.1:9380 -accounts /var/lib/yudesk/yudesk.db -cert /var/lib/yudesk/relay.crt -key /var/lib/yudesk/relay.key -downloads /opt/yudesk/downloads
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/yudesk
+
+[Install]
+WantedBy=multi-user.target

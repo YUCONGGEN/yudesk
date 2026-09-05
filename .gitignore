@@ -1,0 +1,13 @@
+/dist/
+/bin/
+/.smoke/
+/.idea/
+/.tooling/
+/yudesk-agent
+/yudesk-agent.exe
+*.db
+*.db-shm
+*.db-wal
+*.crt
+*.key
+*.log

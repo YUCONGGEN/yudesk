@@ -1,0 +1,15 @@
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8233:8233/tcp"
+      - "8235:8235/tcp"
+    volumes:
+      - yudesk-data:/data
+      - ../dist:/data/downloads:ro
+
+volumes:
+  yudesk-data:

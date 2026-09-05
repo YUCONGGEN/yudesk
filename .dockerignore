@@ -1,0 +1,17 @@
+.git
+.github
+.idea
+.smoke
+.tooling
+dist
+bin
+packaging
+scripts
+*.db
+*.db-shm
+*.db-wal
+*.crt
+*.key
+*.log
+yudesk-agent
+yudesk-agent.exe

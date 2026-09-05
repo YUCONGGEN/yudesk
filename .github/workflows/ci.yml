@@ -1,0 +1,26 @@
+name: go-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+          - os: windows-latest
+            goos: windows
+          - os: macos-latest
+            goos: darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22.x'
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build ./cmd/yudesk-agent ./cmd/yudesk-viewer ./cmd/yudesk-relay ./cmd/yudesk-account ./cmd/yudesk-admin ./cmd/yudesk-update ./cmd/yudesk-sign

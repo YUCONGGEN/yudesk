@@ -1,0 +1,8 @@
+[Unit]
+Description=Install a signed YuDesk agent update
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/yudesk/update.env
+ExecStart=%h/.local/bin/yudesk-update -manifest ${YUDESK_UPDATE_MANIFEST} -public-key ${YUDESK_UPDATE_PUBLIC_KEY} -component yudesk-agent -destination %h/.local/bin/yudesk-agent

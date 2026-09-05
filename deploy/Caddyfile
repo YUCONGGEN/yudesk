@@ -1,0 +1,4 @@
+http://www.yucg.cn:8235 {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8235
+}

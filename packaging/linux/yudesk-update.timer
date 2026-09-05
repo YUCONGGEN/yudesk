@@ -1,0 +1,10 @@
+[Unit]
+Description=Check daily for a signed YuDesk update
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=2h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

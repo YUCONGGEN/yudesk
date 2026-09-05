@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.yudesk.agent</string>
+  <key>ProgramArguments</key><array>
+    <string>REPLACE_WITH_HOME/.local/bin/yudesk-agent</string>
+    <string>-relay</string><string>REPLACE_WITH_RELAY_HOST:9347</string>
+    <string>-relay-fingerprint</string><string>REPLACE_WITH_TLS_SHA256_FINGERPRINT</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>REPLACE_WITH_HOME/Library/Logs/yudesk-agent.log</string>
+  <key>StandardErrorPath</key><string>REPLACE_WITH_HOME/Library/Logs/yudesk-agent.log</string>
+</dict></plist>

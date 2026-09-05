@@ -1,0 +1,17 @@
+FROM golang:1.22 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/yudesk-relay ./cmd/yudesk-relay
+
+FROM alpine:3.20
+RUN addgroup -S yudesk && adduser -S -G yudesk -h /data yudesk
+COPY --from=build /out/yudesk-relay /usr/local/bin/yudesk-relay
+USER yudesk
+WORKDIR /data
+VOLUME ["/data"]
+EXPOSE 8233
+EXPOSE 8235
+ENTRYPOINT ["yudesk-relay"]
+CMD ["-listen", ":8233", "-http", ":8235", "-device-licenses", "-admin-key-file", "/data/admin.key", "-public-relay", "www.yucg.cn:8233", "-accounts", "/data/yudesk.db", "-cert", "/data/relay.crt", "-key", "/data/relay.key", "-downloads", "/data/downloads"]
