@@ -304,13 +304,10 @@ func (c *Conn) Write(p []byte) (int, error) {
 			size = maxRecord
 		}
 		nonce, aad := recordNonce(c.writeSeq, c.writeAEAD.NonceSize())
-		ciphertext := c.writeAEAD.Seal(nil, nonce, p[:size], aad)
-		var header [4]byte
-		binary.BigEndian.PutUint32(header[:], uint32(len(ciphertext)))
-		if err := writeFull(c.Conn, header[:]); err != nil {
-			return written, err
-		}
-		if err := writeFull(c.Conn, ciphertext); err != nil {
+		packet := make([]byte, 4, 4+size+c.writeAEAD.Overhead())
+		binary.BigEndian.PutUint32(packet, uint32(size+c.writeAEAD.Overhead()))
+		packet = c.writeAEAD.Seal(packet, nonce, p[:size], aad)
+		if err := writeFull(c.Conn, packet); err != nil {
 			return written, err
 		}
 		c.writeSeq++

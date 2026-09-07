@@ -90,3 +90,22 @@ func TestTrackerSuspendKeepsProcessHiddenUntilReopened(t *testing.T) {
 		t.Fatal("tracker did not re-arm after hidden page was reopened")
 	}
 }
+
+func TestTrackerReusableWindowClose(t *testing.T) {
+	events := make(chan struct{}, 2)
+	tracker := NewWithCallback(20*time.Millisecond, func() { events <- struct{}{} })
+	for i := 0; i < 2; i++ {
+		cancel := attach(t, tracker)
+		cancel()
+		select {
+		case <-events:
+		case <-time.After(time.Second):
+			t.Fatal("missing repeatable close")
+		}
+	}
+	select {
+	case <-tracker.Done():
+		t.Fatal("reusable close killed tracker")
+	default:
+	}
+}

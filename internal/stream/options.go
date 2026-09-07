@@ -1,13 +1,15 @@
 package stream
 
 type Options struct {
-	FPS      int    `json:"fps"`
-	Quality  int    `json:"quality"`
-	Mode     string `json:"mode"`
-	MaxWidth int    `json:"maxWidth"`
-	MaxMbps  int    `json:"maxMbps"`
-	SaveIdle bool   `json:"saveIdle"`
-	FrameAck bool   `json:"frameAck"`
+	ProfileVersion int    `json:"profileVersion,omitempty"`
+	FPS            int    `json:"fps"`
+	Quality        int    `json:"quality"`
+	Mode           string `json:"mode"`
+	MaxWidth       int    `json:"maxWidth"`
+	MaxMbps        int    `json:"maxMbps"`
+	SaveIdle       bool   `json:"saveIdle"`
+	FrameAck       bool   `json:"frameAck"`
+	TileDelta      bool   `json:"tileDelta,omitempty"` // negotiated capability, never trust a saved preference
 }
 
 func (o Options) Normalized() Options {

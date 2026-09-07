@@ -257,7 +257,7 @@ func TestDownloadHomeAndAllowList(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []byte("viewer-release")
-	if err := os.WriteFile(filepath.Join(directory, "yudesk-viewer.exe"), want, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(directory, "yudesk.exe"), want, 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "SHA256SUMS.txt"), []byte("abc  viewer\n"), 0644); err != nil {
@@ -265,7 +265,7 @@ func TestDownloadHomeAndAllowList(t *testing.T) {
 	}
 	home := httptest.NewRecorder()
 	serveDownloadHome(home, root)
-	if home.Code != http.StatusOK || !strings.Contains(home.Body.String(), "/download/windows-amd64/yudesk-viewer.exe?v=") || strings.Contains(home.Body.String(), "yudesk-account") || strings.Contains(home.Body.String(), "yudesk-update") || !strings.Contains(home.Body.String(), "macOS Apple Silicon") || !strings.Contains(home.Body.String(), "SHA-256 校验和") || !strings.Contains(home.Body.String(), `href="/guide"`) {
+	if home.Code != http.StatusOK || !strings.Contains(home.Body.String(), "/download/windows-amd64/yudesk.exe?v=") || strings.Contains(home.Body.String(), "yudesk-account") || strings.Contains(home.Body.String(), "yudesk-update") || !strings.Contains(home.Body.String(), "macOS Apple Silicon") || !strings.Contains(home.Body.String(), "SHA-256 校验和") || !strings.Contains(home.Body.String(), `href="/guide"`) {
 		t.Fatalf("unexpected download home: status=%d body=%s", home.Code, home.Body.String())
 	}
 	if !strings.Contains(home.Header().Get("Cache-Control"), "no-store") {
@@ -282,7 +282,7 @@ func TestDownloadHomeAndAllowList(t *testing.T) {
 		t.Fatalf("unexpected standalone device guide: status=%d body=%s", deviceGuide.Code, deviceGuide.Body.String())
 	}
 	download := httptest.NewRecorder()
-	serveDownload(download, httptest.NewRequest(http.MethodGet, "/download/windows-amd64/yudesk-viewer.exe", nil), root)
+	serveDownload(download, httptest.NewRequest(http.MethodGet, "/download/windows-amd64/yudesk.exe", nil), root)
 	if download.Code != http.StatusOK || download.Body.String() != string(want) {
 		t.Fatalf("unexpected download: status=%d body=%q", download.Code, download.Body.String())
 	}

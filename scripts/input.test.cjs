@@ -1,6 +1,6 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const {point,InputQueue}=require('../cmd/yudesk-viewer/ui/input.js');
+const {point,InputQueue}=require('../internal/viewerapp/ui/input.js');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 test('coordinates account for letterbox offsets, scaling and out-of-frame drag',()=>{
   const rect={left:120,top:90,width:960,height:540};
@@ -23,4 +23,12 @@ test('failed input releases pressed buttons before future input',async()=>{
   const log=[];const queue=new InputQueue(async()=>{throw Error('network lost')},async()=>log.push('release'),()=>log.push('error'));
   queue.push({type:'down',button:1},1920,1080);await tick();await tick();
   assert.deepEqual(log,['release','error']);assert.equal(queue.queue.length,0);
+});
+test('input arriving while failure cleanup is pending resumes automatically',async()=>{
+  let finishRelease,attempts=0;const sent=[];
+  const queue=new InputQueue(async batch=>{if(attempts++===0)throw Error('busy');sent.push(...batch.events);},()=>new Promise(resolve=>finishRelease=resolve),()=>{});
+  queue.push({type:'down',button:1},100,100);await tick();
+  queue.push({type:'move',x:42},100,100);
+  finishRelease();await tick();await tick();
+  assert.deepEqual(sent,[{type:'move',x:42}]);assert.equal(queue.busy,false);
 });

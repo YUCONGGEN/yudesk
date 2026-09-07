@@ -1,6 +1,7 @@
 package secureconn
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"io"
@@ -51,6 +52,42 @@ func TestHandshakeAndEncryptedStream(t *testing.T) {
 	}
 	if string(got) != string(want) {
 		t.Fatal("decrypted payload does not match")
+	}
+}
+
+type recordTestConn struct {
+	net.Conn
+	buf    bytes.Buffer
+	writes int
+}
+
+func (c *recordTestConn) Read(p []byte) (int, error)  { return c.buf.Read(p) }
+func (c *recordTestConn) Write(p []byte) (int, error) { c.writes++; return c.buf.Write(p) }
+
+func TestRecordHeaderAndCiphertextUseOneWrite(t *testing.T) {
+	wire := new(recordTestConn)
+	key := bytes.Repeat([]byte{17}, 32)
+	writer, err := newConn(wire, key, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := bytes.Repeat([]byte{99}, maxRecord+13)
+	if _, err := writer.Write(want); err != nil {
+		t.Fatal(err)
+	}
+	if wire.writes != 2 {
+		t.Fatalf("expected one write per record, got %d", wire.writes)
+	}
+	reader, err := newConn(wire, key, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(reader, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("coalescing changed encrypted wire format")
 	}
 }
 

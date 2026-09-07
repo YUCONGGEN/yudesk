@@ -4,45 +4,55 @@ package desktop
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image/png"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 )
 
 func runOutput(names ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), desktopCommandTimeout)
+	defer cancel()
 	for _, name := range names {
-		var cmd *exec.Cmd
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		var args []string
 		switch name {
 		case "screencapture":
-			if out, err := captureToTemporaryFile(name, "-x", "-t", "png"); err == nil {
+			if out, err := captureToTemporaryFile(ctx, name, "-x", "-t", "png"); err == nil {
 				return out, nil
 			}
 			continue
 		case "import":
-			cmd = exec.Command(name, "-window", "root", "png:-")
+			args = []string{"-window", "root", "png:-"}
 		case "gnome-screenshot":
-			if out, err := captureToTemporaryFile(name, "-f"); err == nil {
+			if out, err := captureToTemporaryFile(ctx, name, "-f"); err == nil {
 				return out, nil
 			}
 			continue
 		case "maim":
-			cmd = exec.Command(name, "-u", "-")
+			args = []string{"-u", "-"}
 		case "grim":
-			cmd = exec.Command(name, "-")
+			args = []string{"-"}
+		default:
+			continue
 		}
-		out, err := cmd.Output()
+		out, err := runDesktopCommand(ctx, name, args, nil)
 		if err == nil && len(out) > 0 {
 			return out, nil
 		}
 	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	return nil, ErrUnsupported
 }
 
-func captureToTemporaryFile(command string, beforePath ...string) ([]byte, error) {
+func captureToTemporaryFile(ctx context.Context, command string, beforePath ...string) ([]byte, error) {
 	directory, err := os.MkdirTemp("", "yudesk-capture-")
 	if err != nil {
 		return nil, err
@@ -50,7 +60,7 @@ func captureToTemporaryFile(command string, beforePath ...string) ([]byte, error
 	defer os.RemoveAll(directory)
 	path := filepath.Join(directory, "screen.png")
 	args := append(append([]string{}, beforePath...), path)
-	if err := exec.Command(command, args...).Run(); err != nil {
+	if _, err := runDesktopCommand(ctx, command, args, nil); err != nil {
 		return nil, err
 	}
 	return os.ReadFile(path)
@@ -73,76 +83,99 @@ func capturePlatform(options CaptureOptions) (Screenshot, error) {
 }
 
 func applyInputPlatform(events []InputEvent) error {
-	if runtime.GOOS == "linux" {
-		for _, e := range events {
-			var args []string
-			key := linuxKeyName(e.Key)
-			switch e.Type {
-			case "move":
-				args = []string{"mousemove", strconv.Itoa(e.X), strconv.Itoa(e.Y)}
-			case "down":
-				args = []string{"mousedown", strconv.Itoa(e.Button)}
-			case "up":
-				args = []string{"mouseup", strconv.Itoa(e.Button)}
-			case "key":
-				args = []string{"key", key}
-			case "key_down":
-				args = []string{"keydown", key}
-			case "key_up":
-				args = []string{"keyup", key}
-			case "wheel":
-				button := "5"
-				if e.DeltaY < 0 {
-					button = "4"
-				}
-				args = []string{"click", button}
-			default:
-				return fmt.Errorf("unknown input event %q", e.Type)
-			}
-			if err := exec.Command("xdotool", args...).Run(); err != nil {
-				return fmt.Errorf("xdotool: %w", err)
-			}
+	ctx, cancel := context.WithTimeout(context.Background(), desktopCommandTimeout)
+	defer cancel()
+	for _, event := range events {
+		name, args, err := unixInputCommand(event, runtime.GOOS)
+		if err != nil {
+			return err
 		}
-		return nil
-	}
-	if runtime.GOOS == "darwin" {
-		for _, e := range events {
-			var args []string
-			key := macKeyName(e.Key)
-			switch e.Type {
-			case "move":
-				args = []string{"m:" + strconv.Itoa(e.X) + "," + strconv.Itoa(e.Y)}
-			case "down":
-				if e.Button == 1 {
-					args = []string{"dd:" + strconv.Itoa(e.X) + "," + strconv.Itoa(e.Y)}
-				}
-			case "up":
-				if e.Button == 1 {
-					args = []string{"du:" + strconv.Itoa(e.X) + "," + strconv.Itoa(e.Y)}
-				} else if e.Button == 3 {
-					args = []string{"rc:" + strconv.Itoa(e.X) + "," + strconv.Itoa(e.Y)}
-				}
-			case "key":
-				args = []string{"kp:" + key}
-			case "key_down":
-				args = []string{"kd:" + key}
-			case "key_up":
-				args = []string{"ku:" + key}
-			case "wheel":
-				args = []string{"w:" + strconv.Itoa(e.DeltaY)}
-			default:
-				return fmt.Errorf("unknown input event %q", e.Type)
-			}
-			if len(args) == 0 {
-				continue
-			}
-			if err := exec.Command("cliclick", args...).Run(); err != nil {
-				return fmt.Errorf("cliclick: %w", err)
-			}
+		if len(args) == 0 {
+			continue
 		}
-		return nil
+		if _, err := runDesktopCommand(ctx, name, args, nil); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
 	}
-	return ErrUnsupported
+	return nil
+}
+
+// Build command arguments separately so tests never execute input helpers.
+func unixInputCommand(event InputEvent, platform string) (string, []string, error) {
+	if platform != "linux" && platform != "darwin" {
+		return "", nil, ErrUnsupported
+	}
+	switch event.Type {
+	case "key", "key_down", "key_up":
+		if benignIMEKey(event.Key) {
+			return "", nil, nil
+		}
+		if event.Key == "" || validateInputText(event.Key) != nil {
+			return "", nil, fmt.Errorf("%w: key", ErrInputRejected)
+		}
+	case "text":
+		if err := validateInputText(event.Text); err != nil {
+			return "", nil, err
+		}
+		if event.Text == "" {
+			return "", nil, nil
+		}
+	}
+	var args []string
+	if platform == "linux" {
+		switch event.Type {
+		case "move":
+			args = []string{"mousemove", strconv.Itoa(event.X), strconv.Itoa(event.Y)}
+		case "down":
+			args = []string{"mousedown", strconv.Itoa(event.Button)}
+		case "up":
+			args = []string{"mouseup", strconv.Itoa(event.Button)}
+		case "key":
+			args = []string{"key", "--", linuxKeyName(event.Key)}
+		case "key_down":
+			args = []string{"keydown", "--", linuxKeyName(event.Key)}
+		case "key_up":
+			args = []string{"keyup", "--", linuxKeyName(event.Key)}
+		case "text":
+			args = []string{"type", "--clearmodifiers", "--delay", "0", "--", event.Text}
+		case "wheel":
+			button := "5"
+			if event.DeltaY < 0 {
+				button = "4"
+			}
+			args = []string{"click", button}
+		default:
+			return "", nil, fmt.Errorf("%w: event type", ErrInputRejected)
+		}
+		return "xdotool", args, nil
+	}
+	switch event.Type {
+	case "move":
+		args = []string{"m:" + strconv.Itoa(event.X) + "," + strconv.Itoa(event.Y)}
+	case "down":
+		if event.Button == 1 {
+			args = []string{"dd:" + strconv.Itoa(event.X) + "," + strconv.Itoa(event.Y)}
+		}
+	case "up":
+		if event.Button == 1 {
+			args = []string{"du:" + strconv.Itoa(event.X) + "," + strconv.Itoa(event.Y)}
+		} else if event.Button == 3 {
+			args = []string{"rc:" + strconv.Itoa(event.X) + "," + strconv.Itoa(event.Y)}
+		}
+	case "key":
+		args = []string{"kp:" + macKeyName(event.Key)}
+	case "key_down":
+		args = []string{"kd:" + macKeyName(event.Key)}
+	case "key_up":
+		args = []string{"ku:" + macKeyName(event.Key)}
+	case "text":
+		args = []string{"t:" + event.Text}
+	case "wheel":
+		args = []string{"w:" + strconv.Itoa(event.DeltaY)}
+	default:
+		return "", nil, fmt.Errorf("%w: event type", ErrInputRejected)
+	}
+	return "cliclick", args, nil
 }
 
 func linuxKeyName(key string) string {
@@ -160,30 +193,37 @@ func macKeyName(key string) string {
 }
 
 func clipboardGetPlatform() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), desktopCommandTimeout)
+	defer cancel()
 	if runtime.GOOS == "darwin" {
-		b, err := exec.Command("pbpaste").Output()
+		b, err := runDesktopCommand(ctx, "pbpaste", nil, nil)
 		return string(b), err
 	}
 	for _, cmd := range [][]string{{"xclip", "-selection", "clipboard", "-o"}, {"xsel", "--clipboard", "--output"}} {
-		b, err := exec.Command(cmd[0], cmd[1:]...).Output()
+		b, err := runDesktopCommand(ctx, cmd[0], cmd[1:], nil)
 		if err == nil {
 			return string(b), nil
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
 		}
 	}
 	return "", ErrUnsupported
 }
 
 func clipboardSetPlatform(value string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), desktopCommandTimeout)
+	defer cancel()
 	if runtime.GOOS == "darwin" {
-		c := exec.Command("pbcopy")
-		c.Stdin = bytes.NewBufferString(value)
-		return c.Run()
+		_, err := runDesktopCommand(ctx, "pbcopy", nil, bytes.NewBufferString(value))
+		return err
 	}
 	for _, cmd := range [][]string{{"xclip", "-selection", "clipboard"}, {"xsel", "--clipboard", "--input"}} {
-		c := exec.Command(cmd[0], cmd[1:]...)
-		c.Stdin = bytes.NewBufferString(value)
-		if err := c.Run(); err == nil {
+		if _, err := runDesktopCommand(ctx, cmd[0], cmd[1:], bytes.NewBufferString(value)); err == nil {
 			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 	}
 	return ErrUnsupported

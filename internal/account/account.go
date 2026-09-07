@@ -36,6 +36,7 @@ type Device struct {
 }
 
 type LicensedDevice struct {
+	Code        string    `json:"code"`
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	PairingPIN  string    `json:"-"`
@@ -83,6 +84,10 @@ func Open(path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := s.BackfillDeviceCodes(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -102,6 +107,7 @@ CREATE TABLE IF NOT EXISTS activation_keys (key_hash TEXT PRIMARY KEY,duration_s
 CREATE TABLE IF NOT EXISTS licensed_devices (device_id TEXT PRIMARY KEY,public_key BLOB NOT NULL,name TEXT NOT NULL DEFAULT '',pairing_pin TEXT NOT NULL DEFAULT '',first_seen INTEGER NOT NULL,last_seen INTEGER NOT NULL,active_until INTEGER NOT NULL DEFAULT 0,revoked_at INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS licensed_devices_last_seen_idx ON licensed_devices(last_seen DESC);
 CREATE TABLE IF NOT EXISTS server_settings (setting_key TEXT PRIMARY KEY,setting_value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS device_codes (device_id TEXT PRIMARY KEY,code TEXT NOT NULL UNIQUE CHECK(length(code)=9));
 CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT,at INTEGER NOT NULL,username TEXT NOT NULL DEFAULT '',action TEXT NOT NULL,device_id TEXT NOT NULL DEFAULT '',remote_addr TEXT NOT NULL DEFAULT '',detail TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS audit_at_idx ON audit_log(at DESC);`
 	if _, err := s.db.Exec(schema); err != nil {
@@ -423,6 +429,17 @@ func (s *Store) RenameLicensedDevice(deviceID, name string) error {
 	return nil
 }
 
+// TouchLicensedDevice records an authenticated heartbeat, never an admin page
+// refresh or the time a dead socket is finally detected. An older connection's
+// deferred cleanup cannot move the timestamp backwards or recreate a deletion.
+func (s *Store) TouchLicensedDevice(deviceID string, seen time.Time) error {
+	if seen.IsZero() {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE licensed_devices SET last_seen=? WHERE device_id=? AND last_seen<?`, seen.Unix(), strings.ToUpper(strings.TrimSpace(deviceID)), seen.Unix())
+	return err
+}
+
 func (s *Store) UpdateLicensedDevicePIN(deviceID, pin string) error {
 	pin = strings.TrimSpace(pin)
 	if len(pin) < 6 || len(pin) > 8 {
@@ -546,7 +563,7 @@ func (s *Store) RedeemDeviceActivationKey(deviceID, key string) (time.Time, erro
 	if count, _ := result.RowsAffected(); count != 1 {
 		return time.Time{}, errors.New("activation key is no longer available")
 	}
-	if _, err = tx.Exec(`UPDATE licensed_devices SET active_until=?,last_seen=? WHERE device_id=?`, newExpiry, now, deviceID); err != nil {
+	if _, err = tx.Exec(`UPDATE licensed_devices SET active_until=? WHERE device_id=?`, newExpiry, deviceID); err != nil {
 		return time.Time{}, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -609,7 +626,7 @@ func (s *Store) ListLicensedDevices(limit int) ([]LicensedDevice, error) {
 	if limit <= 0 || limit > 5000 {
 		limit = 500
 	}
-	rows, err := s.db.Query(`SELECT device_id,name,pairing_pin,first_seen,last_seen,active_until,revoked_at FROM licensed_devices ORDER BY last_seen DESC LIMIT ?`, limit)
+	rows, err := s.db.Query(`SELECT d.device_id,d.name,d.pairing_pin,d.first_seen,d.last_seen,d.active_until,d.revoked_at,COALESCE(c.code,'') FROM licensed_devices d LEFT JOIN device_codes c ON c.device_id=d.device_id ORDER BY d.last_seen DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -618,7 +635,7 @@ func (s *Store) ListLicensedDevices(limit int) ([]LicensedDevice, error) {
 	for rows.Next() {
 		var device LicensedDevice
 		var firstSeen, lastSeen, activeUntil, revokedAt int64
-		if err := rows.Scan(&device.ID, &device.Name, &device.PairingPIN, &firstSeen, &lastSeen, &activeUntil, &revokedAt); err != nil {
+		if err := rows.Scan(&device.ID, &device.Name, &device.PairingPIN, &firstSeen, &lastSeen, &activeUntil, &revokedAt, &device.Code); err != nil {
 			return nil, err
 		}
 		device.FirstSeen = time.Unix(firstSeen, 0)

@@ -2,13 +2,13 @@ package protocol
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"sync"
 )
 
 const (
@@ -32,10 +32,12 @@ type Message struct {
 type Conn struct {
 	net.Conn
 	reader *bufio.Reader
-	write  sync.Mutex
+	write  chan struct{}
 }
 
-func NewConn(c net.Conn) *Conn { return &Conn{Conn: c, reader: bufio.NewReaderSize(c, 64<<10)} }
+func NewConn(c net.Conn) *Conn {
+	return &Conn{Conn: c, reader: bufio.NewReaderSize(c, 64<<10), write: make(chan struct{}, 1)}
+}
 
 func (c *Conn) ReadMessage() (Message, error) {
 	var message Message
@@ -65,6 +67,13 @@ func (c *Conn) ReadMessage() (Message, error) {
 }
 
 func (c *Conn) WriteMessage(message Message) error {
+	return c.WriteMessageContext(context.Background(), message)
+}
+
+// Cancellation while queued does not corrupt the wire or terminate a healthy
+// session. Once writing has begun, cancellation closes the connection because
+// a partially written encrypted record cannot safely be reused.
+func (c *Conn) WriteMessageContext(ctx context.Context, message Message) error {
 	data := message.Data
 	message.Data = nil
 	header, err := json.Marshal(message)
@@ -77,18 +86,44 @@ func (c *Conn) WriteMessage(message Message) error {
 	if len(data) > MaxDataSize {
 		return errors.New("message data is too large")
 	}
-	var sizes [8]byte
-	binary.BigEndian.PutUint32(sizes[:4], uint32(len(header)))
-	binary.BigEndian.PutUint32(sizes[4:], uint32(len(data)))
-	c.write.Lock()
-	defer c.write.Unlock()
-	if err := writeFull(c.Conn, sizes[:]); err != nil {
+	// Keep common input/dirty-tile messages in one transport write. Each write
+	// becomes its own encrypted record, so splitting prefix/header/data wastes
+	// encryption work and socket calls. Large payloads are not copied again.
+	capacity := 8 + len(header)
+	small := capacity+len(data) <= 64<<10
+	if small {
+		capacity += len(data)
+	}
+	packet := make([]byte, 8+len(header), capacity)
+	binary.BigEndian.PutUint32(packet[:4], uint32(len(header)))
+	binary.BigEndian.PutUint32(packet[4:8], uint32(len(data)))
+	copy(packet[8:], header)
+	if small {
+		packet = append(packet, data...)
+	}
+	select {
+	case c.write <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-c.write }()
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := writeFull(c.Conn, header); err != nil {
+	stop := context.AfterFunc(ctx, func() { _ = c.Conn.Close() })
+	defer stop()
+	if err := writeFull(c.Conn, packet); err != nil {
+		_ = c.Conn.Close()
 		return err
 	}
-	return writeFull(c.Conn, data)
+	if small {
+		return nil
+	}
+	if err := writeFull(c.Conn, data); err != nil {
+		_ = c.Conn.Close()
+		return err
+	}
+	return nil
 }
 
 func writeFull(w io.Writer, data []byte) error {

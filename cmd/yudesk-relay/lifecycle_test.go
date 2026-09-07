@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
-	"image/jpeg"
+	"encoding/json"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,6 +28,7 @@ import (
 	"github.com/yudesk/yudesk/internal/account"
 	"github.com/yudesk/yudesk/internal/identity"
 	"github.com/yudesk/yudesk/internal/security"
+	"github.com/yudesk/yudesk/internal/stream"
 )
 
 // Opt-in native executable tests. Only localhost, temporary identities, and a
@@ -55,7 +60,7 @@ func eventually(t *testing.T, description string, condition func() bool) {
 	t.Fatal("timed out: " + description)
 }
 
-func newLifecycleFixture(t *testing.T) *lifecycleFixture {
+func newLifecycleFixture(t *testing.T, readDelay ...time.Duration) *lifecycleFixture {
 	t.Helper()
 	dir := os.Getenv("YUDESK_CLIENT_DIR")
 	if dir == "" {
@@ -91,6 +96,9 @@ func newLifecycleFixture(t *testing.T) *lifecycleFixture {
 			if f.offline.Load() {
 				conn.Close()
 				continue
+			}
+			if len(readDelay) > 0 && readDelay[0] > 0 {
+				conn = newDelayedReadConn(conn, readDelay[0])
 			}
 			workers.Add(1)
 			go func() { defer workers.Done(); f.b.handle(conn) }()
@@ -143,6 +151,9 @@ func (f *lifecycleFixture) launch(component string, args ...string) *lifecyclePr
 		f.t.Fatal(err)
 	}
 	p := &lifecycleProcess{cmd: exec.Command(filepath.Join(f.binaries, component+suffix), args...), done: make(chan struct{}), logPath: logFile.Name()}
+	// Keep any accidentally-created browser profile isolated from the user's
+	// real YuDesk profile as a second guard behind -open=false.
+	p.cmd.Env = append(os.Environ(), "LOCALAPPDATA="+filepath.Join(f.root, "cache"), "XDG_CACHE_HOME="+filepath.Join(f.root, "cache"))
 	p.cmd.Stdout, p.cmd.Stderr = logFile, logFile
 	if err := p.cmd.Start(); err != nil {
 		logFile.Close()
@@ -308,22 +319,46 @@ func (f *lifecycleFixture) connectViewer(directory string, id identity.Identity)
 		f.t.Fatalf("remote info: %s", body)
 	}
 	if runtime.GOOS == "windows" || os.Getenv("YUDESK_TEST_DESKTOP") == "1" {
-		u.Path = "/api/stream"
-		stream, err := client.Get(u.String())
+		u.Path = "/api/frames"
+		response, err := client.Get(u.String())
 		if err != nil {
 			f.t.Fatal(err)
 		}
-		part, err := multipart.NewReader(stream.Body, "yudeskframe").NextPart()
-		if err != nil {
-			stream.Body.Close()
+		defer response.Body.Close()
+		var sizes [8]byte
+		if _, err := io.ReadFull(response.Body, sizes[:]); err != nil {
 			f.t.Fatal(err)
 		}
-		frame, err := jpeg.DecodeConfig(part)
-		stream.Body.Close()
-		if err != nil || frame.Width < 100 || frame.Height < 100 {
-			f.t.Fatalf("invalid desktop frame: %v %v", frame, err)
+		hsize, dsize := binary.BigEndian.Uint32(sizes[:4]), binary.BigEndian.Uint32(sizes[4:])
+		if hsize > 1<<20 || dsize > 32<<20 {
+			f.t.Fatal("invalid frame size")
 		}
-		f.t.Logf("decoded remote desktop %dx%d in original Viewer PID %d", frame.Width, frame.Height, p.cmd.Process.Pid)
+		header, data := make([]byte, hsize), make([]byte, dsize)
+		if _, err := io.ReadFull(response.Body, header); err != nil {
+			f.t.Fatal(err)
+		}
+		if _, err := io.ReadFull(response.Body, data); err != nil {
+			f.t.Fatal(err)
+		}
+		var frame stream.TileFrame
+		if err := json.Unmarshal(header, &frame); err != nil {
+			f.t.Fatal(err)
+		}
+		if err := frame.Validate(data); err != nil {
+			f.t.Fatal(err)
+		}
+		if !frame.Reset || frame.Width < 100 || frame.Height < 100 {
+			f.t.Fatal("missing full desktop keyframe")
+		}
+		offset := 0
+		for _, tile := range frame.Tiles {
+			decoded, _, err := image.DecodeConfig(bytes.NewReader(data[offset : offset+tile.Size]))
+			offset += tile.Size
+			if err != nil || decoded.Width != tile.Width || decoded.Height != tile.Height {
+				f.t.Fatalf("invalid encoded tile: %v", err)
+			}
+		}
+		f.t.Logf("decoded remote desktop %dx%d (%d tiles, %d bytes) in original Viewer PID %d", frame.Width, frame.Height, len(frame.Tiles), len(data), p.cmd.Process.Pid)
 	}
 	if !p.running() {
 		f.t.Fatal("launcher process was replaced instead of reused")

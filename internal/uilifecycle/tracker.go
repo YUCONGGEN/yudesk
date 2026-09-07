@@ -18,13 +18,24 @@ type Tracker struct {
 	grace      time.Duration
 	done       chan struct{}
 	once       sync.Once
+	onEmpty    func()
 }
 
 func New(grace time.Duration) *Tracker {
 	return &Tracker{grace: grace, done: make(chan struct{})}
 }
 
+// Reusable close events allow a session window to close without terminating
+// the application. An ordinary new page attachment arms the next close event.
+func NewWithCallback(grace time.Duration, onEmpty func()) *Tracker {
+	t := New(grace)
+	t.onEmpty = onEmpty
+	return t
+}
+
 func (t *Tracker) Done() <-chan struct{} { return t.done }
+
+func (t *Tracker) Attached() bool { t.mu.Lock(); defer t.mu.Unlock(); return t.clients > 0 }
 
 // Suspend disarms close detection for an intentional "hide to background"
 // action. The next browser attachment arms the tracker again, so an ordinary
@@ -91,9 +102,17 @@ func (t *Tracker) detach() {
 	time.AfterFunc(t.grace, func() {
 		t.mu.Lock()
 		shouldClose := t.armed && t.clients == 0 && t.generation == generation
+		if shouldClose && t.onEmpty != nil {
+			t.armed = false
+			t.generation++
+		}
 		t.mu.Unlock()
 		if shouldClose {
-			t.once.Do(func() { close(t.done) })
+			if t.onEmpty != nil {
+				t.onEmpty()
+			} else {
+				t.once.Do(func() { close(t.done) })
+			}
 		}
 	})
 }

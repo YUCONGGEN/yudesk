@@ -20,6 +20,42 @@ type Identity struct {
 	PrivateKey ed25519.PrivateKey
 }
 
+// RotatePIN commits a fresh secret before the caller changes its live value.
+// Failed writes leave the original PIN and private device identity untouched.
+func RotatePIN(configDir, previous string) (string, error) {
+	var pin string
+	for {
+		value, err := rand.Int(rand.Reader, big.NewInt(1000000))
+		if err != nil {
+			return "", err
+		}
+		pin = fmt.Sprintf("%06d", value.Int64())
+		if pin != previous {
+			break
+		}
+	}
+	f, err := os.CreateTemp(configDir, ".pairing-pin-*")
+	if err != nil {
+		return "", err
+	}
+	name := f.Name()
+	defer os.Remove(name)
+	defer f.Close()
+	if _, err = f.WriteString(pin); err != nil {
+		return "", err
+	}
+	if err = f.Sync(); err != nil {
+		return "", err
+	}
+	if err = f.Close(); err != nil {
+		return "", err
+	}
+	if err = os.Rename(name, filepath.Join(configDir, "pairing-pin")); err != nil {
+		return "", err
+	}
+	return pin, nil
+}
+
 func Load(configDir, requestedPIN string) (Identity, error) {
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return Identity{}, err
@@ -39,12 +75,13 @@ func Load(configDir, requestedPIN string) (Identity, error) {
 		if readErr == nil {
 			pin = strings.TrimSpace(string(b))
 		}
-		if pin == "" {
-			value, err := rand.Int(rand.Reader, big.NewInt(100000000))
+		// Upgrade old generated 8-digit PINs without changing the key or license.
+		if len(pin) != 6 || strings.IndexFunc(pin, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+			value, err := rand.Int(rand.Reader, big.NewInt(1000000))
 			if err != nil {
 				return Identity{}, err
 			}
-			pin = fmt.Sprintf("%08d", value.Int64())
+			pin = fmt.Sprintf("%06d", value.Int64())
 			if err := os.WriteFile(pinPath, []byte(pin), 0600); err != nil {
 				return Identity{}, err
 			}

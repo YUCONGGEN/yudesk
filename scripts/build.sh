@@ -1,9 +1,12 @@
 #!/usr/bin/env sh
 set -eu
 
+# Keep all release entry points on the same Windows timer-capable toolchain.
+export GOTOOLCHAIN="${YUDESK_GO_TOOLCHAIN:-go1.27.1}"
+
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 target=${1:-all}
-components="yudesk-agent yudesk-viewer"
+components="yudesk"
 obsolete_components="yudesk-account yudesk-admin yudesk-relay yudesk-update"
 
 case "$target" in

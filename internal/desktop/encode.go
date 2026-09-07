@@ -3,6 +3,7 @@ package desktop
 import (
 	"bytes"
 	"image"
+	"image/draw"
 	"image/jpeg"
 )
 
@@ -11,10 +12,11 @@ import (
 func encodeScreen(img image.Image, options CaptureOptions) (Screenshot, error) {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
+	var owned *image.RGBA
 	if options.MaxWidth > 0 && w > options.MaxWidth {
 		nw := options.MaxWidth
 		nh := max(1, h*nw/w)
-		out := image.NewRGBA(image.Rect(0, 0, nw, nh))
+		out := reusableCaptureBuffer(options.Buffer, nw, nh)
 		rgba, fast := img.(*image.RGBA)
 		for y := 0; y < nh; y++ {
 			for x := 0; x < nw; x++ {
@@ -28,12 +30,30 @@ func encodeScreen(img image.Image, options CaptureOptions) (Screenshot, error) {
 			}
 		}
 		img = out
+		owned = out
+	}
+	if options.Raw {
+		// The Windows source is a DIB whose lifetime ends at capturePlatform's
+		// return. Always take an owned copy, also normalizing bounds and stride.
+		pixels := owned
+		if pixels == nil {
+			pixels = reusableCaptureBuffer(options.Buffer, img.Bounds().Dx(), img.Bounds().Dy())
+			draw.Draw(pixels, pixels.Bounds(), img, img.Bounds().Min, draw.Src)
+		}
+		return Screenshot{Pixels: pixels, Width: pixels.Rect.Dx(), Height: pixels.Rect.Dy(), SourceWidth: w, SourceHeight: h}, nil
 	}
 	var encoded bytes.Buffer
 	if err := jpeg.Encode(&encoded, img, &jpeg.Options{Quality: options.Quality}); err != nil {
 		return Screenshot{}, err
 	}
 	return Screenshot{JPEG: encoded.Bytes(), Width: img.Bounds().Dx(), Height: img.Bounds().Dy(), SourceWidth: w, SourceHeight: h}, nil
+}
+
+func reusableCaptureBuffer(buffer *image.RGBA, width, height int) *image.RGBA {
+	if buffer != nil && buffer.Rect == image.Rect(0, 0, width, height) && buffer.Stride == width*4 && len(buffer.Pix) >= width*height*4 {
+		return buffer
+	}
+	return image.NewRGBA(image.Rect(0, 0, width, height))
 }
 
 func ScaleCoordinate(value, from, to int) int {

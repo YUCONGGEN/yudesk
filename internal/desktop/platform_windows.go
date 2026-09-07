@@ -3,13 +3,14 @@
 package desktop
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	"os/exec"
-	"strings"
+	"runtime"
 	"syscall"
 	"unsafe"
+
+	"github.com/yudesk/yudesk/internal/winhost"
 )
 
 var (
@@ -55,6 +56,16 @@ type bitmapInfo struct {
 }
 
 func capturePlatform(options CaptureOptions) (Screenshot, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	leave, err := enterCaptureDesktop()
+	if err != nil {
+		if !winhost.IsWorker() && winhost.Status().Installed {
+			return captureThroughService(options)
+		}
+		return Screenshot{}, err
+	}
+	defer leave()
 	sourceW, sourceH := metric(0), metric(1)
 	if sourceW <= 0 || sourceH <= 0 {
 		return Screenshot{}, fmt.Errorf("invalid screen size")
@@ -63,6 +74,14 @@ func capturePlatform(options CaptureOptions) (Screenshot, error) {
 	if options.MaxWidth > 0 && w > options.MaxWidth {
 		w = options.MaxWidth
 		h = max(1, sourceH*w/sourceW)
+	}
+	// The protected desktop IPC has a 32 MiB frame bound, including portrait
+	// and unusually tall displays. Preserve aspect ratio and source geometry.
+	if winhost.IsWorker() {
+		for w*h > 8388608 {
+			w = max(1, w*9/10)
+			h = max(1, sourceH*w/sourceW)
+		}
 	}
 	hdc, _, _ := getDC.Call(0)
 	if hdc == 0 {
@@ -101,6 +120,10 @@ func capturePlatform(options CaptureOptions) (Screenshot, error) {
 		return Screenshot{}, fmt.Errorf("CreateDIBSection returned no pixel memory")
 	}
 	pixels := unsafe.Slice((*byte)(pixelAddress), w*h*4)
+	if options.Raw {
+		img := ownedBGRA(pixels, w, h, options.Buffer)
+		return Screenshot{Pixels: img, Width: w, Height: h, SourceWidth: sourceW, SourceHeight: sourceH}, nil
+	}
 	for i := 0; i < len(pixels); i += 4 {
 		pixels[i], pixels[i+2] = pixels[i+2], pixels[i]
 		pixels[i+3] = 255
@@ -113,64 +136,42 @@ func capturePlatform(options CaptureOptions) (Screenshot, error) {
 }
 
 func applyInputPlatform(events []InputEvent) error {
-	for _, e := range events {
-		in := winInput{}
-		switch e.Type {
-		case "move":
-			w, h := metric(0), metric(1)
-			mi := mouseInput{DX: absolutePixel(e.X, w), DY: absolutePixel(e.Y, h), Flags: 0x0001 | 0x8000}
-			*(*mouseInput)(unsafe.Pointer(&in.Data[0])) = mi
-		case "down", "up":
-			in.Type = 0
-			flags := mouseButtonFlags(e.Button, e.Type == "up")
-			if flags == 0 {
-				return fmt.Errorf("unsupported mouse button %d", e.Button)
-			}
-			*(*mouseInput)(unsafe.Pointer(&in.Data[0])) = mouseInput{Flags: flags}
-		case "wheel":
-			in.Type = 0
-			*(*mouseInput)(unsafe.Pointer(&in.Data[0])) = mouseInput{MouseData: uint32(int32(-e.DeltaY)), Flags: 0x0800}
-		case "key", "key_down", "key_up":
-			in.Type = 1
-			ki := keyboardInput{VK: uint16(keyCode(e.Key))}
-			if ki.VK == 0 {
-				return fmt.Errorf("unsupported key %q", e.Key)
-			}
-			if e.Type == "key_up" {
-				ki.Flags = 0x0002
-			}
-			*(*keyboardInput)(unsafe.Pointer(&in.Data[0])) = ki
-			if e.Type == "key" {
-				if n, _, _ := sendInput.Call(1, uintptr(unsafe.Pointer(&in)), 40); n != 1 {
-					return fmt.Errorf("SendInput failed")
-				}
-				ki.Flags = 0x0002
-				*(*keyboardInput)(unsafe.Pointer(&in.Data[0])) = ki
-			}
-		default:
-			return fmt.Errorf("unknown input event %q", e.Type)
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	leave, err := enterCaptureDesktop()
+	if err != nil {
+		if !winhost.IsWorker() && winhost.Status().Installed {
+			_, e := winhost.Call("input", struct{ Events []InputEvent }{events})
+			return e
 		}
-		if n, _, _ := sendInput.Call(1, uintptr(unsafe.Pointer(&in)), 40); n != 1 {
-			return fmt.Errorf("SendInput failed")
+		return err
+	}
+	defer leave()
+	for _, e := range events {
+		w, h := 0, 0
+		if e.Type == "move" {
+			w, h = metric(0), metric(1)
+		}
+		inputs, err := buildWindowsInput(e, w, h)
+		if err != nil {
+			return err
+		}
+		if err := injectWindowsInput(inputs, sendWindowsInput); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-type mouseInput struct {
-	DX, DY                 int32
-	MouseData, Flags, Time uint32
-	Extra                  uintptr
-}
-type keyboardInput struct {
-	VK, Scan    uint16
-	Flags, Time uint32
-	Extra       uintptr
-}
-type winInput struct {
-	Type uint32
-	_    uint32
-	Data [32]byte
+func sendWindowsInput(inputs []winInput) (int, error) {
+	if len(inputs) == 0 {
+		return 0, nil
+	}
+	n, _, err := sendInput.Call(uintptr(len(inputs)), uintptr(unsafe.Pointer(&inputs[0])), unsafe.Sizeof(winInput{}))
+	if err == syscall.Errno(0) {
+		err = nil
+	}
+	return int(n), err
 }
 
 func max(a, b int) int {
@@ -180,38 +181,7 @@ func max(a, b int) int {
 	return b
 }
 func metric(index uintptr) int { r, _, _ := getSystemMetrics.Call(index); return int(r) }
-func keyCode(s string) int {
-	if len(s) == 1 {
-		c := s[0]
-		if c >= 'a' && c <= 'z' {
-			return int(c-'a') + 0x41
-		}
-		if c >= 'A' && c <= 'Z' {
-			return int(c)
-		}
-		if c >= '0' && c <= '9' {
-			return int(c-'0') + 0x30
-		}
-	}
-	keys := map[string]int{"Enter": 0x0D, "Escape": 0x1B, "Backspace": 0x08, "Tab": 0x09, " ": 0x20, "Space": 0x20, "ArrowLeft": 0x25, "ArrowUp": 0x26, "ArrowRight": 0x27, "ArrowDown": 0x28, "Control": 0x11, "Shift": 0x10, "Alt": 0x12, "Meta": 0x5B, "Delete": 0x2E, "Insert": 0x2D, "Home": 0x24, "End": 0x23, "PageUp": 0x21, "PageDown": 0x22}
-	if v := keys[s]; v != 0 {
-		return v
-	}
-	if len(s) >= 2 && s[0] == 'F' {
-		var n int
-		if _, err := fmt.Sscanf(s, "F%d", &n); err == nil && n >= 1 && n <= 24 {
-			return 0x6F + n
-		}
-	}
-	return 0
-}
 
-func clipboardGetPlatform() (string, error) {
-	b, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Get-Clipboard -Raw").Output()
-	return strings.TrimSuffix(string(b), "\r\n"), err
-}
-func clipboardSetPlatform(value string) error {
-	c := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$input | Set-Clipboard")
-	c.Stdin = bytes.NewBufferString(value)
-	return c.Run()
+func configureDesktopCommand(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 }

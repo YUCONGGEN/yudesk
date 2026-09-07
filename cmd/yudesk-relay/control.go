@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/yudesk/yudesk/internal/account"
@@ -16,7 +17,9 @@ import (
 type deviceControl struct {
 	conn     net.Conn
 	stop     chan string
-	stopping bool // protected by broker.Mutex
+	stopping bool         // protected by broker.Mutex
+	lastSeen atomic.Int64 // last authenticated incoming heartbeat, Unix seconds
+	pin      atomic.Value // last PIN successfully committed to the server database
 }
 
 func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hello) {
@@ -56,6 +59,11 @@ func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hel
 		stop("DISABLED", err.Error())
 		return
 	}
+	deviceCode, err := b.accounts.EnsureDeviceCode(hello.ID)
+	if err != nil {
+		stop("DENIED", "cannot assign device code")
+		return
+	}
 	if hello.PIN != "" {
 		if err := b.accounts.UpdateLicensedDevicePIN(hello.ID, hello.PIN); err != nil {
 			stop("DENIED", "invalid pairing PIN")
@@ -67,6 +75,8 @@ func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hel
 		return
 	}
 	control := &deviceControl{conn: c, stop: make(chan string, 1)}
+	control.lastSeen.Store(time.Now().Unix())
+	control.pin.Store(hello.PIN)
 	b.Lock()
 	if b.controls == nil {
 		b.controls = make(map[string]*deviceControl)
@@ -87,8 +97,15 @@ func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hel
 		b.Unlock()
 	}()
 	readDone := make(chan struct{})
+	defer func() {
+		// Join the reader before persisting its final confirmed observation.
+		_ = c.Close()
+		<-readDone
+		_ = b.accounts.TouchLicensedDevice(hello.ID, time.Unix(control.lastSeen.Load(), 0))
+	}()
 	go func() {
 		defer close(readDone)
+		var persisted time.Time
 		for {
 			_ = c.SetReadDeadline(time.Now().Add(12 * time.Second))
 			if !scanner.Scan() {
@@ -97,6 +114,21 @@ func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hel
 			var reply relay.ControlMessage
 			if json.Unmarshal(scanner.Bytes(), &reply) != nil || reply.Type != "pong" {
 				return
+			}
+			now := time.Now()
+			control.lastSeen.Store(now.Unix())
+			if reply.PIN != "" && reply.PIN != control.pin.Load().(string) {
+				if b.accounts.UpdateLicensedDevicePIN(hello.ID, reply.PIN) != nil {
+					return
+				}
+				control.pin.Store(reply.PIN)
+			}
+			// The admin view reads live memory. Bound database writes during
+			// long sessions while limiting crash loss to about 15 seconds.
+			if now.Sub(persisted) >= 15*time.Second {
+				if b.accounts.TouchLicensedDevice(hello.ID, now) == nil {
+					persisted = now
+				}
 			}
 		}
 	}()
@@ -131,7 +163,7 @@ func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hel
 			}
 			b.Unlock()
 		}
-		if send(relay.ControlMessage{Type: "status", Active: active, ActiveUntil: expiry}) != nil {
+		if send(relay.ControlMessage{Type: "status", Active: active, ActiveUntil: expiry, DeviceCode: deviceCode, PIN: control.pin.Load().(string)}) != nil {
 			return
 		}
 		select {

@@ -1,11 +1,13 @@
 param(
     [ValidateSet('all', 'windows', 'linux', 'darwin')]
-    [string]$Target = 'all'
+    [string]$Target = 'all',
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string]$GoVersion = '1.27.1'
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$components = @('yudesk-agent', 'yudesk-viewer')
+$components = @('yudesk')
 $obsoleteComponents = @('yudesk-account', 'yudesk-admin', 'yudesk-relay', 'yudesk-update')
 $targets = @(
     @{ OS = 'windows'; Arch = 'amd64' },
@@ -19,8 +21,12 @@ if ($Target -ne 'all') {
 
 $localGo = Get-Command go -ErrorAction SilentlyContinue
 if (-not $localGo -and -not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw 'Go 1.22+ or Docker is required.'
+    throw 'Go with toolchain auto-download support, or Docker, is required.'
 }
+
+$previousGoToolchain = $env:GOTOOLCHAIN
+if ($localGo) { $env:GOTOOLCHAIN = "go$GoVersion" }
+$goImage = "golang:$GoVersion"
 
 Push-Location $projectRoot
 try {
@@ -49,7 +55,7 @@ try {
                 }
             } else {
                 $containerOutput = "/src/dist/$($buildTarget.OS)-$($buildTarget.Arch)/$component$suffix"
-                & docker run --rm -e "GOOS=$($buildTarget.OS)" -e "GOARCH=$($buildTarget.Arch)" -v "${projectRoot}:/src" -w /src -v yudesk-gomod:/go/pkg/mod -v yudesk-gocache:/root/.cache/go-build golang:1.22 sh -lc "/usr/local/go/bin/go build -trimpath -ldflags='$linkerFlags' -o '$containerOutput' './cmd/$component'"
+                & docker run --rm -e "GOOS=$($buildTarget.OS)" -e "GOARCH=$($buildTarget.Arch)" -v "${projectRoot}:/src" -w /src -v yudesk-gomod:/go/pkg/mod -v yudesk-gocache:/root/.cache/go-build $goImage sh -lc "/usr/local/go/bin/go build -trimpath -ldflags='$linkerFlags' -o '$containerOutput' './cmd/$component'"
                 if ($LASTEXITCODE -ne 0) { throw "build failed: $component" }
             }
         }
@@ -68,7 +74,7 @@ try {
                 $env:GOOS, $env:GOARCH = $previousGOOS, $previousGOARCH
             }
         } else {
-            & docker run --rm -e GOOS=darwin -e GOARCH=arm64 -v "${projectRoot}:/src" -w /src -v yudesk-gomod:/go/pkg/mod -v yudesk-gocache:/root/.cache/go-build golang:1.22 sh -lc "/usr/local/go/bin/go build -trimpath -ldflags='-s -w' -o '/src/dist/server/yudesk-relay' './cmd/yudesk-relay'"
+            & docker run --rm -e GOOS=darwin -e GOARCH=arm64 -v "${projectRoot}:/src" -w /src -v yudesk-gomod:/go/pkg/mod -v yudesk-gocache:/root/.cache/go-build $goImage sh -lc "/usr/local/go/bin/go build -trimpath -ldflags='-s -w' -o '/src/dist/server/yudesk-relay' './cmd/yudesk-relay'"
             if ($LASTEXITCODE -ne 0) { throw 'server build failed' }
         }
     }
@@ -96,5 +102,6 @@ try {
     [System.IO.File]::WriteAllText($checksumPath, (($hashes -join "`n") + "`n"), [System.Text.Encoding]::ASCII)
     Write-Host "Build complete: $(Join-Path $projectRoot 'dist')"
 } finally {
+    $env:GOTOOLCHAIN = $previousGoToolchain
     Pop-Location
 }

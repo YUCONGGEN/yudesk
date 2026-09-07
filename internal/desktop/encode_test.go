@@ -46,3 +46,24 @@ func TestWindowsAbsoluteCoordinatesAndButtons(t *testing.T) {
 		}
 	}
 }
+
+func TestRawCaptureReusesOnlyMatchingOwnedBuffer(t *testing.T) {
+	source := image.NewRGBA(image.Rect(0, 0, 100, 60))
+	source.Pix[0] = 42
+	for _, width := range []int{100, 50} {
+		buffer := image.NewRGBA(image.Rect(0, 0, width, 60*width/100))
+		shot, err := encodeScreen(source, CaptureOptions{Raw: true, MaxWidth: width, Buffer: buffer})
+		if err != nil || shot.Pixels != buffer || shot.Pixels.Pix[0] != 42 {
+			t.Fatal("owned capture buffer not reused", err)
+		}
+		shot.Pixels.Pix[0] = 7
+		if source.Pix[0] != 42 {
+			t.Fatal("capture retained borrowed source pixels")
+		}
+	}
+	wrong := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	shot, err := encodeScreen(source, CaptureOptions{Raw: true, Buffer: wrong})
+	if err != nil || shot.Pixels == wrong || shot.Width != 100 {
+		t.Fatal("mismatched buffer reused", err)
+	}
+}

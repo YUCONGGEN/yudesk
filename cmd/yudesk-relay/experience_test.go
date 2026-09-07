@@ -21,7 +21,11 @@ func TestNativeViewerExperience(t *testing.T) {
 		t.Skip("requires a native desktop")
 	}
 	dir, id := f.prepareAgent()
-	a := f.agent(dir)
+	receiveDir := filepath.Join(f.root, "received-files")
+	if err := os.MkdirAll(receiveDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	a := f.launch("yudesk-agent", "-config-dir", dir, "-relay", f.address, "-relay-fingerprint", f.fingerprint, "-server", f.http.URL, "-ui", "127.0.0.1:0", "-share-dir", receiveDir, "-open=false")
 	f.waitOnline(id.ID)
 	f.admin("grant", id.ID)
 	f.waitPairing(id.ID)
@@ -35,6 +39,15 @@ func TestNativeViewerExperience(t *testing.T) {
 	v := f.connectViewer(viewerDir, id)
 	base := f.page(filepath.Join(viewerDir, "viewer-session.url"))
 	u, _ := url.Parse(base)
+	// Keep one test-owned UI watcher attached while the headless browser exits;
+	// closing the final page is intentionally defined to stop the real app.
+	watchURL := *u
+	watchURL.Path = "/api/ui/watch"
+	watch, err := http.Get(watchURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watch.Body.Close()
 	client := &http.Client{Timeout: 5 * time.Second}
 	var stats struct {
 		ProbeOK bool    `json:"probeOK"`
@@ -60,6 +73,10 @@ func TestNativeViewerExperience(t *testing.T) {
 			t.Fatalf("browser regression: %v %s", err, result)
 		}
 		t.Logf("browser regression: %s", result)
+		received, err := os.ReadFile(filepath.Join(receiveDir, "browser-transfer.bin"))
+		if err != nil || !bytes.Equal(received, bytes.Repeat([]byte{99}, 98321)) {
+			t.Fatalf("browser upload contents differ: %v", err)
+		}
 	}
 	if stats.FPS < 12 || stats.FPS > 36 {
 		t.Fatalf("fixed stream overshot target: %.1f", stats.FPS)

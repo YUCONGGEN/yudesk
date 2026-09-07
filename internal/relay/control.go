@@ -18,6 +18,8 @@ type ControlMessage struct {
 	ActiveUntil time.Time `json:"activeUntil,omitempty"`
 	Code        string    `json:"code,omitempty"`
 	Message     string    `json:"message,omitempty"`
+	DeviceCode  string    `json:"deviceCode,omitempty"`
+	PIN         string    `json:"pin,omitempty"`
 }
 
 func ControlProof(deviceID string, nonce []byte) []byte {
@@ -28,6 +30,12 @@ func ControlProof(deviceID string, nonce []byte) []byte {
 // the same process. The relay is authenticated by TLS and the device proves
 // possession of its identity key with a fresh challenge.
 func WatchDevice(ctx context.Context, addr string, options DialOptions, hello Hello, key ed25519.PrivateKey, status func(ControlMessage)) error {
+	return WatchDeviceWithPIN(ctx, addr, options, hello, key, nil, status)
+}
+
+// The live PIN travels only over the authenticated management connection. A
+// change does not close that connection or interrupt an established desktop.
+func WatchDeviceWithPIN(ctx context.Context, addr string, options DialOptions, hello Hello, key ed25519.PrivateKey, currentPIN func() string, status func(ControlMessage)) error {
 	c, err := dialTransport(ctx, addr, options)
 	if err != nil {
 		return err
@@ -82,7 +90,11 @@ func WatchDevice(ctx context.Context, addr string, options DialOptions, hello He
 			return errors.New("invalid management status")
 		}
 		status(m)
-		if err := json.NewEncoder(c).Encode(ControlMessage{Type: "pong"}); err != nil {
+		reply := ControlMessage{Type: "pong"}
+		if currentPIN != nil {
+			reply.PIN = currentPIN()
+		}
+		if err := json.NewEncoder(c).Encode(reply); err != nil {
 			return err
 		}
 	}

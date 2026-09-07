@@ -58,6 +58,7 @@ type broker struct {
 	token          string
 	accounts       *account.Store
 	deviceLicenses bool
+	lookups        map[string]lookupWindow
 }
 
 type adminFlash struct {
@@ -216,10 +217,14 @@ func (b *broker) handle(c net.Conn) {
 		return
 	}
 	var h relay.Hello
-	if json.Unmarshal([]byte(parts[1]), &h) != nil || h.ID == "" || (h.Role != "agent" && h.Role != "viewer" && h.Role != "control") {
+	if json.Unmarshal([]byte(parts[1]), &h) != nil || h.ID == "" || (h.Role != "agent" && h.Role != "viewer" && h.Role != "control" && h.Role != "resolve") {
 		return
 	}
 	h.ID = strings.ToUpper(h.ID)
+	if h.Role == "resolve" {
+		b.handleResolve(c, h.ID)
+		return
+	}
 	if h.Role == "control" {
 		b.handleControl(c, r, h)
 		return
@@ -352,6 +357,8 @@ func (b *broker) handle(c net.Conn) {
 		_ = old.conn.Close()
 		old.ready <- nil
 	}
+	stream, disconnected := watchWaitingConnection(c, r)
+	defer stream.Close()
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -377,7 +384,19 @@ func (b *broker) handle(c net.Conn) {
 				}
 				b.Unlock()
 			}()
-			relay.Proxy(c, peer)
+			relay.Proxy(stream, peer)
+			return
+		case <-disconnected:
+			b.Lock()
+			if current, ok := b.devices[h.ID]; ok && current.conn == c {
+				delete(b.devices, h.ID)
+			}
+			if current, ok := b.active[h.ID]; ok && (current.agent == c || current.viewer == c) {
+				_ = current.agent.Close()
+				_ = current.viewer.Close()
+				delete(b.active, h.ID)
+			}
+			b.Unlock()
 			return
 		case <-ticker.C:
 			signals.Lock()
@@ -721,6 +740,10 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
+		if !b.permitLookup(r.RemoteAddr, 1) {
+			http.Error(w, "查询过于频繁，请稍后重试", http.StatusTooManyRequests)
+			return
+		}
 		if rawIDs := strings.TrimSpace(r.URL.Query().Get("ids")); rawIDs != "" {
 			parts := strings.Split(rawIDs, ",")
 			if len(parts) > 50 {
@@ -841,7 +864,7 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 			redirectAdmin(w, r, "请求无效，请重新提交")
 			return
 		}
-		deviceID := strings.ToUpper(strings.TrimSpace(r.FormValue("device_id")))
+		deviceID := b.canonicalDeviceID(strings.ToUpper(strings.TrimSpace(r.FormValue("device_id"))))
 		days, _ := strconv.Atoi(r.FormValue("days"))
 		hours, _ := strconv.Atoi(r.FormValue("hours"))
 		duration, err := adminLicenseDuration(days, hours)
@@ -855,7 +878,7 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 			return
 		}
 		b.accounts.Audit(account.AuditEntry{Action: "admin_device_granted", DeviceID: deviceID, RemoteAddr: r.RemoteAddr, Detail: expires.Format(time.RFC3339)})
-		redirectAdmin(w, r, "设备 "+deviceID+" 已授权至 "+expires.Local().Format("2006-01-02 15:04:05"))
+		redirectAdmin(w, r, "设备 "+deviceID+" 已授权至 "+formatAdminTime(expires)+"（北京时间）")
 	}))
 	mux.HandleFunc("/admin/settings/auto-activate", admin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -914,7 +937,7 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 			redirectAdmin(w, r, "请求无效，请重新提交")
 			return
 		}
-		deviceID := strings.ToUpper(strings.TrimSpace(r.FormValue("device_id")))
+		deviceID := b.canonicalDeviceID(strings.ToUpper(strings.TrimSpace(r.FormValue("device_id"))))
 		if err := b.accounts.RevokeLicensedDevice(deviceID); err != nil {
 			redirectAdmin(w, r, "吊销失败："+err.Error())
 			return
@@ -928,7 +951,7 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 			http.Redirect(w, r, "/admin", http.StatusSeeOther)
 			return
 		}
-		deviceID := strings.ToUpper(strings.TrimSpace(r.FormValue("device_id")))
+		deviceID := b.canonicalDeviceID(strings.ToUpper(strings.TrimSpace(r.FormValue("device_id"))))
 		if err := b.accounts.UnrevokeLicensedDevice(deviceID); err != nil {
 			redirectAdmin(w, r, "解禁失败："+err.Error())
 			return
@@ -948,7 +971,7 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 			redirectAdmin(w, r, "请求无效，请重新提交")
 			return
 		}
-		deviceID := strings.ToUpper(strings.TrimSpace(r.FormValue("device_id")))
+		deviceID := b.canonicalDeviceID(strings.ToUpper(strings.TrimSpace(r.FormValue("device_id"))))
 		name := strings.TrimSpace(r.FormValue("name"))
 		if err := b.accounts.RenameLicensedDevice(deviceID, name); err != nil {
 			redirectAdmin(w, r, "改名失败："+err.Error())
@@ -966,7 +989,7 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 			redirectAdmin(w, r, "请求无效，请重新提交")
 			return
 		}
-		deviceID := strings.ToUpper(strings.TrimSpace(r.FormValue("device_id")))
+		deviceID := b.canonicalDeviceID(strings.ToUpper(strings.TrimSpace(r.FormValue("device_id"))))
 		b.terminateDevice("device:"+deviceID, deviceID, "administrator disconnected this device")
 		b.accounts.Audit(account.AuditEntry{Action: "admin_device_disconnected", DeviceID: deviceID, RemoteAddr: r.RemoteAddr})
 		redirectAdmin(w, r, "设备连接已强制断开，被控端进程终止指令已发送")
@@ -980,7 +1003,7 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 			redirectAdmin(w, r, "请求无效，请重新提交")
 			return
 		}
-		deviceID := strings.ToUpper(strings.TrimSpace(r.FormValue("device_id")))
+		deviceID := b.canonicalDeviceID(strings.ToUpper(strings.TrimSpace(r.FormValue("device_id"))))
 		if err := b.accounts.DeleteLicensedDevice(deviceID); err != nil {
 			redirectAdmin(w, r, "删除失败："+err.Error())
 			return
@@ -1009,16 +1032,23 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 }
 
 type publicDeviceStatus struct {
+	Name        string    `json:"name,omitempty"`
+	DeviceCode  string    `json:"deviceCode,omitempty"`
 	OK          bool      `json:"ok"`
 	ID          string    `json:"id"`
 	Active      bool      `json:"active"`
 	Online      bool      `json:"online"`
 	Connected   bool      `json:"connected"`
+	Ready       bool      `json:"ready"`
 	ActiveUntil time.Time `json:"activeUntil,omitempty"`
 }
 
 func validPublicDeviceID(value string) (string, bool) {
 	deviceID := strings.ToUpper(strings.TrimSpace(value))
+	deviceID = strings.ReplaceAll(deviceID, " ", "")
+	if relay.IsDeviceCode(deviceID) {
+		return deviceID, true
+	}
 	if len(deviceID) != 24 {
 		return "", false
 	}
@@ -1027,16 +1057,20 @@ func validPublicDeviceID(value string) (string, bool) {
 }
 
 func (b *broker) publicDeviceStatus(deviceID string) publicDeviceStatus {
+	requestedID := deviceID
+	deviceID = b.canonicalDeviceID(deviceID)
+	name, shortCode := b.accounts.DevicePublicLabel(deviceID)
 	expires, licenseErr := b.accounts.DeviceLicenseExpiry(deviceID)
 	b.Lock()
 	waitingDevice, waiting := b.devices[deviceID]
 	_, connected := b.active[deviceID]
 	control := b.controls[deviceID]
 	online := connected || (waiting && waitingDevice.role == "agent") || (control != nil && !control.stopping)
+	ready := waiting && waitingDevice.role == "agent" && !connected && (control == nil || !control.stopping)
 	b.Unlock()
 	return publicDeviceStatus{
-		OK: true, ID: deviceID, Active: licenseErr == nil && expires.After(time.Now()),
-		Online: online, Connected: connected, ActiveUntil: expires,
+		OK: true, ID: requestedID, Name: name, DeviceCode: shortCode, Active: licenseErr == nil && expires.After(time.Now()),
+		Online: online, Connected: connected, Ready: ready && licenseErr == nil && expires.After(time.Now()), ActiveUntil: expires,
 	}
 }
 
@@ -1124,6 +1158,7 @@ func adminAuthorized(r *http.Request, adminKey string) bool {
 }
 
 type adminDeviceView struct {
+	ShortCode                                      string
 	ID, Name, PIN, Status, LastSeen, ActiveUntil   string
 	ConnectionLabel, ConnectionClass, LicenseClass string
 	Online, Connected, Permanent, PINAvailable     bool
@@ -1234,23 +1269,21 @@ func serveAdminPage(w http.ResponseWriter, r *http.Request, b *broker, generated
 		if permanent {
 			activeUntil = "永久"
 		} else if !device.ActiveUntil.IsZero() {
-			activeUntil = device.ActiveUntil.Local().Format("2006-01-02 15:04:05")
+			activeUntil = formatAdminTime(device.ActiveUntil)
 		}
 		name := device.Name
 		if name == "" {
 			name = "未命名设备"
 		}
-		lastSeen := "-"
-		if !device.LastSeen.IsZero() {
-			lastSeen = device.LastSeen.Local().Format("2006-01-02 15:04:05")
-		}
+		lastSeen := formatAdminTime(adminLastSeen(device.LastSeen, control))
 		pairingPIN := device.PairingPIN
 		pinAvailable := pairingPIN != ""
 		if !pinAvailable {
 			pairingPIN = "未上报"
 		}
 		deviceViews = append(deviceViews, adminDeviceView{
-			ID: device.ID, Name: name, PIN: pairingPIN, Status: status, LastSeen: lastSeen, ActiveUntil: activeUntil,
+			ShortCode: device.Code,
+			ID:        device.ID, Name: name, PIN: pairingPIN, Status: status, LastSeen: lastSeen, ActiveUntil: activeUntil,
 			ConnectionLabel: connectionLabel, ConnectionClass: connectionClass, LicenseClass: licenseClass,
 			Online: online, Connected: active, Permanent: permanent, PINAvailable: pinAvailable,
 		})
@@ -1259,7 +1292,7 @@ func serveAdminPage(w http.ResponseWriter, r *http.Request, b *broker, generated
 	filteredDevices := make([]adminDeviceView, 0, len(deviceViews))
 	deviceNeedle := strings.ToLower(deviceQuery)
 	for _, device := range deviceViews {
-		if deviceNeedle != "" && !strings.Contains(strings.ToLower(device.Name+" "+device.ID+" "+device.PIN), deviceNeedle) {
+		if deviceNeedle != "" && !strings.Contains(strings.ToLower(device.Name+" "+device.ID+" "+device.ShortCode+" "+device.PIN), deviceNeedle) {
 			continue
 		}
 		if deviceState != "" && device.ConnectionClass != deviceState {
@@ -1299,7 +1332,7 @@ func serveAdminPage(w http.ResponseWriter, r *http.Request, b *broker, generated
 		} else {
 			availableKeyCount++
 		}
-		keyViews = append(keyViews, adminKeyView{Fingerprint: key.Fingerprint, Duration: formatAdminDuration(key.Duration), Status: status, RedeemBy: key.RedeemBy.Local().Format("2006-01-02"), StatusClass: statusClass, Revocable: statusClass == "available"})
+		keyViews = append(keyViews, adminKeyView{Fingerprint: key.Fingerprint, Duration: formatAdminDuration(key.Duration), Status: status, RedeemBy: key.RedeemBy.In(adminTimeZone).Format("2006-01-02"), StatusClass: statusClass, Revocable: statusClass == "available"})
 	}
 	filteredKeys := make([]adminKeyView, 0, len(keyViews))
 	keyNeedle := strings.ToLower(keyQuery)
@@ -1321,7 +1354,7 @@ func serveAdminPage(w http.ResponseWriter, r *http.Request, b *broker, generated
 	}
 	auditViews := make([]adminAuditView, 0, len(audits))
 	for _, entry := range audits {
-		auditViews = append(auditViews, adminAuditView{At: entry.At.Local().Format("2006-01-02 15:04:05"), Action: entry.Action, ActionLabel: adminAuditLabel(entry.Action), DeviceID: entry.DeviceID, RemoteAddr: entry.RemoteAddr, Detail: entry.Detail})
+		auditViews = append(auditViews, adminAuditView{At: formatAdminTime(entry.At), Action: entry.Action, ActionLabel: adminAuditLabel(entry.Action), DeviceID: entry.DeviceID, RemoteAddr: entry.RemoteAddr, Detail: entry.Detail})
 	}
 	filteredAudits := make([]adminAuditView, 0, len(auditViews))
 	auditNeedle := strings.ToLower(auditQuery)
@@ -1344,7 +1377,7 @@ func serveAdminPage(w http.ResponseWriter, r *http.Request, b *broker, generated
 		"TotalCount": len(deviceViews), "ActiveLicenseCount": activeLicenseCount, "ExpiredCount": expiredCount,
 		"RevokedCount": revokedCount, "UnlicensedCount": unlicensedCount, "AttentionCount": expiredCount + revokedCount + unlicensedCount,
 		"AvailableKeyCount": availableKeyCount, "UsedKeyCount": usedKeyCount, "InvalidKeyCount": invalidKeyCount,
-		"UpdatedAt": now.Local().Format("2006-01-02 15:04:05"), "CSRF": csrfToken, "ReturnURL": returnURL, "AutoActivate": b.automaticDeviceActivation(),
+		"UpdatedAt": formatAdminTime(now), "CSRF": csrfToken, "ReturnURL": returnURL, "AutoActivate": b.automaticDeviceActivation(),
 		"DeviceQuery": deviceQuery, "DeviceState": deviceState, "DeviceLicense": deviceLicense, "DevicePager": devicePager,
 		"KeyQuery": keyQuery, "KeyState": keyState, "KeyPager": keyPager, "AuditQuery": auditQuery, "AuditPager": auditPager,
 		"DeviceClearURL": adminClearURL(queryValues, "dq", "ds", "dl", "dp"),
@@ -1672,8 +1705,7 @@ var downloadLayout = []downloadPlatform{
 
 func componentLinks(platform, suffix string) []downloadLink {
 	return []downloadLink{
-		{Name: "YuDesk 被控端", Description: "双击运行，共享这台电脑", Path: platform + "/yudesk-agent" + suffix},
-		{Name: "YuDesk 控制端", Description: "双击运行，连接远程电脑", Path: platform + "/yudesk-viewer" + suffix},
+		{Name: "YuDesk", Description: "控制与被控合一 · 双击运行", Path: platform + "/yudesk" + suffix},
 	}
 }
 
@@ -1717,6 +1749,17 @@ func serveDownload(w http.ResponseWriter, r *http.Request, root string) {
 		return
 	}
 	relative := strings.TrimPrefix(r.URL.Path, "/download/")
+	// Old bookmarks download the unified application, not stale role binaries.
+	for _, platform := range []string{"windows-amd64", "linux-amd64", "darwin-amd64", "darwin-arm64"} {
+		suffix := ""
+		if platform == "windows-amd64" {
+			suffix = ".exe"
+		}
+		if relative == platform+"/yudesk-agent"+suffix || relative == platform+"/yudesk-viewer"+suffix {
+			http.Redirect(w, r, "/download/"+platform+"/yudesk"+suffix, http.StatusTemporaryRedirect)
+			return
+		}
+	}
 	allowed := false
 	for _, platform := range downloadLayout {
 		for _, link := range platform.Links {
@@ -1734,6 +1777,13 @@ func serveDownload(w http.ResponseWriter, r *http.Request, root string) {
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		http.NotFound(w, r)
+		return
+	}
+	// The API's 30-second response deadline can truncate multi-megabyte
+	// downloads on a slow link. Extend only validated download responses,
+	// including range/resume requests; keep the rest of the server bounded.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(10 * time.Minute)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		http.Error(w, "download temporarily unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(path)))
@@ -1776,7 +1826,7 @@ func humanSize(size int64) string {
 var downloadPage = template.Must(template.New("downloads").Parse(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YuDesk 下载</title>
 <style>*{box-sizing:border-box}html,body{min-height:100%}body{margin:0;background:#07111f;color:#eaf2ff;font:15px system-ui,-apple-system,"Segoe UI",sans-serif}.hero{padding:38px 24px 26px;text-align:center;background:radial-gradient(circle at 50% 0,#17396b,#07111f 70%)}h1{font-size:44px;margin:0 0 8px}.logo{color:#67a7ff}.hero p{color:#aebed4;margin:5px}.secure{display:inline-block;margin-top:10px;padding:6px 12px;border:1px solid #285484;border-radius:99px;color:#78dba9;background:#0b2231}.wrap{max-width:1500px;margin:auto;padding:20px 20px 30px}.grid{display:grid;grid-template-columns:repeat(4,minmax(240px,1fr));gap:14px}.card{background:#101d2d;border:1px solid #243953;border-radius:16px;padding:18px;box-shadow:0 14px 34px #0004}.card h2{margin:0 0 3px}.detail{color:#8fa4bf;margin-bottom:12px}.item{display:flex;align-items:center;gap:10px;border-top:1px solid #20344c;padding:12px 0}.item strong{display:block}.item small{display:block;color:#8fa4bf}.download{margin-left:auto;text-decoration:none;background:#2878e8;color:white;padding:8px 13px;border-radius:8px;white-space:nowrap}.missing{margin-left:auto;color:#71849d;font-size:13px}.foot{text-align:center;color:#71849d;margin-top:20px}.foot a{color:#67a7ff;margin:0 8px}@media(max-width:1120px){.grid{grid-template-columns:repeat(2,minmax(240px,1fr))}}@media(max-width:620px){h1{font-size:34px}.grid{grid-template-columns:1fr}.hero{padding:28px 16px 20px}.wrap{padding:14px 12px 28px}}</style></head>
-<body><section class="hero"><h1><span class="logo">Yu</span>Desk</h1><p>跨平台、安全、端到端加密的远程桌面</p><p>每个平台只需选择被控端或控制端</p><span class="secure">双击运行 · 无需账号 · 设备授权</span><p><a class="download" href="/guide">查看使用教程</a></p></section><main class="wrap"><div class="grid">
+<body><section class="hero"><h1><span class="logo">Yu</span>Desk</h1><p>跨平台、安全、端到端加密的远程桌面</p><p>一个程序，控制与被控合一 · 9 位设备码 · 6 位 PIN</p><span class="secure">双击运行 · 无需账号 · 设备授权</span><p><a class="download" href="/guide">查看使用教程</a></p></section><main class="wrap"><div class="grid">
 {{range .Platforms}}<section class="card"><h2>{{.Name}}</h2><div class="detail">{{.Detail}}</div>{{range .Links}}<div class="item"><div><strong>{{.Name}}</strong><small>{{.Description}}{{if .Size}} · {{.Size}}{{end}}</small></div>{{if .Available}}<a class="download" href="/download/{{.Path}}?v={{.Version}}">下载</a>{{else}}<span class="missing">暂未上传</span>{{end}}</div>{{end}}</section>{{end}}
 </div><div class="foot">用户无需注册或登录。远程画面、声音、输入和文件内容保持端到端加密；管理员可查看设备上报的 PIN。{{if .Checksums}}<a href="/SHA256SUMS.txt">SHA-256 校验和</a>{{end}}<a href="/admin">授权管理</a></div></main></body></html>`))
 
@@ -1787,14 +1837,14 @@ var adminPage = template.Must(template.New("admin").Parse(`<!doctype html>
 @media(max-width:1250px){.stats{grid-template-columns:repeat(3,1fr)}}@media(max-width:900px){.grid{grid-template-columns:1fr}.generated-list{grid-template-columns:1fr}.form-grid,.form-grid.grant{grid-template-columns:1fr 1fr}.nav{display:none}}@media(max-width:620px){.topbar-inner{padding:9px 12px}.refresh-state{display:none}main{padding:20px 11px 55px}.hero,.setting-row{align-items:flex-start;flex-direction:column}.setting-state{white-space:normal}.hero h1{font-size:27px}.updated{text-align:left}.stats{grid-template-columns:1fr 1fr;gap:8px}.stat{min-height:96px;padding:13px}.stat-value{font-size:25px}.form-grid,.form-grid.grant{grid-template-columns:1fr}.panel-head{align-items:flex-start;flex-direction:column}.toolbar select{width:100%}.visible-count{margin-left:0}.pagination{justify-content:flex-start}.pagination-info{width:100%}}
 </style></head>
 <body data-generated="{{if .Generated}}1{{else}}0{{end}}" data-return="{{.ReturnURL}}"><header class="topbar"><div class="topbar-inner"><a class="brand" href="/admin"><span>Yu</span>Desk 管理</a><nav class="nav"><a href="#settings">服务器设置</a><a href="#devices">设备</a><a href="#licenses">授权码</a><a href="#audits">审计记录</a><a href="/">软件下载</a></nav><div class="top-actions"><span class="refresh-state" id="refresh-state">30 秒后异步刷新</span><a class="top-action" id="refresh-now" href="{{.ReturnURL}}">立即刷新</a></div></div></header>
-<main><section class="hero"><div><h1>服务器管理中心</h1><p>管理在线设备、连接状态、使用授权和安全操作。</p></div><div class="updated">数据更新时间<br><strong>{{.UpdatedAt}}</strong></div></section>
+<main><section class="hero"><div><h1>服务器管理中心</h1><p>管理在线设备、连接状态、使用授权和安全操作。所有时间均为北京时间（UTC+8），最后在线为设备最近一次已确认响应时间。</p></div><div class="updated">数据更新时间 · 北京时间<br><strong>{{.UpdatedAt}}</strong></div></section>
 {{if .Message}}<div class="message" role="status">{{.Message}}</div>{{end}}
 <section class="stats" aria-label="状态总览"><article class="stat"><span class="stat-label">设备总数</span><strong class="stat-value">{{.TotalCount}}</strong><span class="stat-note">已登记的被控端</span></article><article class="stat online-card"><span class="stat-label">当前在线</span><strong class="stat-value">{{.OnlineCount}}</strong><span class="stat-note">含连接中设备</span></article><article class="stat connected-card"><span class="stat-label">连接中</span><strong class="stat-value">{{.ConnectedCount}}</strong><span class="stat-note">正在远程控制</span></article><article class="stat"><span class="stat-label">在线待连接</span><strong class="stat-value">{{.IdleCount}}</strong><span class="stat-note">在线 · 未被连接</span></article><article class="stat"><span class="stat-label">离线</span><strong class="stat-value">{{.OfflineCount}}</strong><span class="stat-note">当前未连接服务器</span></article><article class="stat warning-card"><span class="stat-label">授权需处理</span><strong class="stat-value">{{.AttentionCount}}</strong><span class="stat-note">未授权 / 过期 / 禁用</span></article></section>
 {{if .Generated}}<section class="panel generated" id="generated"><div class="panel-head"><div><h2>新授权码</h2><p>完整授权码只在本页显示一次，请现在复制并妥善保存。</p></div><button type="button" class="secondary" id="copy-all-keys">复制全部</button></div><div class="panel-body"><div class="generated-list">{{range .Generated}}<div class="generated-key"><code class="mono">{{.}}</code><button type="button" class="ghost" data-copy="{{.}}">复制</button></div>{{end}}</div></div></section>{{end}}
 <section class="panel" id="settings"><div class="panel-head"><div><h2>服务器设置</h2><p>控制新被控端是否必须输入激活码。</p></div></div><div class="panel-body setting-row"><div class="setting-copy"><strong>新设备免激活</strong><span>{{if .AutoActivate}}当前已开启。未授权被控端连接服务器后会自动获得永久授权。{{else}}当前已关闭。未授权被控端必须输入授权码或由管理员直接授权。{{end}}</span></div><div class="setting-state"><span class="badge {{if .AutoActivate}}active{{else}}offline{{end}}">{{if .AutoActivate}}已开启{{else}}已关闭{{end}}</span><form method="post" action="/admin/settings/auto-activate" data-confirm="{{if .AutoActivate}}关闭后，尚未激活的新设备必须输入授权码。确定关闭吗？{{else}}开启后，新连接且未授权的设备将获得永久授权。确定开启吗？{{end}}"><input type="hidden" name="_csrf" value="{{.CSRF}}"><input type="hidden" name="_return" value="{{.ReturnURL}}"><input type="hidden" name="enabled" value="{{if .AutoActivate}}0{{else}}1{{end}}"><button type="submit" class="{{if .AutoActivate}}warning{{end}}">{{if .AutoActivate}}关闭免激活{{else}}开启免激活{{end}}</button></form></div></div></section>
 <div class="grid"><section class="panel"><div class="panel-head"><div><h2>生成授权码</h2><p>用户可在被控端页面兑换，最长可生成 100 个。</p></div></div><div class="panel-body"><form method="post" action="/admin/generate" class="form-grid"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{.ReturnURL}}"><label class="field">授权天数<input name="days" type="number" min="0" max="3650" value="30" required></label><label class="field">额外小时<input name="hours" type="number" min="0" max="23" value="0" required></label><label class="field">生成数量<input name="count" type="number" min="1" max="100" value="1" required></label><button type="submit">生成授权码</button></form></div></section>
 <section class="panel"><div class="panel-head"><div><h2>直接授权设备</h2><p>按设备码授权或续期；续期会在原有效期上累加。</p></div></div><div class="panel-body"><form method="post" action="/admin/grant" class="form-grid grant"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{.ReturnURL}}"><label class="field">设备码<input name="device_id" placeholder="输入完整设备码" autocomplete="off" required></label><label class="field">天数<input name="days" type="number" min="0" max="3650" value="30" required></label><label class="field">小时<input name="hours" type="number" min="0" max="23" value="0" required></label><button type="submit">授权 / 续期</button></form></div></section></div>
-<section class="panel" id="devices"><div class="panel-head"><div><h2>设备管理</h2><p>每页 20 台，可按名称、设备码、PIN、连接状态和授权状态查询。</p></div><div class="count-pills"><span class="count-pill">有效授权 {{.ActiveLicenseCount}}</span><span class="count-pill">已过期 {{.ExpiredCount}}</span><span class="count-pill">已禁用 {{.RevokedCount}}</span><span class="count-pill">未授权 {{.UnlicensedCount}}</span></div></div><form class="toolbar" method="get" action="/admin"><input type="hidden" name="kq" value="{{.KeyQuery}}"><input type="hidden" name="ks" value="{{.KeyState}}"><input type="hidden" name="kp" value="{{.KeyPager.Page}}"><input type="hidden" name="aq" value="{{.AuditQuery}}"><input type="hidden" name="ap" value="{{.AuditPager.Page}}"><input class="search" id="device-search" name="dq" value="{{.DeviceQuery}}" type="search" placeholder="搜索设备名称、设备码或 PIN"><select id="device-state" name="ds"><option value="">全部连接状态</option><option value="connected" {{if eq .DeviceState "connected"}}selected{{end}}>连接中</option><option value="online" {{if eq .DeviceState "online"}}selected{{end}}>在线待连接</option><option value="offline" {{if eq .DeviceState "offline"}}selected{{end}}>离线</option></select><select id="device-license" name="dl"><option value="">全部授权状态</option><option value="active" {{if eq .DeviceLicense "active"}}selected{{end}}>授权有效</option><option value="unlicensed" {{if eq .DeviceLicense "unlicensed"}}selected{{end}}>未授权</option><option value="expired" {{if eq .DeviceLicense "expired"}}selected{{end}}>已过期</option><option value="revoked" {{if eq .DeviceLicense "revoked"}}selected{{end}}>已禁用</option></select><button type="submit">查询</button><a class="button secondary" href="{{.DeviceClearURL}}#devices">清空</a><span class="visible-count" id="device-visible">本页 {{len .Devices}} 台</span></form><div class="table-wrap"><table><thead><tr><th>设备名称</th><th>设备码</th><th>PIN</th><th>连接状态</th><th>授权状态</th><th>授权有效期</th><th>最后在线</th><th>管理操作</th></tr></thead><tbody id="device-rows">{{range .Devices}}<tr data-row data-state="{{.ConnectionClass}}" data-license="{{.LicenseClass}}"><td><form class="device-name-form" method="post" action="/admin/name"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><input name="name" value="{{.Name}}" maxlength="80" required aria-label="设备名称"><button class="secondary" type="submit">保存</button></form></td><td><div class="code-cell"><code class="mono">{{.ID}}</code><button type="button" class="ghost" data-copy="{{.ID}}">复制</button></div></td><td>{{if .PINAvailable}}<div class="code-cell"><code class="mono">{{.PIN}}</code><button type="button" class="ghost" data-copy="{{.PIN}}">复制</button></div>{{else}}<span class="muted">未上报</span>{{end}}</td><td><span class="badge {{.ConnectionClass}}">{{.ConnectionLabel}}</span></td><td><span class="badge {{.LicenseClass}}">{{.Status}}</span></td><td>{{.ActiveUntil}}</td><td>{{.LastSeen}}</td><td><div class="actions">{{if .Permanent}}<span class="badge active">永久</span>{{else}}<form method="post" action="/admin/grant"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><input type="hidden" name="days" value="30"><input type="hidden" name="hours" value="0"><button type="submit">授权30天</button></form>{{end}}<form method="post" action="/admin/disconnect" data-confirm="确定强制断开并退出设备 {{.Name}} 吗？"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button class="secondary" type="submit">断开并退出</button></form>{{if eq .LicenseClass "revoked"}}<form method="post" action="/admin/unrevoke"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button type="submit">解禁</button></form>{{else}}<form method="post" action="/admin/revoke" data-confirm="确定禁用 {{.Name}} 吗？设备会退出，并且下次无法连接。"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button class="warning" type="submit">禁用</button></form>{{end}}<form method="post" action="/admin/delete" data-confirm="确定永久删除 {{.Name}} 吗？删除后需要重新登记和授权。"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button class="danger" type="submit">删除</button></form></div></td></tr>{{else}}<tr><td colspan="8" class="empty">没有符合查询条件的设备。请调整条件，或先运行一次被控端。</td></tr>{{end}}</tbody></table><div class="no-results" id="device-empty">当前页没有符合即时筛选条件的设备</div></div>{{with .DevicePager}}<div class="pagination"><span class="pagination-info">第 {{.Start}}–{{.End}} 台，共 {{.Total}} 台 · 第 {{.Page}} / {{.TotalPages}} 页</span>{{if .HasPrev}}<a class="page-link" href="{{.PrevURL}}#devices">上一页</a>{{else}}<span class="page-link disabled">上一页</span>{{end}}{{range .Links}}<a class="page-link {{if .Current}}current{{end}}" href="{{.URL}}#devices">{{.Number}}</a>{{end}}{{if .HasNext}}<a class="page-link" href="{{.NextURL}}#devices">下一页</a>{{else}}<span class="page-link disabled">下一页</span>{{end}}</div>{{end}}<div class="panel-body footnote">“断开并退出”用于立即停止当前进程；“禁用”还会阻止设备下次连接；“解禁”恢复设备资格；“删除”会移除服务器记录。</div></section>
+<section class="panel" id="devices"><div class="panel-head"><div><h2>设备管理</h2><p>每页 20 台，可按名称、设备码、PIN、连接状态和授权状态查询。</p></div><div class="count-pills"><span class="count-pill">有效授权 {{.ActiveLicenseCount}}</span><span class="count-pill">已过期 {{.ExpiredCount}}</span><span class="count-pill">已禁用 {{.RevokedCount}}</span><span class="count-pill">未授权 {{.UnlicensedCount}}</span></div></div><form class="toolbar" method="get" action="/admin"><input type="hidden" name="kq" value="{{.KeyQuery}}"><input type="hidden" name="ks" value="{{.KeyState}}"><input type="hidden" name="kp" value="{{.KeyPager.Page}}"><input type="hidden" name="aq" value="{{.AuditQuery}}"><input type="hidden" name="ap" value="{{.AuditPager.Page}}"><input class="search" id="device-search" name="dq" value="{{.DeviceQuery}}" type="search" placeholder="搜索设备名称、设备码或 PIN"><select id="device-state" name="ds"><option value="">全部连接状态</option><option value="connected" {{if eq .DeviceState "connected"}}selected{{end}}>连接中</option><option value="online" {{if eq .DeviceState "online"}}selected{{end}}>在线待连接</option><option value="offline" {{if eq .DeviceState "offline"}}selected{{end}}>离线</option></select><select id="device-license" name="dl"><option value="">全部授权状态</option><option value="active" {{if eq .DeviceLicense "active"}}selected{{end}}>授权有效</option><option value="unlicensed" {{if eq .DeviceLicense "unlicensed"}}selected{{end}}>未授权</option><option value="expired" {{if eq .DeviceLicense "expired"}}selected{{end}}>已过期</option><option value="revoked" {{if eq .DeviceLicense "revoked"}}selected{{end}}>已禁用</option></select><button type="submit">查询</button><a class="button secondary" href="{{.DeviceClearURL}}#devices">清空</a><span class="visible-count" id="device-visible">本页 {{len .Devices}} 台</span></form><div class="table-wrap"><table><thead><tr><th>设备名称</th><th>设备码</th><th>PIN</th><th>连接状态</th><th>授权状态</th><th>授权有效期</th><th>最后在线</th><th>管理操作</th></tr></thead><tbody id="device-rows">{{range .Devices}}<tr data-row data-state="{{.ConnectionClass}}" data-license="{{.LicenseClass}}"><td><form class="device-name-form" method="post" action="/admin/name"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><input name="name" value="{{.Name}}" maxlength="80" required aria-label="设备名称"><button class="secondary" type="submit">保存</button></form></td><td><div class="code-cell"><code class="mono">{{if .ShortCode}}{{.ShortCode}}{{else}}{{.ID}}{{end}}</code><button type="button" class="ghost" data-copy="{{if .ShortCode}}{{.ShortCode}}{{else}}{{.ID}}{{end}}">复制</button></div></td><td>{{if .PINAvailable}}<div class="code-cell"><code class="mono">{{.PIN}}</code><button type="button" class="ghost" data-copy="{{.PIN}}">复制</button></div>{{else}}<span class="muted">未上报</span>{{end}}</td><td><span class="badge {{.ConnectionClass}}">{{.ConnectionLabel}}</span></td><td><span class="badge {{.LicenseClass}}">{{.Status}}</span></td><td>{{.ActiveUntil}}</td><td>{{.LastSeen}}</td><td><div class="actions">{{if .Permanent}}<span class="badge active">永久</span>{{else}}<form method="post" action="/admin/grant"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><input type="hidden" name="days" value="30"><input type="hidden" name="hours" value="0"><button type="submit">授权30天</button></form>{{end}}<form method="post" action="/admin/disconnect" data-confirm="确定强制断开并退出设备 {{.Name}} 吗？"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button class="secondary" type="submit">断开并退出</button></form>{{if eq .LicenseClass "revoked"}}<form method="post" action="/admin/unrevoke"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button type="submit">解禁</button></form>{{else}}<form method="post" action="/admin/revoke" data-confirm="确定禁用 {{.Name}} 吗？设备会退出，并且下次无法连接。"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button class="warning" type="submit">禁用</button></form>{{end}}<form method="post" action="/admin/delete" data-confirm="确定永久删除 {{.Name}} 吗？删除后需要重新登记和授权。"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button class="danger" type="submit">删除</button></form></div></td></tr>{{else}}<tr><td colspan="8" class="empty">没有符合查询条件的设备。请调整条件，或先运行一次被控端。</td></tr>{{end}}</tbody></table><div class="no-results" id="device-empty">当前页没有符合即时筛选条件的设备</div></div>{{with .DevicePager}}<div class="pagination"><span class="pagination-info">第 {{.Start}}–{{.End}} 台，共 {{.Total}} 台 · 第 {{.Page}} / {{.TotalPages}} 页</span>{{if .HasPrev}}<a class="page-link" href="{{.PrevURL}}#devices">上一页</a>{{else}}<span class="page-link disabled">上一页</span>{{end}}{{range .Links}}<a class="page-link {{if .Current}}current{{end}}" href="{{.URL}}#devices">{{.Number}}</a>{{end}}{{if .HasNext}}<a class="page-link" href="{{.NextURL}}#devices">下一页</a>{{else}}<span class="page-link disabled">下一页</span>{{end}}</div>{{end}}<div class="panel-body footnote">“断开并退出”用于立即停止当前进程；“禁用”还会阻止设备下次连接；“解禁”恢复设备资格；“删除”会移除服务器记录。</div></section>
 <section class="panel" id="licenses"><div class="panel-head"><div><h2>授权码管理</h2><p>每页 20 个，可查询最近 5000 个记录；完整密钥仅在刚生成时显示。</p></div><div class="count-pills"><span class="count-pill">未使用 {{.AvailableKeyCount}}</span><span class="count-pill">已使用 {{.UsedKeyCount}}</span><span class="count-pill">失效 {{.InvalidKeyCount}}</span></div></div><form class="toolbar" method="get" action="/admin"><input type="hidden" name="dq" value="{{.DeviceQuery}}"><input type="hidden" name="ds" value="{{.DeviceState}}"><input type="hidden" name="dl" value="{{.DeviceLicense}}"><input type="hidden" name="dp" value="{{.DevicePager.Page}}"><input type="hidden" name="aq" value="{{.AuditQuery}}"><input type="hidden" name="ap" value="{{.AuditPager.Page}}"><input class="search" id="key-search" name="kq" value="{{.KeyQuery}}" type="search" placeholder="搜索授权码指纹、状态或设备码"><select id="key-state" name="ks"><option value="">全部状态</option><option value="available" {{if eq .KeyState "available"}}selected{{end}}>未使用</option><option value="used" {{if eq .KeyState "used"}}selected{{end}}>已使用</option><option value="expired" {{if eq .KeyState "expired"}}selected{{end}}>兑换期已过</option><option value="revoked" {{if eq .KeyState "revoked"}}selected{{end}}>已吊销</option></select><button type="submit">查询</button><a class="button secondary" href="{{.KeyClearURL}}#licenses">清空</a><span class="visible-count" id="key-visible">本页 {{len .Keys}} 条</span></form><div class="table-wrap"><table><thead><tr><th>授权码指纹</th><th>授权时长</th><th>当前状态</th><th>兑换截止</th><th>管理操作</th></tr></thead><tbody id="key-rows">{{range .Keys}}<tr data-row data-state="{{.StatusClass}}"><td><div class="code-cell"><code class="mono">{{.Fingerprint}}</code><button type="button" class="ghost" data-copy="{{.Fingerprint}}">复制</button></div></td><td>{{.Duration}}</td><td><span class="badge {{.StatusClass}}">{{.Status}}</span></td><td>{{.RedeemBy}}</td><td>{{if .Revocable}}<form method="post" action="/admin/revoke-key" data-confirm="确定吊销这个未使用的授权码吗？"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="fingerprint" value="{{.Fingerprint}}"><button class="danger" type="submit">吊销授权码</button></form>{{else}}<span class="muted">不可操作</span>{{end}}</td></tr>{{else}}<tr><td colspan="5" class="empty">没有符合查询条件的授权码</td></tr>{{end}}</tbody></table><div class="no-results" id="key-empty">当前页没有符合即时筛选条件的授权码</div></div>{{with .KeyPager}}<div class="pagination"><span class="pagination-info">第 {{.Start}}–{{.End}} 条，共 {{.Total}} 条 · 第 {{.Page}} / {{.TotalPages}} 页</span>{{if .HasPrev}}<a class="page-link" href="{{.PrevURL}}#licenses">上一页</a>{{else}}<span class="page-link disabled">上一页</span>{{end}}{{range .Links}}<a class="page-link {{if .Current}}current{{end}}" href="{{.URL}}#licenses">{{.Number}}</a>{{end}}{{if .HasNext}}<a class="page-link" href="{{.NextURL}}#licenses">下一页</a>{{else}}<span class="page-link disabled">下一页</span>{{end}}</div>{{end}}</section>
 <section class="panel" id="audits"><div class="panel-head"><div><h2>安全审计记录</h2><p>每页 30 条，可查询最近 1000 条设备、授权和连接操作。</p></div></div><form class="toolbar" method="get" action="/admin"><input type="hidden" name="dq" value="{{.DeviceQuery}}"><input type="hidden" name="ds" value="{{.DeviceState}}"><input type="hidden" name="dl" value="{{.DeviceLicense}}"><input type="hidden" name="dp" value="{{.DevicePager.Page}}"><input type="hidden" name="kq" value="{{.KeyQuery}}"><input type="hidden" name="ks" value="{{.KeyState}}"><input type="hidden" name="kp" value="{{.KeyPager.Page}}"><input class="search" id="audit-search" name="aq" value="{{.AuditQuery}}" type="search" placeholder="搜索操作、设备码、来源地址或详情"><button type="submit">查询</button><a class="button secondary" href="{{.AuditClearURL}}#audits">清空</a><span class="visible-count" id="audit-visible">本页 {{len .Audits}} 条</span></form><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作</th><th>设备码</th><th>来源地址</th><th>详情</th></tr></thead><tbody id="audit-rows">{{range .Audits}}<tr data-row><td>{{.At}}</td><td><span class="audit-action" title="{{.Action}}">{{.ActionLabel}}</span></td><td><code class="mono">{{if .DeviceID}}{{.DeviceID}}{{else}}-{{end}}</code></td><td>{{if .RemoteAddr}}{{.RemoteAddr}}{{else}}-{{end}}</td><td class="detail-cell" title="{{.Detail}}">{{if .Detail}}{{.Detail}}{{else}}-{{end}}</td></tr>{{else}}<tr><td colspan="5" class="empty">没有符合查询条件的审计记录</td></tr>{{end}}</tbody></table><div class="no-results" id="audit-empty">当前页没有符合即时搜索条件的记录</div></div>{{with .AuditPager}}<div class="pagination"><span class="pagination-info">第 {{.Start}}–{{.End}} 条，共 {{.Total}} 条 · 第 {{.Page}} / {{.TotalPages}} 页</span>{{if .HasPrev}}<a class="page-link" href="{{.PrevURL}}#audits">上一页</a>{{else}}<span class="page-link disabled">上一页</span>{{end}}{{range .Links}}<a class="page-link {{if .Current}}current{{end}}" href="{{.URL}}#audits">{{.Number}}</a>{{end}}{{if .HasNext}}<a class="page-link" href="{{.NextURL}}#audits">下一页</a>{{else}}<span class="page-link disabled">下一页</span>{{end}}</div>{{end}}</section>
 </main><script src="/admin/app.js" defer></script></body></html>`))
@@ -1987,11 +2037,11 @@ var guidePage = template.Must(template.New("guide").Parse(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YuDesk 使用教程</title>
 <style>*{box-sizing:border-box}body{margin:0;background:#07111f;color:#eaf2ff;font:15px/1.7 system-ui;letter-spacing:.1px}main{max-width:900px;margin:auto;padding:42px 22px 80px}a{color:#67a7ff;text-decoration:none}h1{font-size:38px;margin:12px 0}h2{margin-top:8px;color:#91bdff}.lead,.note{color:#9db0c8}.step{background:#101d2d;border:1px solid #243953;border-radius:14px;padding:20px 24px;margin:15px 0}pre{overflow:auto;background:#07111f;border:1px solid #20344c;border-radius:9px;padding:14px;color:#cbe1ff}code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.warn{border-left:3px solid #e3a839;padding-left:12px;color:#eacb91}.ok{color:#78dba9}</style></head>
 <body><main><a href="/">← 返回下载主页</a><h1>YuDesk 使用教程</h1>{{if .DeviceMode}}<p class="lead">无需注册账号、无需输入命令，下载后双击运行即可。</p>
-<section class="step"><h2>1. 选择程序</h2><p>需要别人控制这台电脑：下载并双击 <strong>YuDesk 被控端</strong>。需要控制另一台电脑：下载并双击 <strong>YuDesk 控制端</strong>。</p></section>
-<section class="step"><h2>2. 启动被控端</h2><p>被控端会自动打开本机管理页面，显示设备码、临时 PIN、联网状态和授权有效期。没有授权时，可在页面中填写管理员发放的授权码。“隐藏到后台”会保持在线，再次双击即可显示；直接关闭窗口会退出。</p></section>
+<section class="step"><h2>1. 下载统一版</h2><p>每个平台只需要一个 <strong>YuDesk</strong>。控制电脑与被控电脑都下载对应系统的同一个程序，双击运行，无需账号。</p></section>
+<section class="step"><h2>2. 查看本机信息</h2><p>首页显示服务器分配的 <strong>9 位数字设备码</strong>与 <strong>6 位 PIN</strong>，可一键复制。保留“允许连接本机”开关开启。授权码输入默认收起，点击“输入授权码”后展开填写。</p></section>
 <section class="step"><h2>3. 发放授权</h2><p>管理员访问官网的“授权管理”，可以按天或小时生成授权码，也可以根据设备码直接授权或续期。普通用户无需登录账号。</p></section>
-<section class="step"><h2>4. 发起远程控制</h2><p>双击控制端，在打开的页面输入对方的设备码和临时 PIN，选择“控制”或“仅观看”，可选听取被控端声音，然后点击“连接”。成功后会进入可视化远程桌面。</p><p class="ok">默认使用原始分辨率、目标 30 帧高画质；控制模式支持鼠标、键盘、拖动、滚轮、组合键和剪贴板。</p></section>
-<section class="step"><h2>5. 平台权限</h2><p><strong>Windows：</strong>首次运行时允许防火墙提示。<br><strong>Linux：</strong>需要桌面截图与输入权限；X11/XWayland 支持最完整。<br><strong>macOS：</strong>在“系统设置 → 隐私与安全性”中授予屏幕录制和辅助功能权限。</p></section>
+<section class="step"><h2>4. 连接与设备列表</h2><p>在“连接远程设备”输入对方设备码和六位 PIN，选择控制或仅观看，可选声音。设备列表显示本机和已保存设备，可添加、查询、移除及再次连接，状态每 30 秒异步更新。</p><p class="ok">“结束控制”返回同一个首页，本机仍可接收连接。输入与画面使用端到端加密；短设备码通过已验证的 TLS 中转解析。</p></section>
+<section class="step"><h2>5. 授权与退出</h2><p>文件传输在“文件传输”页面开启本机接收目录权限。macOS 需授予屏幕录制与辅助功能权限；Linux 需桌面与输入工具。直接关闭窗口或点“退出”会停止整个程序；点“隐藏”后可关闭窗口并继续在线，重复双击重新显示。管理员断开、禁用、删除或授权到期会停止整个程序。</p></section>
 <p class="warn">官网使用普通 HTTP；远程桌面内容仍使用端到端加密。授权码通过 HTTP 提交时可能被同一网络中的攻击者截获，请仅在可信网络使用。</p>
 {{else}}<p class="lead">服务器地址和证书指纹已经填好；只需替换用户名、激活密钥、DEVICE_ID 和 PIN。</p>
 <section class="step"><h2>1. 下载对应平台文件</h2><p>从下载主页获取账号工具、受控端 Agent 和控制端 Viewer。Linux/macOS 下载后先执行：</p><pre><code>chmod +x yudesk-account yudesk-agent yudesk-viewer</code></pre><p>Windows 直接使用对应的 .exe 文件。</p></section>
