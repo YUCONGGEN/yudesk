@@ -217,7 +217,7 @@ func TestNativeUnifiedApplication(t *testing.T) {
 	a.process.exited(t)
 }
 
-func TestNativeUnifiedSessionXReturnsHome(t *testing.T) {
+func TestNativeUnifiedSessionXExitsApp(t *testing.T) {
 	if os.Getenv("YUDESK_UNIFIED_TEST") != "1" {
 		t.Skip("opt-in native unified app")
 	}
@@ -247,29 +247,9 @@ func TestNativeUnifiedSessionXReturnsHome(t *testing.T) {
 	f.post(home, "/connect", url.Values{"device_id": {rightID.ID}, "pin": {rightID.PIN}})
 	f.page(filepath.Join(leftDir, "viewer-session.url"))
 	watch.Body.Close() // same lifecycle event as native window X
-	mode := *u
-	mode.Path = "/api/ui/mode"
-	client := &http.Client{Timeout: time.Second}
-	eventually(t, "session X returns to home without killing the app", func() bool {
-		r, err := client.Get(mode.String())
-		if err != nil {
-			return false
-		}
-		defer r.Body.Close()
-		data, _ := io.ReadAll(r.Body)
-		return string(data) == "launcher"
-	})
-	if !left.running() || !right.running() {
-		t.Fatal("session X terminated a client")
-	}
-	f.waitOnline(leftID.ID)
-	f.waitPairing(rightID.ID)
-	watch, err = http.Get(u.String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	watch.Body.Close() // now home X must exit
 	left.exited(t)
+	f.waitOffline(leftID.ID)
+	f.waitPairing(rightID.ID)
 	if !right.running() {
 		t.Fatal("home X terminated the other computer")
 	}

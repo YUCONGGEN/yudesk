@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,10 +14,11 @@ import (
 
 	"github.com/yudesk/yudesk/internal/agentapp"
 	"github.com/yudesk/yudesk/internal/relay"
+	"github.com/yudesk/yudesk/internal/releaseinfo"
 	"github.com/yudesk/yudesk/internal/winhost"
 )
 
-const unifiedVersion = "desktop-unified-v5"
+const unifiedVersion = "desktop-unified-" + releaseinfo.Version
 
 //go:embed ui/dashboard.html
 var dashboardHTML string
@@ -48,6 +50,32 @@ func enableUnified(host *viewerHost, config viewerConfig, directory, token strin
 	host.mu.Unlock()
 	host.version.Store(unifiedVersion)
 	go func() {
+		for {
+			select {
+			case <-host.ctx.Done():
+				return
+			case <-device.ApprovalEvents():
+				if device.Status().Pending != nil && config.openUI {
+					_ = openBrowser(viewerUIURL(host.listener.Addr().String(), token), false)
+				}
+			}
+		}
+	}()
+	if config.openUI {
+		tray, trayErr := newAppTray(func() {
+			if host.ctx.Err() == nil {
+				_ = openBrowser(viewerUIURL(host.listener.Addr().String(), token), false)
+			}
+		}, host.cancel)
+		if trayErr != nil {
+			log.Printf("YuDesk 托盘: %v", trayErr)
+		} else {
+			host.mu.Lock()
+			host.tray = tray
+			host.mu.Unlock()
+		}
+	}
+	go func() {
 		select {
 		case <-host.ctx.Done():
 			device.Close()
@@ -70,7 +98,7 @@ func (d *unifiedDesk) Close() { d.device.Close() }
 func (d *unifiedDesk) render(w http.ResponseWriter, id, message string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = dashboardPage.Execute(w, map[string]any{"Token": d.token, "DeviceID": id, "Message": message})
+	_ = dashboardPage.Execute(w, map[string]any{"Token": d.token, "DeviceID": id, "Message": message, "Version": releaseinfo.Version})
 }
 
 func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
@@ -101,6 +129,11 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	if path == "/api/local/approval" && r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"pending": d.device.Status().Pending})
+		return true
+	}
 	if path == "/api/local/status" && r.Method == http.MethodGet {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(d.device.Status())
@@ -121,6 +154,8 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	var p struct {
+		RequestID string `json:"requestID"`
+		Accept    bool   `json:"accept"`
 		Confirmed bool   `json:"confirmed"`
 		Enabled   bool   `json:"enabled"`
 		Key       string `json:"key"`
@@ -132,6 +167,8 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 	}
 	var err error
 	switch path {
+	case "/api/local/approval":
+		err = d.device.ResolveApproval(p.RequestID, p.Accept)
 	case "/api/local/service/install", "/api/local/service/remove":
 		if !p.Confirmed {
 			err = errors.New("请确认管理员授权安装或卸载服务")
@@ -164,8 +201,10 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		err = updateHistory(d.directory, connectionRecord{DeviceID: p.Code}, true)
 	case "/api/local/hide":
 		d.hidden.Store(true)
-		d.host.tracker.Suspend()
-		err = d.host.window.Hide()
+		err = d.host.hideWindow()
+		if err != nil {
+			d.hidden.Store(false)
+		}
 	default:
 		http.NotFound(w, r)
 		return true

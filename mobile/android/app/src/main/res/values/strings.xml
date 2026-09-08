@@ -1,0 +1,5 @@
+<resources>
+    <string name="device_identity">%1$s   PIN %2$s</string>
+    <string name="device_state">%1$s\n%2$s · %3$s</string>
+    <string name="remote_state">%1$d ms · %2$s · %3$s</string>
+</resources>

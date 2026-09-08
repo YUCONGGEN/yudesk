@@ -26,6 +26,7 @@ import (
 
 	"github.com/yudesk/yudesk/internal/account"
 	"github.com/yudesk/yudesk/internal/relay"
+	"github.com/yudesk/yudesk/internal/releaseinfo"
 	"github.com/yudesk/yudesk/internal/security"
 )
 
@@ -1516,6 +1517,7 @@ func serveDownloads(addr, downloadDir, fingerprint, publicRelay, publicAccount s
 }
 
 func registerDownloadRoutes(mux *http.ServeMux, downloadDir string, guide func(*http.Request) guideConfig) {
+	registerHomepageSite(mux)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -1701,6 +1703,7 @@ var downloadLayout = []downloadPlatform{
 	{Name: "Linux", Detail: "Linux desktop · x64", Links: componentLinks("linux-amd64", "")},
 	{Name: "macOS Intel", Detail: "Intel Mac · x64", Links: componentLinks("darwin-amd64", "")},
 	{Name: "macOS Apple Silicon", Detail: "M1/M2/M3/M4 · arm64", Links: componentLinks("darwin-arm64", "")},
+	{Name: "Android 预览版", Detail: "Android 8+ · 需真机验收", Links: []downloadLink{{Name: "YuDesk Android", Description: "控制 / 授权共享屏幕 · 预览测试", Path: "android/yudesk.apk"}}},
 }
 
 func componentLinks(platform, suffix string) []downloadLink {
@@ -1730,7 +1733,11 @@ func serveDownloadHome(w http.ResponseWriter, root string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
-	_ = downloadPage.Execute(w, map[string]any{"Platforms": downloadPlatforms(root), "Checksums": regularFile(filepath.Join(root, "SHA256SUMS.txt"))})
+	version, date := "", "待发布"
+	if release, err := releaseinfo.Read(root); err == nil {
+		version, date = release.Version, release.Date()+"（北京时间）"
+	}
+	_ = downloadPage.Execute(w, map[string]any{"Platforms": downloadPlatforms(root), "Checksums": regularFile(filepath.Join(root, "SHA256SUMS.txt")), "Version": version, "PublishedAt": date})
 }
 
 type guideConfig struct {
@@ -1786,7 +1793,18 @@ func serveDownload(w http.ResponseWriter, r *http.Request, root string) {
 		http.Error(w, "download temporarily unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(path)))
+	filename := filepath.Base(path)
+	if release, err := releaseinfo.Read(root); err == nil {
+		platform := filepath.Dir(relative)
+		if platform == "android" {
+			platform = "android-preview"
+		}
+		filename = releaseinfo.Filename(platform, filepath.Ext(path), release.Version)
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	if strings.HasSuffix(relative, ".apk") {
+		w.Header().Set("Content-Type", "application/vnd.android.package-archive")
+	}
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
 	http.ServeFile(w, r, path)
@@ -1823,12 +1841,7 @@ func humanSize(size int64) string {
 	return fmt.Sprintf("%d B", size)
 }
 
-var downloadPage = template.Must(template.New("downloads").Parse(`<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YuDesk 下载</title>
-<style>*{box-sizing:border-box}html,body{min-height:100%}body{margin:0;background:#07111f;color:#eaf2ff;font:15px system-ui,-apple-system,"Segoe UI",sans-serif}.hero{padding:38px 24px 26px;text-align:center;background:radial-gradient(circle at 50% 0,#17396b,#07111f 70%)}h1{font-size:44px;margin:0 0 8px}.logo{color:#67a7ff}.hero p{color:#aebed4;margin:5px}.secure{display:inline-block;margin-top:10px;padding:6px 12px;border:1px solid #285484;border-radius:99px;color:#78dba9;background:#0b2231}.wrap{max-width:1500px;margin:auto;padding:20px 20px 30px}.grid{display:grid;grid-template-columns:repeat(4,minmax(240px,1fr));gap:14px}.card{background:#101d2d;border:1px solid #243953;border-radius:16px;padding:18px;box-shadow:0 14px 34px #0004}.card h2{margin:0 0 3px}.detail{color:#8fa4bf;margin-bottom:12px}.item{display:flex;align-items:center;gap:10px;border-top:1px solid #20344c;padding:12px 0}.item strong{display:block}.item small{display:block;color:#8fa4bf}.download{margin-left:auto;text-decoration:none;background:#2878e8;color:white;padding:8px 13px;border-radius:8px;white-space:nowrap}.missing{margin-left:auto;color:#71849d;font-size:13px}.foot{text-align:center;color:#71849d;margin-top:20px}.foot a{color:#67a7ff;margin:0 8px}@media(max-width:1120px){.grid{grid-template-columns:repeat(2,minmax(240px,1fr))}}@media(max-width:620px){h1{font-size:34px}.grid{grid-template-columns:1fr}.hero{padding:28px 16px 20px}.wrap{padding:14px 12px 28px}}</style></head>
-<body><section class="hero"><h1><span class="logo">Yu</span>Desk</h1><p>跨平台、安全、端到端加密的远程桌面</p><p>一个程序，控制与被控合一 · 9 位设备码 · 6 位 PIN</p><span class="secure">双击运行 · 无需账号 · 设备授权</span><p><a class="download" href="/guide">查看使用教程</a></p></section><main class="wrap"><div class="grid">
-{{range .Platforms}}<section class="card"><h2>{{.Name}}</h2><div class="detail">{{.Detail}}</div>{{range .Links}}<div class="item"><div><strong>{{.Name}}</strong><small>{{.Description}}{{if .Size}} · {{.Size}}{{end}}</small></div>{{if .Available}}<a class="download" href="/download/{{.Path}}?v={{.Version}}">下载</a>{{else}}<span class="missing">暂未上传</span>{{end}}</div>{{end}}</section>{{end}}
-</div><div class="foot">用户无需注册或登录。远程画面、声音、输入和文件内容保持端到端加密；管理员可查看设备上报的 PIN。{{if .Checksums}}<a href="/SHA256SUMS.txt">SHA-256 校验和</a>{{end}}<a href="/admin">授权管理</a></div></main></body></html>`))
+var downloadPage = template.Must(template.New("downloads").Funcs(homepageTemplateFuncs).Parse(downloadPageTemplate))
 
 var adminPage = template.Must(template.New("admin").Parse(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YuDesk 服务器管理</title>
@@ -1856,6 +1869,20 @@ const adminScript = `(() => {
   let refreshing = false;
   let remaining = 30;
 
+  const modalStyle=document.createElement('style');modalStyle.textContent='.admin-dialog{width:360px;max-width:calc(100vw - 32px);padding:24px;border:1px solid #304963;border-radius:14px;background:#101d2d;color:#eaf2ff;box-shadow:0 20px 80px #0008}.admin-dialog::backdrop{background:#02091699;backdrop-filter:blur(3px)}.admin-dialog h2{font-size:18px;margin:0 0 12px}.admin-dialog p{color:#9bb0c9;line-height:1.7;margin:0 0 16px}.admin-dialog textarea{box-sizing:border-box;width:100%;min-height:95px;padding:10px;border:1px solid #304963;background:#081422;color:#b4d6ff;border-radius:8px}.admin-dialog .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}';document.head.append(modalStyle);
+  const modal=document.createElement('dialog');modal.className='admin-dialog';
+  const heading=document.createElement('h2'),detail=document.createElement('p'),copyArea=document.createElement('textarea'),actions=document.createElement('div'),cancelButton=document.createElement('button'),acceptButton=document.createElement('button');
+  copyArea.readOnly=true;actions.className='actions';cancelButton.textContent='取消';cancelButton.className='secondary';acceptButton.textContent='确认';actions.append(cancelButton,acceptButton);modal.append(heading,detail,copyArea,actions);document.body.append(modal);
+  function showAdminDialog(message,copyValue){return new Promise(resolve=>{
+    if(modal.open){resolve(false);return;}
+    heading.textContent=copyValue===undefined?'确认管理操作':'手动复制';detail.textContent=message;copyArea.hidden=copyValue===undefined;copyArea.value=copyValue||'';
+    cancelButton.hidden=copyValue!==undefined;acceptButton.textContent=copyValue===undefined?'确认执行':'完成';
+    const previousDirty=dirty;dirty=true;
+    const finish=value=>{modal.close();dirty=previousDirty;resolve(value);};
+    cancelButton.onclick=()=>finish(false);acceptButton.onclick=()=>finish(true);modal.oncancel=e=>{e.preventDefault();finish(false);};
+    modal.showModal();if(copyValue===undefined)cancelButton.focus();else{copyArea.focus();copyArea.select();}
+  });}
+
   async function copyText(value, button) {
     try {
       if (navigator.clipboard && window.isSecureContext) {
@@ -1867,7 +1894,7 @@ const adminScript = `(() => {
         area.style.opacity = '0';
         document.body.appendChild(area);
         area.select();
-        document.execCommand('copy');
+        if(!document.execCommand('copy')){area.remove();throw Error('copy failed');}
         area.remove();
       }
       if (button) {
@@ -1876,7 +1903,7 @@ const adminScript = `(() => {
         setTimeout(() => { button.textContent = old; }, 1200);
       }
     } catch (_) {
-      window.prompt('请复制下面的内容', value);
+      await showAdminDialog('自动复制不可用，请选择内容后复制。', value);
     }
   }
 
@@ -1887,8 +1914,9 @@ const adminScript = `(() => {
     });
     document.querySelectorAll('form[data-confirm]:not([data-confirm-bound])').forEach((form) => {
       form.dataset.confirmBound = '1';
-      form.addEventListener('submit', (event) => {
-        if (!window.confirm(form.dataset.confirm)) event.preventDefault();
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if(await showAdminDialog(form.dataset.confirm) && form.isConnected) HTMLFormElement.prototype.submit.call(form);
       });
     });
     document.querySelectorAll('form[method="post"] input:not([type=hidden]):not([data-dirty-bound]), form[method="post"] select:not([data-dirty-bound])').forEach((input) => {

@@ -16,20 +16,20 @@ import (
 // including relay dialing and failed attempts. Only the active page handler
 // changes. Closing a connecting window therefore cancels the dial as well.
 type viewerHost struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	listener    net.Listener
-	server      *http.Server
-	mu          sync.RWMutex
-	page        *viewerPageListener
-	handler     http.Handler
-	desk        *unifiedDesk
-	version     atomic.Value
-	tracker     *uilifecycle.Tracker
-	window      *appWindow
-	remoteClose func()
-	reopen      atomic.Bool
-	openUI      bool
+	ctx      context.Context
+	cancel   context.CancelFunc
+	listener net.Listener
+	server   *http.Server
+	mu       sync.RWMutex
+	windowMu sync.Mutex // serializes show/hide/exit together with tray state
+	page     *viewerPageListener
+	handler  http.Handler
+	desk     *unifiedDesk
+	version  atomic.Value
+	tracker  *uilifecycle.Tracker
+	window   *appWindow
+	tray     *appTray
+	openUI   bool
 }
 
 func newViewerHost(addr, token string) (*viewerHost, error) {
@@ -41,20 +41,8 @@ func newViewerHost(addr, token string) (*viewerHost, error) {
 	h := &viewerHost{ctx: ctx, cancel: cancel, listener: l}
 	h.window = newAppWindow(l.Addr().String(), token)
 	h.version.Store("desktop-input-files-v3")
-	windowClosed := func() {
-		if ctx.Err() != nil {
-			return
-		}
-		h.mu.RLock()
-		closeRemote := h.remoteClose
-		h.mu.RUnlock()
-		if closeRemote != nil {
-			h.reopen.Store(true)
-			closeRemote()
-		} else {
-			cancel()
-		}
-	}
+	// X always exits the app. Only the explicit End Control action returns home.
+	windowClosed := cancel
 	tracker := uilifecycle.NewWithCallback(700*time.Millisecond, func() {
 		// Managed native windows report target destruction directly, avoiding
 		// duplicate/late HTTP watcher callbacks after the dashboard reopens.
@@ -78,11 +66,29 @@ func newViewerHost(addr, token string) (*viewerHost, error) {
 				http.Error(w, "method not allowed", 405)
 				return
 			}
-			if err := h.window.Show(); err != nil {
+			if err := h.showWindow(); err != nil {
 				http.Error(w, err.Error(), 503)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/api/ui/minimize" || r.URL.Path == "/api/ui/drag" {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			var err error
+			if r.URL.Path == "/api/ui/minimize" {
+				err = h.window.Minimize()
+			} else {
+				err = h.window.Drag()
+			}
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		if r.URL.Path == "/api/ui/watch" {
@@ -106,8 +112,10 @@ func newViewerHost(addr, token string) (*viewerHost, error) {
 			return
 		}
 		if (r.URL.Path == "/api/exit" || r.URL.Path == "/exit") && r.Method == http.MethodPost {
-			serveViewerExitPage(w, "YuDesk 控制端已退出")
-			time.AfterFunc(200*time.Millisecond, cancel)
+			// No exit confirmation/result page, and no navigation to a dead URL.
+			w.WriteHeader(http.StatusNoContent)
+			_ = http.NewResponseController(w).Flush()
+			cancel()
 			return
 		}
 		h.mu.RLock()
@@ -143,7 +151,52 @@ func newViewerHost(addr, token string) (*viewerHost, error) {
 	return h, nil
 }
 
-func (h *viewerHost) Close() { h.cancel(); _ = h.window.Hide(); _ = h.server.Close() }
+func (h *viewerHost) setTrayVisible(visible bool) {
+	h.mu.RLock()
+	t := h.tray
+	h.mu.RUnlock()
+	if t != nil {
+		t.Visible(visible)
+	}
+}
+
+func (h *viewerHost) showWindow() error {
+	h.windowMu.Lock()
+	defer h.windowMu.Unlock()
+	if err := h.ctx.Err(); err != nil {
+		return err
+	}
+	if err := h.window.Show(); err != nil {
+		return err
+	}
+	h.setTrayVisible(true)
+	return nil
+}
+
+func (h *viewerHost) hideWindow() error {
+	h.windowMu.Lock()
+	defer h.windowMu.Unlock()
+	h.tracker.Suspend()
+	if err := h.window.Hide(); err != nil {
+		return err
+	}
+	h.setTrayVisible(false)
+	return nil
+}
+
+func (h *viewerHost) Close() {
+	h.cancel()
+	h.windowMu.Lock()
+	defer h.windowMu.Unlock()
+	h.mu.RLock()
+	t := h.tray
+	h.mu.RUnlock()
+	if t != nil {
+		t.Close()
+	}
+	_ = h.window.Hide()
+	_ = h.server.Close()
+}
 
 type viewerPageListener struct {
 	host   *viewerHost

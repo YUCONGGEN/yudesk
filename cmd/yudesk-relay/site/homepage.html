@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="YuDesk 远程桌面：一个程序，控制与被控合一。下载桌面客户端，了解设备连接、使用流程与平台支持。">
+  <meta name="color-scheme" content="light">
+  <title>YuDesk · 下载与产品介绍</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='11' fill='%231478f7'/%3E%3Ctext x='20' y='27' text-anchor='middle' fill='white' font-size='23' font-family='system-ui,sans-serif'%3EYu%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="{{siteURL "homepage.css"}}">
+</head>
+<body>
+<a class="skip-link" href="#downloads">跳到下载区</a>
+<header class="site-header">
+  <nav class="nav-inner container" aria-label="官网导航">
+    <a class="brand" href="/" aria-label="YuDesk 首页"><span class="brand-mark" aria-hidden="true">Yu</span>YuDesk</a>
+    <div class="nav-links"><a href="#features">功能</a><a href="#how-it-works">使用流程</a><a href="#support">支持与限制</a></div>
+    <a class="button button-small" href="#downloads">下载 YuDesk <span aria-hidden="true">↓</span></a>
+  </nav>
+</header>
+<main>
+  <section class="download-section container" aria-labelledby="download-title">
+    <div class="download-intro">
+      <div><p class="eyebrow">YUDESK / 远程桌面</p><h1 id="download-title">连接另一台电脑。<br class="mobile-break">从这里开始。</h1><p class="lead">一个程序，控制与被控合一。无需注册用户账号。</p></div>
+      <div class="release"><span class="release-label">桌面客户端{{if .Version}} <strong>v{{.Version}}</strong>{{end}}</span><p class="release-date">发布日期：{{.PublishedAt}}</p><a class="text-link" href="/guide">查看完整使用教程 <span aria-hidden="true">↗</span></a></div>
+    </div>
+    <div class="download-heading" id="downloads"><h2>选择你的平台</h2><span>两端都需下载并运行 YuDesk</span></div>
+    <div class="download-grid">
+      {{range .Platforms}}<section class="download-card"><div class="platform-heading"><h3>{{.Name}}</h3><p class="detail">{{.Detail}}</p></div>{{range .Links}}<div class="download-item"><div class="download-copy"><strong>{{.Name}}{{if $.Version}} {{$.Version}}{{end}}</strong><small>{{.Description}}{{if .Size}} · {{.Size}}{{end}}</small></div>{{if .Available}}<a class="button download" href="/download/{{.Path}}?v={{.Version}}" aria-label="下载 {{.Name}} {{.Path}}">下载 <span aria-hidden="true">↓</span></a>{{else}}<span class="missing">暂未上传</span>{{end}}</div>{{end}}</section>{{end}}
+    </div>
+    <div class="download-notes"><p>首次接收连接需设备授权，或由管理员开启免激活。Android 为独立预览版。</p><div>{{if .Checksums}}<a href="/SHA256SUMS.txt">桌面 SHA-256 校验和</a>{{end}}<a href="/admin">授权管理</a></div></div>
+  </section>
+
+  <section class="about-section section-space container" aria-labelledby="about-title">
+    <p class="eyebrow">让距离，少一点存在感</p>
+    <div class="section-intro"><h2 id="about-title">熟悉的电脑，<br>换个地方也能连接。</h2><div class="intro-copy"><p>YuDesk 把接收连接与远程控制放进同一个轻巧的界面。帮助家人处理设置、协助同事解决问题，或连接另一台已获授权的电脑，从一个设备码开始。</p><p>清楚看见连接状态，主动选择控制或观看。常用设备、文件授权与连接设置，各有位置。</p></div></div>
+    <div class="principles"><div><span class="principle-icon" aria-hidden="true">↔</span><strong>一个客户端，两种角色</strong><p>在同一窗口发起或接收连接。</p></div><div><span class="principle-icon" aria-hidden="true">✓</span><strong>连接之前，先有授权</strong><p>使用 PIN，或请求对方明确同意。</p></div><div><span class="principle-icon" aria-hidden="true">⌁</span><strong>会话内容端到端加密</strong><p>保护远程画面、输入与文件内容。</p></div></div>
+  </section>
+
+  <section class="features-section section-space" id="features" aria-labelledby="features-title">
+    <div class="container">
+      <div class="section-heading"><div><p class="eyebrow">看看 YuDesk</p><h2 id="features-title">需要的操作，<br>就在眼前。</h2></div><p>浅蓝、清晰、紧凑。<br>让注意力留在正在做的事上。</p></div>
+      <article class="feature-main">
+        <div class="feature-copy"><span class="feature-index">01 / 连接</span><h3>打开一个窗口，<br>两边都准备好。</h3><p>本机设备码、连接 PIN 和远程设备输入区集中呈现。选择“远程控制”或“仅观看”，再发起连接。</p><ul class="feature-points"><li>9 位设备码，便于输入和分享</li><li>PIN 可更换，也可不填 PIN 请求连接</li><li>随时暂停“允许连接本机”</li></ul></div>
+        <figure class="screenshot" data-screenshot="desktop-home.png">{{with screenshot "desktop-home.png"}}<a class="screenshot-link" href="{{.URL}}" target="_blank" rel="noopener" aria-label="查看客户端首页大图（新窗口）"><img src="{{.URL}}" width="{{.Width}}" height="{{.Height}}" loading="lazy" decoding="async" alt="YuDesk 真实客户端首页：本机设备码与 PIN、连接远程设备和最近设备，设备信息为演示数据"></a>{{else}}<div class="screenshot-placeholder"><span class="placeholder-mark" aria-hidden="true">Yu</span><strong>客户端首页</strong><p>界面图片准备中</p></div>{{end}}<figcaption>真实客户端界面，设备信息为演示数据</figcaption></figure>
+      </article>
+      <div class="feature-pair">
+        <article class="feature-card"><div class="feature-copy"><span class="feature-index">02 / 常用设备</span><h3>下次连接，少找一步。</h3><p>添加、搜索和管理常用设备，查看在线状态与连接记录。设备列表不保存 PIN。</p></div><figure class="screenshot" data-screenshot="desktop-devices.png">{{with screenshot "desktop-devices.png"}}<a class="screenshot-link" href="{{.URL}}" target="_blank" rel="noopener" aria-label="查看设备列表大图（新窗口）"><img src="{{.URL}}" width="{{.Width}}" height="{{.Height}}" loading="lazy" decoding="async" alt="YuDesk 真实客户端设备列表：搜索、在线状态和设备操作，设备信息为演示数据"></a>{{else}}<div class="screenshot-placeholder"><span class="placeholder-mark" aria-hidden="true">Yu</span><strong>设备列表</strong><p>界面图片准备中</p></div>{{end}}<figcaption>真实客户端界面，设备信息为演示数据</figcaption></figure></article>
+        <article class="feature-card"><div class="feature-copy"><span class="feature-index">03 / 连接确认</span><h3>是否连接，由对方决定。</h3><p>只填写设备码可发送连接请求。被控端明确同意后，本次控制或观看才会开始；拒绝或超时则不连接。</p></div><figure class="screenshot" data-screenshot="desktop-approval.png">{{with screenshot "desktop-approval.png"}}<a class="screenshot-link" href="{{.URL}}" target="_blank" rel="noopener" aria-label="查看连接确认大图（新窗口）"><img src="{{.URL}}" width="{{.Width}}" height="{{.Height}}" loading="lazy" decoding="async" alt="YuDesk 真实客户端连接请求确认：被控端选择同意或拒绝，设备信息为演示数据"></a>{{else}}<div class="screenshot-placeholder"><span class="placeholder-mark" aria-hidden="true">Yu</span><strong>连接请求确认</strong><p>界面图片准备中</p></div>{{end}}<figcaption>真实客户端界面，设备信息为演示数据</figcaption></figure></article>
+      </div>
+      <article class="session-feature">
+        <div class="session-copy"><span class="feature-index">连接之后</span><h3>画面与工具，<br>在同一处。</h3><p>完整适配远程画面，在侧栏调整画质与网络设置，按需使用剪贴板和已授权目录的文件传输。</p><p class="small-note">仅观看模式不接受远程输入、剪贴板写入和文件读写。声音能力取决于被控端平台。</p><a class="text-link" href="#support">了解支持与限制 <span aria-hidden="true">↗</span></a></div>
+        <figure class="session-figure"><div class="session-demo" role="img" aria-label="远程控制布局示意，非实测截图：左侧画面、右侧工具栏，不含真实电脑内容"><div class="demo-topbar"><span><b class="demo-yu">Yu</b> 远程控制</span><span>布局示意</span></div><div class="demo-body"><div class="demo-desktop"><div class="demo-window"><div class="demo-window-title"><i></i><i></i><i></i></div><div class="demo-window-content"><div class="demo-document"></div><div class="demo-lines"><i></i><i></i><i></i></div></div></div><span class="demo-cursor" aria-hidden="true">↖</span><span class="demo-desktop-label">远程画面区域</span></div><div class="demo-sidebar"><strong>会话工具</strong><span>画面 <i>›</i></span><span>网络 <i>›</i></span><span>剪贴板 <i>›</i></span><span>文件 <i>›</i></span><div class="demo-end">结束控制</div></div></div></div><figcaption>远程控制布局示意，非实测截图；不含真实远程桌面。</figcaption></figure>
+      </article>
+    </div>
+  </section>
+
+  <section class="steps-section section-space container" id="how-it-works" aria-labelledby="steps-title">
+    <div class="section-heading"><div><p class="eyebrow">从下载到连接</p><h2 id="steps-title">三步，开始协作。</h2></div><a class="text-link" href="/guide">完整教程与系统权限说明 <span aria-hidden="true">↗</span></a></div>
+    <ol class="steps"><li><span class="step-number" aria-hidden="true">1</span><h3>两端运行 YuDesk</h3><p>分别选择对应平台下载并运行。首次使用按系统提示授予屏幕录制、辅助功能等必要权限。</p></li><li><span class="step-number" aria-hidden="true">2</span><h3>让对方做好连接准备</h3><p>被控端开启“允许连接本机”，完成设备授权，分享设备码。可提供 PIN，或等待本次连接请求。</p></li><li><span class="step-number" aria-hidden="true">3</span><h3>选择模式，发起连接</h3><p>输入对方设备码，选择控制或观看。填写正确 PIN，或不填 PIN 并等待对方同意，即可开始。</p></li></ol>
+    <p class="steps-note">想让电脑保持在线，请使用“隐藏”；关闭主程序会停止接收连接。“结束控制”仅结束当前会话并返回主界面。</p>
+  </section>
+
+  <section class="support-section section-space" id="support" aria-labelledby="support-title"><div class="container">
+    <div class="section-heading"><div><p class="eyebrow">使用之前，了解这些</p><h2 id="support-title">支持什么。<br>也说清边界。</h2></div><p>能力随操作系统、权限和网络环境而异。<br>两端建议使用同一最新桌面版本。</p></div>
+    <div class="support-grid"><div class="platform-support"><h3>平台与运行条件</h3><dl><div><dt>Windows <span>10 / 11 · x64</span></dt><dd>支持桌面控制与系统声音。锁屏控制可通过可选服务启用，需管理员权限；真实锁屏场景尚未主动测试，不支持注销后无人值守登录。</dd></div><div><dt>macOS <span>Intel / Apple Silicon</span></dt><dd>需屏幕录制与辅助功能权限；尚未实现系统声音采集。完整真机验收仍待完成。</dd></div><div><dt>Linux <span>桌面版 · x64</span></dt><dd>需要图形桌面及可用的截图、输入工具。声音依赖 PulseAudio 或兼容服务；完整真机验收仍待完成。</dd></div><div><dt>Android <span class="preview-label">预览版 · 8+</span></dt><dd>需屏幕共享及无障碍授权，仍需真机验收。文件传输暂不支持，系统声音采集尚未实现；不保证所有品牌设备或受保护画面可操作。</dd></div></dl></div>
+    <div class="support-details"><h3>连接、权限与隐私</h3><details open><summary>无需账号，仍需要设备授权</summary><p>普通用户无需注册或登录。接收远程连接的设备需管理员授权或激活；管理员开启免激活时可自动获得授权。无 PIN 的请求必须由对方明确同意。</p></details><details open><summary>会话加密与管理员权限</summary><p>远程画面、声音、输入、剪贴板和文件内容保持端到端加密。管理员可查看设备上报的 PIN，并管理设备授权。官网使用 HTTP，网页与下载传输本身不受 HTTPS 保护。</p></details><details><summary>文件与声音不是所有平台都相同</summary><p>桌面文件传输默认关闭，仅在被控端开启后访问已授权目录，不开放整个磁盘；不支持断点续传。macOS 被控端不支持系统声音，Android 文件传输暂不支持，系统声音采集尚未实现。</p></details><details><summary>连接体验与尚未提供的能力</summary><p>需要两端在线且可连接中转服务器，画面与响应受网络和设备性能影响。YuDesk 不提供隐私屏、虚拟屏或绕过操作系统权限的能力。iOS 暂未提供。</p></details></div></div>
+    <div class="closing-cta"><div><h3>从一次连接开始。</h3><p>选择对应平台，在两端打开 YuDesk。</p></div><a class="button" href="#downloads">返回下载区 <span aria-hidden="true">↑</span></a></div>
+  </div></section>
+</main>
+<footer class="site-footer container"><div class="footer-top"><a class="brand" href="/">YuDesk</a><div><a href="/guide">使用教程</a><a href="/admin">授权管理</a>{{if .Checksums}}<a href="/SHA256SUMS.txt">桌面 SHA-256 校验和</a>{{end}}</div></div><div class="footer-bottom"><span>设计者：郁从根 <span class="contact">联系方式：17739798184</span></span><a class="icp-link" href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer" title="ICP备案查询（工信部）"><img src="{{siteURL "beian.svg"}}" width="14" height="14" alt="">皖ICP备20003241号-3</a><span class="product-motto">低延迟高响应</span></div></footer>
+</body>
+</html>

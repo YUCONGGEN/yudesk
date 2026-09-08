@@ -1,0 +1,61 @@
+name: android-preview
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'mobile/**'
+      - 'internal/approval/**'
+      - 'internal/identity/**'
+      - 'internal/protocol/**'
+      - 'internal/relay/**'
+      - 'internal/secureconn/**'
+      - 'internal/stream/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/android.yml'
+permissions:
+  contents: read
+concurrency:
+  group: android-preview-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.1'
+          cache-dependency-path: |
+            go.sum
+            mobile/go.sum
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify SDK and provision explicit versions
+        shell: bash
+        run: |
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.3.13750724'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+      - name: Go tests, JNI binding, Java tests, lint, APK
+        run: bash mobile/scripts/build-android.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YuDesk-2.0.0-android-preview
+          if-no-files-found: error
+          path: |
+            mobile/build/YuDesk-2.0.0-android-preview.apk
+            mobile/build/SHA256SUMS.txt
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-reports
+          if-no-files-found: ignore
+          path: mobile/android/app/build/reports/

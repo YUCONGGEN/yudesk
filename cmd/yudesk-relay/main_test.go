@@ -271,6 +271,14 @@ func TestDownloadHomeAndAllowList(t *testing.T) {
 	if !strings.Contains(home.Header().Get("Cache-Control"), "no-store") {
 		t.Fatalf("download home is cacheable: %q", home.Header().Get("Cache-Control"))
 	}
+	if err := os.WriteFile(filepath.Join(root, "release.json"), []byte(`{"version":"2.0.0","publishedAt":"2026-09-08T00:00:00Z"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	versionHome := httptest.NewRecorder()
+	serveDownloadHome(versionHome, root)
+	if !strings.Contains(versionHome.Body.String(), "2.0.0") || !strings.Contains(versionHome.Body.String(), "2026-09-08 08:00") {
+		t.Fatal("release version/date missing")
+	}
 	guide := httptest.NewRecorder()
 	serveGuide(guide, guideConfig{AccountServer: "https://desk.example.com:8234", RelayServer: "desk.example.com:8233", Fingerprint: strings.Repeat("A", 64)})
 	if guide.Code != http.StatusOK || !strings.Contains(guide.Body.String(), "YuDesk 使用教程") || !strings.Contains(guide.Body.String(), "server-fingerprint") || !strings.Contains(guide.Body.String(), "desk.example.com:8233") || !strings.Contains(guide.Body.String(), "desk.example.com:8234") || !strings.Contains(guide.Body.String(), "Windows") || !strings.Contains(guide.Body.String(), "Linux") || !strings.Contains(guide.Body.String(), "macOS") {
@@ -285,6 +293,9 @@ func TestDownloadHomeAndAllowList(t *testing.T) {
 	serveDownload(download, httptest.NewRequest(http.MethodGet, "/download/windows-amd64/yudesk.exe", nil), root)
 	if download.Code != http.StatusOK || download.Body.String() != string(want) {
 		t.Fatalf("unexpected download: status=%d body=%q", download.Code, download.Body.String())
+	}
+	if !strings.Contains(download.Header().Get("Content-Disposition"), "YuDesk-2.0.0-windows-amd64.exe") {
+		t.Fatal("download filename missing semantic version")
 	}
 	if !strings.Contains(download.Header().Get("Cache-Control"), "no-store") {
 		t.Fatalf("download is cacheable: %q", download.Header().Get("Cache-Control"))
@@ -393,7 +404,7 @@ func TestStandaloneActivationAndAdminWeb(t *testing.T) {
 	scriptRequest.SetBasicAuth("admin", "correct-admin-password")
 	scriptResponse := httptest.NewRecorder()
 	mux.ServeHTTP(scriptResponse, scriptRequest)
-	if scriptResponse.Code != http.StatusOK || !strings.Contains(scriptResponse.Body.String(), "filterDevices") || !strings.Contains(scriptResponse.Body.String(), "window.confirm") || !strings.Contains(scriptResponse.Body.String(), "asyncRefresh") || strings.Contains(scriptResponse.Body.String(), "window.location.replace") {
+	if scriptResponse.Code != http.StatusOK || !strings.Contains(scriptResponse.Body.String(), "filterDevices") || !strings.Contains(scriptResponse.Body.String(), "showAdminDialog") || strings.Contains(scriptResponse.Body.String(), "window.confirm") || strings.Contains(scriptResponse.Body.String(), "window.prompt") || !strings.Contains(scriptResponse.Body.String(), "asyncRefresh") || strings.Contains(scriptResponse.Body.String(), "window.location.replace") {
 		t.Fatalf("admin application script failed: status=%d body=%s", scriptResponse.Code, scriptResponse.Body.String())
 	}
 	delete(broker.devices, deviceID)

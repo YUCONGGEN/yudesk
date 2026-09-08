@@ -415,9 +415,6 @@ func runViewer(config viewerConfig) error {
 			return nil
 		}
 		if useLauncher {
-			if config.ui != nil && config.ui.reopen.Swap(false) {
-				config.openUI = config.ui.openUI
-			}
 			request, connect, err := runViewerLauncherWithMessage(launcherAddr, config.openUI, viewerDirectory, accessToken, launcherMessage, config.statusServer, config.ui)
 			if err != nil || !connect {
 				return err
@@ -466,21 +463,6 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 	}
 	sessionCtx, cancelSession := context.WithCancel(parent)
 	defer cancelSession()
-	var windowClosed atomic.Bool
-	if config.ui != nil {
-		config.ui.mu.Lock()
-		config.ui.remoteClose = func() { windowClosed.Store(true); cancelSession() }
-		config.ui.mu.Unlock()
-		defer func() {
-			config.ui.mu.Lock()
-			config.ui.remoteClose = nil
-			config.ui.mu.Unlock()
-			if windowClosed.Load() && config.ui.ctx.Err() == nil {
-				outcome = viewerSessionOutcome{webAddr: config.web, returnToLauncher: true}
-				resultErr = nil
-			}
-		}()
-	}
 	publicID := config.deviceID
 	if relay.IsDeviceCode(config.deviceID) {
 		resolved, err := relay.ResolveDevice(sessionCtx, config.relayAddr, relay.DialOptions{TLS: config.relayTLS, CAFile: config.relayCA, Fingerprint: config.relayFingerprint, Insecure: config.relayInsecure}, config.deviceID)
@@ -515,7 +497,9 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 	if config.control {
 		mode = "control"
 	}
-	authResponse, err := c.request("auth", map[string]any{"pin": config.pin, "mode": mode, "audio": config.audio, "audioOnDemand": true}, nil)
+	authCtx, authCancel := context.WithTimeout(sessionCtx, 75*time.Second)
+	defer authCancel()
+	authResponse, err := c.requestContext(authCtx, "auth", map[string]any{"pin": config.pin, "mode": mode, "audio": config.audio, "audioOnDemand": true}, nil)
 	if err != nil {
 		return viewerSessionOutcome{}, fmt.Errorf("authentication failed: %w", err)
 	}
@@ -869,7 +853,7 @@ func runViewerLauncherWithMessage(addr string, openUI bool, stateDir, token, ini
 		}
 		deviceID := strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(r.FormValue("device_id"))), " ", "")
 		pin := strings.TrimSpace(r.FormValue("pin"))
-		if (!relay.IsDeviceCode(deviceID) && len(deviceID) != 24) || len(pin) < 6 || len(pin) > 8 {
+		if (!relay.IsDeviceCode(deviceID) && len(deviceID) != 24) || (pin != "" && (len(pin) < 6 || len(pin) > 8)) {
 			http.Error(w, "设备码或 PIN 格式不正确", http.StatusBadRequest)
 			return
 		}
@@ -900,7 +884,11 @@ func runViewerLauncherWithMessage(addr string, openUI bool, stateDir, token, ini
 			http.Error(w, "已有连接正在建立", http.StatusConflict)
 			return
 		}
-		serveViewerTransitionPage(w, "正在连接远程电脑", "连接成功后会自动打开远程桌面，请稍候。", token, "session")
+		if pin == "" {
+			serveViewerTransitionPage(w, "等待对方确认", "已请求连接；对方同意后打开远程桌面，最多等待 60 秒。", token, "session")
+		} else {
+			serveViewerTransitionPage(w, "正在连接远程电脑", "连接成功后会自动打开远程桌面，请稍候。", token, "session")
+		}
 		go func() {
 			time.Sleep(200 * time.Millisecond)
 			finish(viewerConnectRequest{deviceID: deviceID, pin: pin, control: mode == "control", audio: listenAudio, webAddr: listener.Addr().String()}, true)
@@ -1101,7 +1089,7 @@ func requestExistingViewerExit(target string, fullscreen bool) error {
 		return err
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
+	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("existing viewer exit returned %s", response.Status)
 	}
 	return nil
@@ -1314,6 +1302,7 @@ func serveViewerTransitionPage(w http.ResponseWriter, title, detail, token, want
 const token=document.body.dataset.token;
 const wanted=document.body.dataset.mode;
 const target='/?access_token='+encodeURIComponent(token);
+const shell=document.createElement('script');shell.src='/assets/window-ui.js?access_token='+encodeURIComponent(token);document.head.append(shell);
 fetch('/api/ui/watch?access_token='+encodeURIComponent(token)).catch(()=>{});
 async function follow(){
   try{

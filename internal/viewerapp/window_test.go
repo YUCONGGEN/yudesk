@@ -73,36 +73,8 @@ func TestNativeManagedWindowHideReopenAndClose(t *testing.T) {
 	if err := h.window.Show(); err != nil {
 		t.Fatal(err)
 	}
-	closed := make(chan struct{}, 1)
 	waitAttached()
-	h.mu.Lock()
-	h.remoteClose = func() { closed <- struct{}{} }
-	h.mu.Unlock()
 	c, err := h.window.connection()
-	if err != nil {
-		t.Fatal(err)
-	}
-	id = getTarget()
-	if err := windowCommand(c, "Target.closeTarget", map[string]any{"targetId": id}, nil); err != nil {
-		t.Fatal(err)
-	}
-	c.Close()
-	select {
-	case <-closed:
-	case <-time.After(4 * time.Second):
-		t.Fatal("session X did not request return to home")
-	}
-	if h.ctx.Err() != nil || !h.reopen.Load() {
-		t.Fatal("session X killed app")
-	}
-	h.mu.Lock()
-	h.remoteClose = nil
-	h.mu.Unlock()
-	if err := h.window.Show(); err != nil {
-		t.Fatal(err)
-	}
-	waitAttached()
-	c, err = h.window.connection()
 	if err != nil {
 		t.Fatal(err)
 	}

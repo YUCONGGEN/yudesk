@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yudesk/yudesk/internal/approval"
 	"github.com/yudesk/yudesk/internal/desktop"
 	"github.com/yudesk/yudesk/internal/filetransfer"
 	"github.com/yudesk/yudesk/internal/identity"
@@ -46,6 +47,7 @@ const (
 )
 
 type agent struct {
+	approvals               *approval.Broker
 	captureDesktop          func(desktop.CaptureOptions) (desktop.Screenshot, error) // test-only synthetic desktop; nil selects native capture
 	allowBrowserUI          bool
 	openNoticeBrowser       func(string) error   // tests inject this to prove headless runs never launch a browser
@@ -317,6 +319,9 @@ func (a *agent) setRelayConnection(connection net.Conn) bool {
 }
 
 func (a *agent) requestExit() {
+	if a.approvals != nil {
+		a.approvals.Cancel()
+	}
 	a.quitOnce.Do(func() { close(a.quit) })
 	a.connectionMu.Lock()
 	connection := a.relayConnection
@@ -882,6 +887,13 @@ func (a *agent) handle(raw net.Conn) {
 	c := protocol.NewConn(secured)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go func() {
+		select {
+		case <-a.quit:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	input := newInputSession()
 	if a.inputFactory != nil {
 		input = a.inputFactory()
@@ -906,7 +918,51 @@ func (a *agent) handle(raw net.Conn) {
 		Audio         bool   `json:"audio"`
 		AudioOnDemand bool   `json:"audioOnDemand"`
 	}
-	if json.Unmarshal(first.Params, &auth) != nil || !a.matchesPIN(auth.PIN) {
+	if json.Unmarshal(first.Params, &auth) != nil {
+		_ = c.WriteMessage(protocol.Failure(first.ID, "invalid authentication request"))
+		return
+	}
+	if auth.Mode == "" {
+		auth.Mode = "control"
+	}
+	if auth.Mode != "control" && auth.Mode != "view" {
+		_ = c.WriteMessage(protocol.Failure(first.ID, "invalid connection mode"))
+		return
+	}
+	type firstReadResult struct {
+		message protocol.Message
+		err     error
+	}
+	var afterApproval chan firstReadResult
+	if auth.PIN == "" {
+		if a.approvals == nil {
+			_ = c.WriteMessage(protocol.Failure(first.ID, "对方版本不支持确认连接，请使用 PIN 或升级"))
+			return
+		}
+		// While waiting, detect peer cancellation without a second concurrent
+		// reader. Preserve the first post-auth message for the normal loop.
+		_ = secured.SetReadDeadline(time.Now().Add(75 * time.Second))
+		afterApproval = make(chan firstReadResult, 1)
+		ready := make(chan struct{})
+		go func() {
+			m, err := c.ReadMessage()
+			if err != nil {
+				cancel()
+			} else {
+				select {
+				case <-ready:
+				default:
+					cancel()
+				}
+			}
+			afterApproval <- firstReadResult{m, err}
+		}()
+		if err := a.approvals.Request(ctx, auth.Mode); err != nil {
+			_ = c.WriteMessage(protocol.Failure(first.ID, err.Error()))
+			return
+		}
+		close(ready)
+	} else if !a.matchesPIN(auth.PIN) {
 		a.recordAuthenticationFailure()
 		_ = c.WriteMessage(protocol.Failure(first.ID, "invalid PIN"))
 		return
@@ -1078,7 +1134,19 @@ func (a *agent) handle(raw net.Conn) {
 		}
 	}
 	for {
-		m, err := c.ReadMessage()
+		var m protocol.Message
+		var err error
+		if afterApproval != nil {
+			select {
+			case first := <-afterApproval:
+				m, err = first.message, first.err
+			case <-ctx.Done():
+				return
+			}
+			afterApproval = nil
+		} else {
+			m, err = c.ReadMessage()
+		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				log.Printf("client %s: %v", a.id, err)

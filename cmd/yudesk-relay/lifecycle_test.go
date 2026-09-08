@@ -268,7 +268,7 @@ func (f *lifecycleFixture) post(target, path string, values url.Values) string {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && !((path == "/exit" || path == "/api/exit") && resp.StatusCode == http.StatusNoContent) {
 		f.t.Fatalf("%s: %d %s", path, resp.StatusCode, body)
 	}
 	return string(body)

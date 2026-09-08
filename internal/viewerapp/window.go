@@ -31,7 +31,9 @@ type appWindow struct {
 	url, profile  string
 	candidates    []string // overridden only by native isolated-browser tests
 	headless      bool
+	browserPID    uint32
 	processDone   chan struct{}
+	stopBrowser   func() // releases only this private renderer process group
 	managed       atomic.Bool
 	onClose       func()
 	cancelMonitor func()
@@ -175,6 +177,11 @@ func (b *appWindow) Show() error {
 	if c, err := b.connection(); err == nil {
 		id, err := b.target(c)
 		if err == nil {
+			// Activating a minimized Chromium target alone does not restore it.
+			var state struct{ Bounds struct{ WindowState string } }
+			if windowCommand(c, "Browser.getWindowForTarget", map[string]any{"targetId": id}, &state) == nil && state.Bounds.WindowState == "minimized" {
+				_ = setAppWindowState(c, id, "normal")
+			}
 			err = windowCommand(c, "Target.activateTarget", map[string]any{"targetId": id}, nil)
 			c.Close()
 			if err != nil {
@@ -194,6 +201,10 @@ func (b *appWindow) Show() error {
 			case <-time.After(3 * time.Second):
 			}
 		}
+		if b.stopBrowser != nil {
+			b.stopBrowser()
+			b.stopBrowser = nil
+		}
 	}
 	var started bool
 	for _, candidate := range b.candidates {
@@ -210,7 +221,18 @@ func (b *appWindow) Show() error {
 		if cmd.Start() != nil {
 			continue
 		}
+		guard, err := newBrowserGuard(cmd)
+		if err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			continue
+		}
+		if b.stopBrowser != nil {
+			b.stopBrowser()
+		}
+		b.stopBrowser = guard
 		done := make(chan struct{})
+		b.browserPID = uint32(cmd.Process.Pid)
 		b.processDone = done
 		go func() { _ = cmd.Wait(); close(done) }() // only the child we started
 		started = true
@@ -230,6 +252,9 @@ func (b *appWindow) Show() error {
 					_ = windowCommand(c, "Browser.setWindowBounds", map[string]any{"windowId": result.WindowID, "bounds": map[string]any{"width": appWindowWidth, "height": appWindowHeight}}, nil)
 				}
 				c.Close()
+				if !b.headless {
+					b.removeNativeCaption()
+				}
 				return b.monitor(id)
 			}
 			c.Close()
@@ -239,12 +264,46 @@ func (b *appWindow) Show() error {
 	return errors.New("YuDesk 窗口启动超时，请重新双击打开")
 }
 
+func setAppWindowState(c *websocket.Conn, id, state string) error {
+	var result struct{ WindowID int }
+	if err := windowCommand(c, "Browser.getWindowForTarget", map[string]any{"targetId": id}, &result); err != nil {
+		return err
+	}
+	return windowCommand(c, "Browser.setWindowBounds", map[string]any{"windowId": result.WindowID, "bounds": map[string]any{"windowState": state}}, nil)
+}
+
+// Minimize retains the target and lifecycle watcher; unlike Hide, it does not
+// destroy the renderer or interrupt the active remote session.
+func (b *appWindow) Minimize() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.profile == "" {
+		return errors.New("当前页面不是 YuDesk 独立窗口")
+	}
+	c, err := b.connection()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	id, err := b.target(c)
+	if err != nil {
+		return err
+	}
+	return setAppWindowState(c, id, "minimized")
+}
+
 // Close the private renderer, not the Go app. Reopening recreates the same UI
 // using the existing app state. This really removes the window and taskbar item.
 func (b *appWindow) Hide() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.stopMonitor()
+	defer func() {
+		if b.stopBrowser != nil {
+			b.stopBrowser()
+			b.stopBrowser = nil
+		}
+	}()
 	if b.profile == "" {
 		return nil
 	} // no managed window in headless/CLI mode
@@ -262,6 +321,13 @@ func (b *appWindow) Hide() error {
 		case <-b.processDone:
 		case <-time.After(3 * time.Second):
 		}
+	}
+	// The OS-owned process group below also closes storage/crash helpers that
+	// outlive the browser's main process; it never includes the user's profile.
+	if b.stopBrowser != nil {
+		b.stopBrowser()
+		b.stopBrowser = nil
+		return nil
 	}
 	return err
 }

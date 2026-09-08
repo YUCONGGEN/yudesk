@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/yudesk/yudesk/internal/approval"
 	"github.com/yudesk/yudesk/internal/identity"
 	"github.com/yudesk/yudesk/internal/relay"
 	"github.com/yudesk/yudesk/internal/singleinstance"
@@ -32,21 +33,22 @@ type Device struct {
 }
 
 type DeviceStatus struct {
-	ID            string `json:"id"`
-	Code          string `json:"code"`
-	PIN           string `json:"pin"`
-	PINSynced     bool   `json:"pinSynced"`
-	PINRevision   uint64 `json:"pinRevision"`
-	Name          string `json:"name"`
-	Status        string `json:"status"`
-	Message       string `json:"message"`
-	Online        bool   `json:"online"`
-	Connected     bool   `json:"connected"`
-	Receiving     bool   `json:"receiving"`
-	Active        bool   `json:"active"`
-	ActiveUntil   string `json:"activeUntil"`
-	Files         bool   `json:"files"`
-	FileDirectory string `json:"fileDirectory"`
+	Pending       *approval.Pending `json:"pending,omitempty"`
+	ID            string            `json:"id"`
+	Code          string            `json:"code"`
+	PIN           string            `json:"pin"`
+	PINSynced     bool              `json:"pinSynced"`
+	PINRevision   uint64            `json:"pinRevision"`
+	Name          string            `json:"name"`
+	Status        string            `json:"status"`
+	Message       string            `json:"message"`
+	Online        bool              `json:"online"`
+	Connected     bool              `json:"connected"`
+	Receiving     bool              `json:"receiving"`
+	Active        bool              `json:"active"`
+	ActiveUntil   string            `json:"activeUntil"`
+	Files         bool              `json:"files"`
+	FileDirectory string            `json:"fileDirectory"`
 }
 
 func StartEmbedded(parent context.Context, o EmbeddedOptions) (*Device, error) {
@@ -94,7 +96,7 @@ func StartEmbedded(parent context.Context, o EmbeddedOptions) (*Device, error) {
 	if o.Relay == "" {
 		o.Relay = defaultRelayAddress
 	}
-	a := &agent{id: id.ID, pin: id.PIN, name: o.Name, privateKey: id.PrivateKey, allowControl: true, quit: make(chan struct{}), managed: true, relayStatus: "正在连接服务器"}
+	a := &agent{id: id.ID, pin: id.PIN, name: o.Name, privateKey: id.PrivateKey, allowControl: true, quit: make(chan struct{}), managed: true, relayStatus: "正在连接服务器", approvals: approval.New()}
 	if err := a.configureFilePermission(o.Directory); err != nil {
 		lock.Close()
 		return nil, err
@@ -190,6 +192,9 @@ func (d *Device) Status() DeviceStatus {
 	s.Receiving = d.receiving.Load()
 	s.Files = a.fileRoot() != ""
 	s.FileDirectory = a.shareDir
+	if a.approvals != nil {
+		s.Pending = a.approvals.Pending()
+	}
 	if !s.Receiving {
 		s.Status = "已暂停被远程连接"
 	}
@@ -198,6 +203,7 @@ func (d *Device) Status() DeviceStatus {
 func (d *Device) SetReceiving(enabled bool) {
 	d.receiving.Store(enabled)
 	if !enabled {
+		d.a.approvals.Cancel()
 		d.dialMu.Lock()
 		if d.dialCancel != nil {
 			d.dialCancel()
@@ -230,3 +236,8 @@ func (d *Device) RotatePIN() (string, error) {
 	return pin, err
 }
 func (d *Device) Activate(key string) error { _, err := d.a.activate(d.server, key); return err }
+
+func (d *Device) ApprovalEvents() <-chan struct{} { return d.a.approvals.Events() }
+func (d *Device) ResolveApproval(id string, accept bool) error {
+	return d.a.approvals.Resolve(id, accept)
+}

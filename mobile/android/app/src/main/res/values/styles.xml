@@ -1,0 +1,11 @@
+<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#1677FF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">#F4F7FB</item>
+        <item name="android:navigationBarColor">#F4F7FB</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+    <string name="accessibility_description">仅在你已授权屏幕共享、连接已通过 PIN 或本机确认，且对方选择控制时，接收远程点击、拖动和文本操作。可随时在 YuDesk 或系统设置停止。不会自动开启共享、读取密码或在开机时启动。</string>
+</resources>

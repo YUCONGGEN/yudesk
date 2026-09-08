@@ -41,9 +41,21 @@ var footerCSS []byte
 //go:embed ui/beian.svg
 var beianIcon []byte
 
+//go:embed ui/window-ui.js
+var windowUI []byte
+
+//go:embed ui/window-ui.css
+var windowStyle []byte
+
 func serveBrandAsset(w http.ResponseWriter, r *http.Request) bool {
 	var data []byte
 	switch r.URL.Path {
+	case "/assets/window-ui.css":
+		data = windowStyle
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	case "/assets/window-ui.js":
+		data = windowUI
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	case "/assets/footer.css":
 		data = footerCSS
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
@@ -65,7 +77,7 @@ func serveAppIcon(w http.ResponseWriter, r *http.Request) {
 }
 
 func registerViewerAssets(mux *http.ServeMux) {
-	for _, path := range []string{"/assets/footer.css", "/assets/beian.svg"} {
+	for _, path := range []string{"/assets/footer.css", "/assets/beian.svg", "/assets/window-ui.js", "/assets/window-ui.css"} {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) { serveBrandAsset(w, r) })
 	}
 	mux.HandleFunc("/assets/icon.svg", serveAppIcon)
