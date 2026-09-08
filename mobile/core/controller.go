@@ -31,6 +31,7 @@ type Session struct {
 	changed  chan struct{}
 	revision int64
 	control  bool
+	platform string
 	message  string
 	rtt      int64
 	closed   bool
@@ -135,11 +136,18 @@ func openSession(parent context.Context, conn net.Conn, pin string, control bool
 	allowed, _ := auth.Meta["control"].(bool)
 	s.mu.Lock()
 	s.control = control && allowed
+	s.platform, _ = auth.Meta["platform"].(string)
 	s.mu.Unlock()
-	if _, err = s.request("info", nil, 10*time.Second); err != nil {
+	info, err := s.request("info", nil, 10*time.Second)
+	if err != nil {
 		s.Close()
 		return nil, err
 	}
+	s.mu.Lock()
+	if s.platform == "" {
+		s.platform, _ = info.Meta["platform"].(string)
+	}
+	s.mu.Unlock()
 	options := stream.Options{ProfileVersion: 1, FPS: 30, Quality: 70, Mode: "adaptive", MaxWidth: 1280, MaxMbps: 8, SaveIdle: true, FrameAck: true, TileDelta: false}
 	if _, err = s.request("stream_start", options, 15*time.Second); err != nil {
 		s.Close()
@@ -173,7 +181,7 @@ func (s *Session) Close() { s.fail("远程连接已结束") }
 func (s *Session) StatusJSON() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b, _ := json.Marshal(map[string]any{"closed": s.closed, "message": s.message, "control": s.control, "rttMs": s.rtt, "ready": s.frame != nil})
+	b, _ := json.Marshal(map[string]any{"closed": s.closed, "message": s.message, "control": s.control, "platform": s.platform, "rttMs": s.rtt, "ready": s.frame != nil})
 	return string(b)
 }
 

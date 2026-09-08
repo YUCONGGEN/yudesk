@@ -174,6 +174,10 @@ func TestSyntheticTwoWaySession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	var status map[string]any
+	if err := json.Unmarshal([]byte(s.StatusJSON()), &status); err != nil || status["platform"] != "android" {
+		t.Fatalf("authenticated remote platform missing: %s (%v)", s.StatusJSON(), err)
+	}
 	if !e.WantsFrame() {
 		t.Fatal("stream not enabled")
 	}
@@ -211,6 +215,47 @@ func TestSyntheticTwoWaySession(t *testing.T) {
 		t.Fatal("capture after disable")
 	}
 }
+func TestRemotePlatformComesFromSessionMetadata(t *testing.T) {
+	for _, tc := range []struct{ auth, info, want string }{
+		{"windows", "", "windows"}, {"", "android", "android"}, {"darwin", "windows", "darwin"}, {"", "", ""},
+	} {
+		t.Run(tc.auth+"_"+tc.info, func(t *testing.T) {
+			a, b := net.Pipe()
+			defer a.Close()
+			defer b.Close()
+			go func() {
+				c := protocol.NewConn(a)
+				for {
+					m, err := c.ReadMessage()
+					if err != nil {
+						return
+					}
+					meta := map[string]any{}
+					if m.Method == "auth" {
+						meta["platform"] = tc.auth
+						meta["control"] = true
+					}
+					if m.Method == "info" {
+						meta["platform"] = tc.info
+					}
+					if err := c.WriteMessage(protocol.Response(m.ID, nil, meta)); err != nil {
+						return
+					}
+				}
+			}()
+			s, err := openSession(context.Background(), b, "123456", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var status map[string]any
+			if err := json.Unmarshal([]byte(s.StatusJSON()), &status); err != nil || status["platform"] != tc.want {
+				t.Fatalf("platform = %s, want %q (%v)", s.StatusJSON(), tc.want, err)
+			}
+		})
+	}
+}
+
 func TestFrameSafetyAndLatestOnly(t *testing.T) {
 	e := testEngine(t)
 	data := jpegData(t, 64, 48)
