@@ -30,6 +30,7 @@ import (
 	"github.com/yudesk/yudesk/internal/desktop"
 	"github.com/yudesk/yudesk/internal/filetransfer"
 	"github.com/yudesk/yudesk/internal/identity"
+	"github.com/yudesk/yudesk/internal/peerpath"
 	"github.com/yudesk/yudesk/internal/protocol"
 	"github.com/yudesk/yudesk/internal/relay"
 	"github.com/yudesk/yudesk/internal/secureconn"
@@ -52,6 +53,7 @@ type agent struct {
 	allowBrowserUI          bool
 	openNoticeBrowser       func(string) error   // tests inject this to prove headless runs never launch a browser
 	inputFactory            func() *inputSession // injectable native input boundary for deterministic tests
+	peerOptions             *peerpath.Options    // nil uses production defaults; tests use isolated ICE endpoints
 	id, pin, name, shareDir string
 	deviceCode              string // protected by statusMu
 	reportedPIN             string // last PIN acknowledged by the management server; protected by statusMu
@@ -887,6 +889,8 @@ func (a *agent) handle(raw net.Conn) {
 	c := protocol.NewConn(secured)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	stopConnection := context.AfterFunc(ctx, func() { _ = raw.Close() })
+	defer stopConnection()
 	go func() {
 		select {
 		case <-a.quit:
@@ -917,6 +921,8 @@ func (a *agent) handle(raw net.Conn) {
 		Mode          string `json:"mode"`
 		Audio         bool   `json:"audio"`
 		AudioOnDemand bool   `json:"audioOnDemand"`
+		InterleaveV1  bool   `json:"interleaveV1"`
+		P2PV1         bool   `json:"p2pV1"`
 	}
 	if json.Unmarshal(first.Params, &auth) != nil {
 		_ = c.WriteMessage(protocol.Failure(first.ID, "invalid authentication request"))
@@ -944,8 +950,8 @@ func (a *agent) handle(raw net.Conn) {
 		_ = secured.SetReadDeadline(time.Now().Add(75 * time.Second))
 		afterApproval = make(chan firstReadResult, 1)
 		ready := make(chan struct{})
-		go func() {
-			m, err := c.ReadMessage()
+		go func(approvalConn *protocol.Conn, result chan<- firstReadResult) {
+			m, err := approvalConn.ReadMessage()
 			if err != nil {
 				cancel()
 			} else {
@@ -955,8 +961,8 @@ func (a *agent) handle(raw net.Conn) {
 					cancel()
 				}
 			}
-			afterApproval <- firstReadResult{m, err}
-		}()
+			result <- firstReadResult{m, err}
+		}(c, afterApproval)
 		if err := a.approvals.Request(ctx, auth.Mode); err != nil {
 			_ = c.WriteMessage(protocol.Failure(first.ID, err.Error()))
 			return
@@ -972,28 +978,73 @@ func (a *agent) handle(raw net.Conn) {
 	sessionControl := a.allowControl && !strings.EqualFold(strings.TrimSpace(auth.Mode), "view")
 	audioAvailable, audioReason := systemaudio.Available()
 	audioEnabled := (auth.Audio || auth.AudioOnDemand) && audioAvailable
-	if err := c.WriteMessage(protocol.Response(first.ID, nil, map[string]any{"id": a.id, "platform": runtime.GOOS, "control": sessionControl, "audio": audioEnabled, "audioOnDemand": true, "audioReason": audioReason, "tileDeltaV1": true, "inputEventsV1": true, "fileTransferV2": true})); err != nil {
+	if auth.InterleaveV1 {
+		c.EnableInterleaving()
+	}
+	if err := c.WriteMessage(protocol.Response(first.ID, nil, map[string]any{"id": a.id, "platform": runtime.GOOS, "control": sessionControl, "audio": audioEnabled, "audioOnDemand": true, "audioReason": audioReason, "tileDeltaV1": true, "inputEventsV1": true, "fileTransferV2": true, "interleaveV1": auth.InterleaveV1, "p2pV1": auth.P2PV1})); err != nil {
 		return
 	}
+	if auth.P2PV1 {
+		// The approval watcher already owns the first post-auth read. Consume
+		// it before using the original reader; never race two protocol readers.
+		base, queued := c, afterApproval
+		afterApproval = nil
+		read := func() (protocol.Message, error) {
+			if queued != nil {
+				select {
+				case result := <-queued:
+					queued = nil
+					return result.message, result.err
+				case <-ctx.Done():
+					return protocol.Message{}, ctx.Err()
+				}
+			}
+			return base.ReadMessage()
+		}
+		options := peerpath.DefaultOptions()
+		if a.peerOptions != nil {
+			options = *a.peerOptions
+		}
+		next, route, err := peerpath.Negotiate(ctx, base, "agent", read, options)
+		if err != nil {
+			log.Printf("peer transport negotiation failed: %v", err)
+			return
+		}
+		c = next
+		if auth.InterleaveV1 {
+			c.EnableInterleaving()
+		}
+		log.Printf("session transport: %s (%s)", route.Mode, route.Reason)
+	}
+	defer c.Close()
 	// A congested downstream frame must not stall the upstream input reader
 	// merely because a ping is waiting for the writer mutex.
 	responses := make(chan protocol.Message, 32)
-	go func() {
+	bulkResponses := make(chan protocol.Message, 4)
+	sendResponses := func(queue <-chan protocol.Message) {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case response := <-responses:
-				if c.WriteMessage(response) != nil {
+			case response := <-queue:
+				if c.WriteMessageContext(ctx, response) != nil {
 					_ = raw.Close()
 					return
 				}
 			}
 		}
-	}()
+	}
+	go sendResponses(responses)
+	go sendResponses(bulkResponses)
 	reply := func(response protocol.Message) bool {
+		queue := responses
+		// A file response must not occupy the sole response worker while an
+		// input confirmation or ping is waiting to preempt its next fragment.
+		if len(response.Data) > 8<<10 {
+			queue = bulkResponses
+		}
 		select {
-		case responses <- response:
+		case queue <- response:
 			return true
 		default:
 			_ = raw.Close()
@@ -1050,6 +1101,7 @@ func (a *agent) handle(raw net.Conn) {
 						return
 					}
 				}
+				c.SetBulkRate(options.MaxMbps * 1_000_000 / 8)
 				streamCtx, streamCancel := context.WithCancel(ctx)
 				stopStream = streamCancel
 				if !reply(protocol.Response(m.ID, nil, map[string]any{"fps": options.FPS, "quality": options.Quality})) {

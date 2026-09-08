@@ -24,24 +24,26 @@ func (c *measuredConn) Write(p []byte) (int, error) {
 }
 
 type networkSnapshot struct {
-	RTTMs          float64 `json:"rttMs"`
-	ProbeOK        bool    `json:"probeOK"`
-	ReceiveMbps    float64 `json:"receiveMbps"`
-	SendMbps       float64 `json:"sendMbps"`
-	ReceivedBytes  uint64  `json:"receivedBytes"`
-	SentBytes      uint64  `json:"sentBytes"`
-	FPS            float64 `json:"fps"`
-	FrameAgeMs     int64   `json:"frameAgeMs"`
-	Width, Height  int
-	Quality        int     `json:"quality"`
-	Error          string  `json:"error,omitempty"`
-	DesktopWaiting bool    `json:"desktopWaiting"`
-	DesktopMessage string  `json:"desktopMessage,omitempty"`
-	InputError     string  `json:"inputError,omitempty"`
-	Codec          string  `json:"codec"`
-	CaptureMs      float64 `json:"captureMs"`
-	ChangedTiles   int     `json:"changedTiles"`
-	QueueMs        float64 `json:"queueMs"`
+	Transport       string  `json:"transport"`
+	TransportReason string  `json:"transportReason,omitempty"`
+	RTTMs           float64 `json:"rttMs"`
+	ProbeOK         bool    `json:"probeOK"`
+	ReceiveMbps     float64 `json:"receiveMbps"`
+	SendMbps        float64 `json:"sendMbps"`
+	ReceivedBytes   uint64  `json:"receivedBytes"`
+	SentBytes       uint64  `json:"sentBytes"`
+	FPS             float64 `json:"fps"`
+	FrameAgeMs      int64   `json:"frameAgeMs"`
+	Width, Height   int
+	Quality         int     `json:"quality"`
+	Error           string  `json:"error,omitempty"`
+	DesktopWaiting  bool    `json:"desktopWaiting"`
+	DesktopMessage  string  `json:"desktopMessage,omitempty"`
+	InputError      string  `json:"inputError,omitempty"`
+	Codec           string  `json:"codec"`
+	CaptureMs       float64 `json:"captureMs"`
+	ChangedTiles    int     `json:"changedTiles"`
+	QueueMs         float64 `json:"queueMs"`
 }
 
 type networkStats struct {

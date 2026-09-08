@@ -30,6 +30,8 @@ const (
 
 var ErrAuthentication = errors.New("end-to-end authentication failed")
 
+var errSequenceExhausted = errors.New("encrypted record sequence exhausted")
+
 type clientHello struct {
 	Version   int    `json:"version"`
 	Ephemeral []byte `json:"ephemeral"`
@@ -216,10 +218,11 @@ func writeHandshake(w io.Writer, value any) error {
 	}
 	var header [4]byte
 	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
-	if err := writeFull(w, header[:]); err != nil {
+	if _, err := writeFull(w, header[:]); err != nil {
 		return err
 	}
-	return writeFull(w, payload)
+	_, err = writeFull(w, payload)
+	return err
 }
 
 func readHandshake(r io.Reader, value any) error {
@@ -245,7 +248,19 @@ type Conn struct {
 	readSeq   uint64
 	writeSeq  uint64
 	readBuf   bytes.Reader
+	readMu    sync.Mutex
 	writeMu   sync.Mutex
+
+	// Buffers belong to this connection and are protected by the corresponding
+	// direction's mutex, including during underlying I/O. Never pool plaintext.
+	// NewGCM uses 12-byte nonces; the trailing eight bytes are also the v1 AAD.
+	readNonce   [12]byte
+	writeNonce  [12]byte
+	readHeader  [4]byte
+	readPacket  []byte
+	writePacket []byte
+	readErr     error
+	writeErr    error
 }
 
 func newConn(raw net.Conn, readKey, writeKey []byte) (*Conn, error) {
@@ -269,29 +284,57 @@ func newConn(raw net.Conn, readKey, writeKey []byte) (*Conn, error) {
 }
 
 func (c *Conn) Read(p []byte) (int, error) {
-	if c.readBuf.Len() > 0 {
-		return c.readBuf.Read(p)
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	if len(p) == 0 {
+		return 0, nil
 	}
-	var header [4]byte
-	if _, err := io.ReadFull(c.Conn, header[:]); err != nil {
-		return 0, err
+	for c.readBuf.Len() == 0 {
+		if c.readErr != nil {
+			return 0, c.readErr
+		}
+		if n, err := io.ReadFull(c.Conn, c.readHeader[:]); err != nil {
+			// A failure before consuming any header bytes leaves framing intact,
+			// so callers can still reset a deadline and retry that read.
+			if n > 0 {
+				c.readErr = err
+			}
+			return 0, err
+		}
+		size := binary.BigEndian.Uint32(c.readHeader[:])
+		if size < uint32(c.readAEAD.Overhead()) || size > maxRecord+uint32(c.readAEAD.Overhead()) {
+			c.readErr = errors.New("invalid encrypted record size")
+			return 0, c.readErr
+		}
+		if cap(c.readPacket) < int(size) {
+			c.readPacket = make([]byte, size)
+		}
+		c.readPacket = c.readPacket[:size]
+		if _, err := io.ReadFull(c.Conn, c.readPacket); err != nil {
+			clear(c.readPacket)
+			c.readErr = err
+			return 0, err
+		}
+		nonce, aad := recordNonce(c.readSeq, c.readNonce[:])
+		plaintext, err := c.readAEAD.Open(c.readPacket[:0], nonce, c.readPacket, aad)
+		if err != nil {
+			clear(c.readPacket)
+			c.readErr = errors.New("encrypted record authentication failed")
+			return 0, c.readErr
+		}
+		if c.readSeq == ^uint64(0) {
+			c.readErr = errSequenceExhausted
+		} else {
+			c.readSeq++
+		}
+		c.readBuf.Reset(plaintext)
 	}
-	size := binary.BigEndian.Uint32(header[:])
-	if size < uint32(c.readAEAD.Overhead()) || size > maxRecord+uint32(c.readAEAD.Overhead()) {
-		return 0, errors.New("invalid encrypted record size")
+	n, err := c.readBuf.Read(p)
+	if c.readBuf.Len() == 0 {
+		clear(c.readPacket)
+		c.readBuf.Reset(nil)
 	}
-	ciphertext := make([]byte, size)
-	if _, err := io.ReadFull(c.Conn, ciphertext); err != nil {
-		return 0, err
-	}
-	nonce, aad := recordNonce(c.readSeq, c.readAEAD.NonceSize())
-	plaintext, err := c.readAEAD.Open(nil, nonce, ciphertext, aad)
-	if err != nil {
-		return 0, errors.New("encrypted record authentication failed")
-	}
-	c.readSeq++
-	c.readBuf.Reset(plaintext)
-	return c.readBuf.Read(p)
+	return n, err
 }
 
 func (c *Conn) Write(p []byte) (int, error) {
@@ -299,42 +342,63 @@ func (c *Conn) Write(p []byte) (int, error) {
 	defer c.writeMu.Unlock()
 	written := 0
 	for len(p) > 0 {
+		if c.writeErr != nil {
+			return written, c.writeErr
+		}
 		size := len(p)
 		if size > maxRecord {
 			size = maxRecord
 		}
-		nonce, aad := recordNonce(c.writeSeq, c.writeAEAD.NonceSize())
-		packet := make([]byte, 4, 4+size+c.writeAEAD.Overhead())
-		binary.BigEndian.PutUint32(packet, uint32(size+c.writeAEAD.Overhead()))
-		packet = c.writeAEAD.Seal(packet, nonce, p[:size], aad)
-		if err := writeFull(c.Conn, packet); err != nil {
+		nonce, aad := recordNonce(c.writeSeq, c.writeNonce[:])
+		packetSize := 4 + size + c.writeAEAD.Overhead()
+		if cap(c.writePacket) < packetSize {
+			c.writePacket = make([]byte, packetSize)
+		}
+		binary.BigEndian.PutUint32(c.writePacket[:4], uint32(size+c.writeAEAD.Overhead()))
+		c.writePacket = c.writeAEAD.Seal(c.writePacket[:4], nonce, p[:size], aad)
+		n, err := writeFull(c.Conn, c.writePacket)
+		if n == len(c.writePacket) {
+			// Even a full write may return an error. Count its plaintext, but
+			// never report plaintext from an incomplete authenticated record.
+			written += size
+			if c.writeSeq == ^uint64(0) {
+				c.writeErr = errSequenceExhausted
+			} else {
+				c.writeSeq++
+			}
+		}
+		if err != nil {
+			// A partially sent record cannot be restarted on this stream, and
+			// sealing another payload at the same sequence would reuse a nonce.
+			c.writeErr = err
 			return written, err
 		}
-		c.writeSeq++
-		written += size
 		p = p[size:]
 	}
 	return written, nil
 }
 
-func recordNonce(sequence uint64, nonceSize int) ([]byte, []byte) {
-	nonce := make([]byte, nonceSize)
-	aad := make([]byte, 8)
-	binary.BigEndian.PutUint64(nonce[nonceSize-8:], sequence)
+func recordNonce(sequence uint64, nonce []byte) ([]byte, []byte) {
+	aad := nonce[len(nonce)-8:]
 	binary.BigEndian.PutUint64(aad, sequence)
 	return nonce, aad
 }
 
-func writeFull(w io.Writer, payload []byte) error {
+func writeFull(w io.Writer, payload []byte) (int, error) {
+	written := 0
 	for len(payload) > 0 {
 		n, err := w.Write(payload)
+		if n < 0 || n > len(payload) {
+			return written, io.ErrShortWrite
+		}
+		written += n
 		if err != nil {
-			return err
+			return written, err
 		}
 		if n == 0 {
-			return io.ErrShortWrite
+			return written, io.ErrShortWrite
 		}
 		payload = payload[n:]
 	}
-	return nil
+	return written, nil
 }

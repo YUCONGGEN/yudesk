@@ -6,16 +6,22 @@ on:
       - 'mobile/**'
       - 'internal/approval/**'
       - 'internal/identity/**'
+      - 'internal/peerpath/**'
       - 'internal/protocol/**'
       - 'internal/relay/**'
       - 'internal/secureconn/**'
       - 'internal/stream/**'
       - 'go.mod'
       - 'go.sum'
+      - 'third_party/anet/**'
       - '.github/workflows/android.yml'
   pull_request:
     paths:
       - 'mobile/**'
+      - 'internal/peerpath/**'
+      - 'third_party/anet/**'
+      - 'go.mod'
+      - 'go.sum'
       - '.github/workflows/android.yml'
 permissions:
   contents: read

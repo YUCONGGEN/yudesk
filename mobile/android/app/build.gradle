@@ -1,5 +1,17 @@
 plugins { id 'com.android.application' }
 
+def thirdPartyAssets = layout.buildDirectory.dir('generated/third-party-assets')
+tasks.register('copyThirdPartyNotices', Copy) {
+    from(rootProject.file('../../third_party/anet')) {
+        include 'LICENSE', 'LICENSE-GO', 'README.yudesk.md'
+        into 'licenses/anet'
+    }
+    from(rootProject.file('../../third_party/THIRD_PARTY_NOTICES.txt')) {
+        into 'licenses'
+    }
+    into thirdPartyAssets
+}
+
 android {
     namespace 'cn.yucg.yudesk'
     compileSdk 35
@@ -8,8 +20,8 @@ android {
         applicationId 'cn.yucg.yudesk.preview'
         minSdk 26
         targetSdk 35
-        versionCode 2000002
-        versionName '2.0.0-preview.2'
+        versionCode 2000003
+        versionName '2.0.0-preview.3'
         testInstrumentationRunner 'android.test.InstrumentationTestRunner'
     }
     compileOptions {
@@ -22,7 +34,9 @@ android {
     }
     lint { abortOnError true; checkReleaseBuilds true }
     packaging { jniLibs { useLegacyPackaging = false } }
+    sourceSets.main.assets.srcDir thirdPartyAssets
 }
+tasks.named('preBuild') { dependsOn 'copyThirdPartyNotices' }
 dependencies {
     implementation files('libs/yudesk-core.aar')
     testImplementation 'junit:junit:4.13.2'

@@ -26,8 +26,9 @@ func homepageTestDownloads(t *testing.T) string {
 		}
 	}
 	for name, content := range map[string]string{
-		"release.json":   `{"version":"2.0.0","publishedAt":"2026-09-08T00:00:00Z"}`,
-		"SHA256SUMS.txt": "test checksum fixture\n",
+		"release.json":            `{"version":"2.0.0","publishedAt":"2026-09-08T00:00:00Z"}`,
+		"SHA256SUMS.txt":          "test checksum fixture\n",
+		"THIRD_PARTY_NOTICES.txt": "third-party license fixture\n",
 	} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
 			t.Fatal(err)
@@ -48,6 +49,7 @@ func TestHomepageContentAndDownloads(t *testing.T) {
 		"v2.0.0", "2026-09-08 08:00", "（北京时间）", "Android 预览版",
 		`id="downloads"`, `id="about-title"`, `id="features"`, `id="how-it-works"`, `id="support"`,
 		`href="/guide"`, `href="/admin"`, `href="/SHA256SUMS.txt"`, "桌面 SHA-256 校验和",
+		`href="/THIRD_PARTY_NOTICES.txt"`, "第三方许可",
 		"真实客户端界面，设备信息为演示数据", "非实测截图", "尚未实现系统声音采集",
 		"Android 文件传输暂不支持，系统声音采集尚未实现", "真实锁屏场景尚未主动测试", "管理员可查看设备上报的 PIN", "不受 HTTPS 保护",
 		"低延迟高响应", `class="icp-link"`, homepageAssetURL("beian.svg"),

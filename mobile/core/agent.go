@@ -10,6 +10,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/yudesk/yudesk/internal/peerpath"
 	"github.com/yudesk/yudesk/internal/protocol"
 	"github.com/yudesk/yudesk/internal/relay"
 	"github.com/yudesk/yudesk/internal/secureconn"
@@ -120,8 +121,10 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 		return
 	}
 	var auth struct {
-		PIN  string `json:"pin"`
-		Mode string `json:"mode"`
+		PIN          string `json:"pin"`
+		Mode         string `json:"mode"`
+		InterleaveV1 bool   `json:"interleaveV1"`
+		P2PV1        bool   `json:"p2pV1"`
 	}
 	if first.Kind != "request" || first.Method != "auth" || json.Unmarshal(first.Params, &auth) != nil || (auth.Mode != "control" && auth.Mode != "view") {
 		_ = write(ctx, c, protocol.Failure(first.ID, "无效认证请求"))
@@ -180,9 +183,42 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 		}
 		e.mu.Unlock()
 	}()
-	if write(ctx, c, protocol.Response(first.ID, nil, map[string]any{"id": e.identity.ID, "platform": "android", "control": control, "audio": false, "audioOnDemand": true, "audioReason": "Android 预览版暂不支持系统声音", "tileDeltaV1": false, "inputEventsV1": true, "fileTransferV2": false})) != nil {
+	if auth.InterleaveV1 {
+		c.EnableInterleaving()
+	}
+	if write(ctx, c, protocol.Response(first.ID, nil, map[string]any{"id": e.identity.ID, "platform": "android", "control": control, "audio": false, "audioOnDemand": true, "audioReason": "Android 预览版暂不支持系统声音", "tileDeltaV1": false, "inputEventsV1": true, "fileTransferV2": false, "interleaveV1": auth.InterleaveV1, "p2pV1": auth.P2PV1})) != nil {
 		return
 	}
+	if auth.P2PV1 {
+		base, messages := c, incoming
+		read := func() (protocol.Message, error) {
+			select {
+			case r, ok := <-messages:
+				if !ok {
+					return protocol.Message{}, net.ErrClosed
+				}
+				return r.message, r.err
+			case <-ctx.Done():
+				return protocol.Message{}, ctx.Err()
+			}
+		}
+		options := peerpath.DefaultOptions()
+		if e.peerOptions != nil {
+			options = *e.peerOptions
+		}
+		next, _, err := peerpath.Negotiate(ctx, base, "agent", read, options)
+		if err != nil {
+			return
+		}
+		c = next
+		if auth.InterleaveV1 {
+			c.EnableInterleaving()
+		}
+		if next != base {
+			incoming = readMessages(ctx, next)
+		}
+	}
+	defer c.Close()
 	responses := make(chan protocol.Message, 16)
 	go func() {
 		for {
@@ -302,6 +338,7 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 			opts.FPS = min(opts.FPS, 30)
 			opts.TileDelta = false
 			finishStream()
+			c.SetBulkRate(opts.MaxMbps * 1_000_000 / 8)
 			streamCtx, sc := context.WithCancel(ctx)
 			stopStream = sc
 			streamDone = make(chan struct{})
@@ -314,7 +351,7 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 			}
 			go func(done chan struct{}, options stream.Options, generation string) {
 				defer close(done)
-				e.sendFrames(streamCtx, c, acks, options, generation)
+				e.sendFrames(streamCtx, ctx, c, acks, options, generation)
 			}(streamDone, opts, m.ID)
 		case "stream_stop":
 			finishStream()
@@ -329,7 +366,7 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 	}
 }
 
-func (e *Engine) sendFrames(ctx context.Context, c *protocol.Conn, acks <-chan string, options stream.Options, generation string) {
+func (e *Engine) sendFrames(ctx, writeCtx context.Context, c *protocol.Conn, acks <-chan string, options stream.Options, generation string) {
 	var last int64
 	pending := map[string]bool{}
 	next := time.Now()
@@ -375,7 +412,10 @@ func (e *Engine) sendFrames(ctx context.Context, c *protocol.Conn, acks <-chan s
 		}
 		id := fmt.Sprintf("%s:%d", generation, f.Revision)
 		started := time.Now()
-		if write(ctx, c, protocol.Message{Kind: "event", Method: "frame", ID: id, Data: f.Data, Meta: map[string]any{"width": f.Width, "height": f.Height, "sourceWidth": f.Width, "sourceHeight": f.Height, "frameAck": options.FrameAck, "targetFPS": options.FPS, "quality": 75}}) != nil {
+		// Stream settings may change while a paced frame is in flight. Finish
+		// that bounded write using the session context, rather than leaving a
+		// partial encrypted message and breaking the still-authorized session.
+		if write(writeCtx, c, protocol.Message{Kind: "event", Method: "frame", ID: id, Data: f.Data, Meta: map[string]any{"width": f.Width, "height": f.Height, "sourceWidth": f.Width, "sourceHeight": f.Height, "frameAck": options.FrameAck, "targetFPS": options.FPS, "quality": 75}}) != nil {
 			return
 		}
 		last = f.Revision

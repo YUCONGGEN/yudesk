@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/yudesk/yudesk/internal/peerpath"
 	"github.com/yudesk/yudesk/internal/protocol"
 	"github.com/yudesk/yudesk/internal/relay"
 	"github.com/yudesk/yudesk/internal/secureconn"
@@ -19,22 +20,24 @@ import (
 )
 
 type Session struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	conn     *protocol.Conn
-	mu       sync.Mutex
-	pending  map[string]chan readResult
-	sequence atomic.Uint64
-	out      chan protocol.Message
-	frame    *Frame
-	acks     map[int64]string
-	changed  chan struct{}
-	revision int64
-	control  bool
-	platform string
-	message  string
-	rtt      int64
-	closed   bool
+	ctx             context.Context
+	cancel          context.CancelFunc
+	conn            *protocol.Conn
+	mu              sync.Mutex
+	pending         map[string]chan readResult
+	sequence        atomic.Uint64
+	out             chan protocol.Message
+	frame           *Frame
+	acks            map[int64]string
+	changed         chan struct{}
+	revision        int64
+	control         bool
+	platform        string
+	message         string
+	rtt             int64
+	transport       string
+	transportReason string
+	closed          bool
 }
 
 // Connect blocks only its caller's worker thread. Empty PIN waits for the
@@ -94,7 +97,11 @@ func (e *Engine) Connect(deviceCode, pin string, control bool) (*Session, error)
 		return nil, err
 	}
 	_ = raw.SetDeadline(time.Time{})
-	s, err := openSession(ctx, secured, pin, control)
+	options := peerpath.DefaultOptions()
+	if e.peerOptions != nil {
+		options = *e.peerOptions
+	}
+	s, err := openSessionWithOptions(ctx, secured, pin, control, options)
 	if err != nil {
 		return nil, err
 	}
@@ -119,20 +126,25 @@ func (e *Engine) CancelConnect() {
 }
 
 func openSession(parent context.Context, conn net.Conn, pin string, control bool) (*Session, error) {
+	return openSessionWithOptions(parent, conn, pin, control, peerpath.DefaultOptions())
+}
+
+func openSessionWithOptions(parent context.Context, conn net.Conn, pin string, control bool, pathOptions peerpath.Options) (*Session, error) {
 	ctx, cancel := context.WithCancel(parent)
-	s := &Session{ctx: ctx, cancel: cancel, conn: protocol.NewConn(conn), pending: map[string]chan readResult{}, out: make(chan protocol.Message, 64), acks: map[int64]string{}, changed: make(chan struct{}), message: "正在连接…"}
-	go s.writer()
-	go s.reader()
-	go func() { <-ctx.Done(); _ = conn.Close() }()
 	mode := "view"
 	if control {
 		mode = "control"
 	}
-	auth, err := s.request("auth", map[string]any{"pin": pin, "mode": mode, "audio": false, "audioOnDemand": true}, 75*time.Second)
+	pc, auth, route, err := peerpath.Authenticate(ctx, conn, map[string]any{"pin": pin, "mode": mode, "audio": false, "audioOnDemand": true, "interleaveV1": true}, pathOptions)
 	if err != nil {
-		s.Close()
+		cancel()
+		_ = conn.Close()
 		return nil, err
 	}
+	s := &Session{ctx: ctx, cancel: cancel, conn: pc, pending: map[string]chan readResult{}, out: make(chan protocol.Message, 64), acks: map[int64]string{}, changed: make(chan struct{}), message: "正在连接…", transport: route.Mode, transportReason: route.Reason}
+	go s.writer()
+	go s.reader()
+	go func() { <-ctx.Done(); _ = pc.Close() }()
 	allowed, _ := auth.Meta["control"].(bool)
 	s.mu.Lock()
 	s.control = control && allowed
@@ -181,7 +193,7 @@ func (s *Session) Close() { s.fail("远程连接已结束") }
 func (s *Session) StatusJSON() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b, _ := json.Marshal(map[string]any{"closed": s.closed, "message": s.message, "control": s.control, "platform": s.platform, "rttMs": s.rtt, "ready": s.frame != nil})
+	b, _ := json.Marshal(map[string]any{"closed": s.closed, "message": s.message, "control": s.control, "platform": s.platform, "rttMs": s.rtt, "ready": s.frame != nil, "transport": s.transport, "transportReason": s.transportReason})
 	return string(b)
 }
 

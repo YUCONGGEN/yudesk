@@ -10,8 +10,11 @@ STAGE="$(mktemp -d /tmp/yudesk-android-final.XXXXXX)"
 printf 'Local verification workspace: %s\n' "$STAGE"
 mkdir -p "$STAGE/internal" "$STAGE/mobile/android/app/libs" "$STAGE/mobile/build"
 cp "$ROOT/go.mod" "$ROOT/go.sum" "$STAGE/"
+# Both modules replace anet relative to their own go.mod. Keep this layout in
+# native storage; gomobile resolves Replace.Dir to an absolute path in gobind.
+cp -a "$ROOT/third_party" "$STAGE/"
 # gomobile's temporary module tidy also follows dependency test imports.
-for package in approval identity relay protocol secureconn security stream; do
+for package in approval identity relay protocol secureconn security stream peerpath; do
   cp -a "$ROOT/internal/$package" "$STAGE/internal/"
 done
 cp -a "$ROOT/mobile/core" "$STAGE/mobile/"
@@ -36,13 +39,18 @@ APK=android/app/build/outputs/apk/debug/app-debug.apk
 "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee build/apksigner.txt
 "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$APK" > build/zipalign.txt
 tail -n 2 build/zipalign.txt
-mkdir -p "$ROOT/mobile/build/verification"
-cp -a android/app/build/reports "$ROOT/mobile/build/verification/"
-cp build/apksigner.txt build/zipalign.txt "$ROOT/mobile/build/verification/"
-cp android/app/libs/yudesk-core.aar "$ROOT/mobile/android/app/libs/yudesk-core.aar.next"
-mv "$ROOT/mobile/android/app/libs/yudesk-core.aar.next" "$ROOT/mobile/android/app/libs/yudesk-core.aar"
-cp "$APK" "$ROOT/mobile/build/YuDesk-2.0.0-android-preview.apk.next"
-mv "$ROOT/mobile/build/YuDesk-2.0.0-android-preview.apk.next" "$ROOT/mobile/build/YuDesk-2.0.0-android-preview.apk"
-cd "$ROOT/mobile/build"
+OUTPUT="${YUDESK_VERIFY_OUTPUT:-$ROOT/mobile/build}"
+mkdir -p "$OUTPUT/verification"
+cp -a android/app/build/reports "$OUTPUT/verification/"
+cp build/apksigner.txt build/zipalign.txt "$OUTPUT/verification/"
+if [ -z "${YUDESK_VERIFY_OUTPUT:-}" ]; then
+  cp android/app/libs/yudesk-core.aar "$ROOT/mobile/android/app/libs/yudesk-core.aar.next"
+  mv "$ROOT/mobile/android/app/libs/yudesk-core.aar.next" "$ROOT/mobile/android/app/libs/yudesk-core.aar"
+else
+  cp android/app/libs/yudesk-core.aar "$OUTPUT/yudesk-core.aar"
+fi
+cp "$APK" "$OUTPUT/YuDesk-2.0.0-android-preview.apk.next"
+mv "$OUTPUT/YuDesk-2.0.0-android-preview.apk.next" "$OUTPUT/YuDesk-2.0.0-android-preview.apk"
+cd "$OUTPUT"
 sha256sum YuDesk-2.0.0-android-preview.apk | tee SHA256SUMS.txt
-printf 'Verified artifact: %s/mobile/build/YuDesk-2.0.0-android-preview.apk\n' "$ROOT"
+printf 'Verified artifact: %s/YuDesk-2.0.0-android-preview.apk\n' "$OUTPUT"

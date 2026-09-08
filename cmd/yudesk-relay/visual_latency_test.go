@@ -137,9 +137,9 @@ func TestNativeVisualLatency(t *testing.T) {
 				t.Fatalf("visual latency measurement: %v %s", err, output)
 			}
 			t.Logf("synthetic desktop, added RTT %dms: %s", 2*delay.Milliseconds(), output)
-			// The headless browser closes its watch on exit; explicit local exit
-			// is safe during the grace interval and makes fixture cleanup prompt.
-			f.post(base, "/api/exit", nil)
+			// Closing the only browser watch is itself the user-requested exit
+			// action. Assert it actually exits instead of racing an extra POST
+			// against an already closed HTTP listener (which falsely failed QA).
 			v.exited(t)
 			select {
 			case <-done:

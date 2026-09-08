@@ -78,12 +78,15 @@ async function stats(){
     $('desktopNotice').hidden=!waiting&&screen.dataset.ready==='1';
     $('desktopMessage').textContent=waiting?(v.desktopMessage||'桌面暂不可用，连接已保留，正在等待恢复。'):'连接已建立，正在等待第一帧画面…';
     const cadence=v.probeOK&&v.fps===0&&$('saveIdle').checked?'静止省流':v.fps.toFixed(1)+' FPS';
-    $('stats').textContent='RTT '+rtt;
+    const route=v.transport==='p2p'?'P2P 直连':v.transport==='direct-tcp'?'TCP 直连':v.transport==='relay'?'中转':'连接';
+    const routeReason={udp_direct:'画面与操作经 UDP 直连；服务器仅保留授权心跳',direct_tcp:'已连接手动指定的 TCP 地址，未经过中转',peer_unsupported:'对方版本不支持直连，使用兼容中转',disabled:'当前连接未启用打洞',rtc_unavailable:'直连初始化不可用，已回退中转',udp_unavailable:'没有可用的 UDP 地址，已回退中转',peer_unavailable:'对方无法建立直连，已回退中转',ice_timeout:'打洞超时，已回退中转',ice_failed:'打洞未成功，已回退中转'}[v.transportReason]||'';
+    $('stats').textContent=route+' · '+rtt;
     $('stats').dataset.quality=!v.probeOK?'unknown':v.rttMs<80?'good':v.rttMs<180?'fair':'poor';
     $('stats').title=cadence+' · ↓ '+v.receiveMbps.toFixed(2)+' Mbps · 点击查看网络详情';
     $('networkDetail').textContent='往返延迟：'+rtt+'\n实测帧率：'+v.fps.toFixed(1)+' FPS / 目标 '+$('fps').value+'\n下行：'+v.receiveMbps.toFixed(2)+' Mbps　上行：'+v.sendMbps.toFixed(2)+' Mbps\n接收：'+amount(v.receivedBytes)+'　发送：'+amount(v.sentBytes)+'\n画面：'+v.Width+' × '+v.Height+'　当前画质：'+v.quality;
     $('networkDetail').textContent+='\n编码：'+(v.codec==='tiles-v1'?'变化区域 PNG/JPEG':'整屏 JPEG')+'\n采集＋编码：'+(v.captureMs||0).toFixed(1)+' ms　更新区域：'+(v.changedTiles||0);
     $('networkDetail').textContent+='\nACK 延迟增长估计：'+(v.queueMs||0).toFixed(1)+' ms';
+    $('networkDetail').textContent+='\n连接方式：'+route+(routeReason?'\n线路说明：'+routeReason:'');
     $('inputError').textContent=v.inputError||'';
     $('status').textContent=waiting?'桌面受限 · 连接保持中':v.inputError?'输入受限 · 画面保持连接':(canControl?'已连接 · 控制模式':'已连接 · 仅观看');
     if(v.error)showError(v.error);

@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/yudesk/yudesk/internal/peerpath"
 	"github.com/yudesk/yudesk/internal/protocol"
 	"github.com/yudesk/yudesk/internal/relay"
 	"github.com/yudesk/yudesk/internal/secureconn"
@@ -58,7 +59,11 @@ type client struct {
 }
 
 func newClient(conn net.Conn) *client {
-	c := &client{conn: protocol.NewConn(conn), pending: map[string]chan responseResult{}, closed: make(chan struct{}), frames: newFrameHub(), tiles: newTileHub(), audio: newAudioHub(), acks: make(chan string, 32)}
+	return newClientProtocol(protocol.NewConn(conn))
+}
+
+func newClientProtocol(conn *protocol.Conn) *client {
+	c := &client{conn: conn, pending: map[string]chan responseResult{}, closed: make(chan struct{}), frames: newFrameHub(), tiles: newTileHub(), audio: newAudioHub(), acks: make(chan string, 32)}
 	go func() {
 		for {
 			select {
@@ -487,22 +492,30 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 	defer raw.Close()
 	stopCancel := context.AfterFunc(sessionCtx, func() { _ = raw.Close() })
 	defer stopCancel()
-	wire := &measuredConn{Conn: raw}
-	secured, err := secureconn.Connect(wire, config.deviceID)
+	secured, err := secureconn.Connect(raw, config.deviceID)
 	if err != nil {
 		return viewerSessionOutcome{}, fmt.Errorf("end-to-end authentication failed: %w", err)
 	}
-	c := newClient(secured)
 	mode := "view"
 	if config.control {
 		mode = "control"
 	}
-	authCtx, authCancel := context.WithTimeout(sessionCtx, 75*time.Second)
-	defer authCancel()
-	authResponse, err := c.requestContext(authCtx, "auth", map[string]any{"pin": config.pin, "mode": mode, "audio": config.audio, "audioOnDemand": true}, nil)
+	var wire *measuredConn
+	pathOptions := peerpath.DefaultOptions()
+	pathOptions.Wrap = func(conn net.Conn) net.Conn { wire = &measuredConn{Conn: conn}; return wire }
+	pc, authResponse, route, err := peerpath.Authenticate(sessionCtx, secured, map[string]any{"pin": config.pin, "mode": mode, "audio": config.audio, "audioOnDemand": true, "interleaveV1": true, "p2pV1": config.relayAddr != ""}, pathOptions)
 	if err != nil {
 		return viewerSessionOutcome{}, fmt.Errorf("authentication failed: %w", err)
 	}
+	if config.relayAddr == "" {
+		route.Mode, route.Reason = "direct-tcp", "direct_tcp"
+	}
+	defer pc.Close()
+	c := newClientProtocol(pc)
+	c.stats.mu.Lock()
+	c.stats.value.Transport, c.stats.value.TransportReason = route.Mode, route.Reason
+	c.stats.mu.Unlock()
+	log.Printf("session transport: %s (%s)", route.Mode, route.Reason)
 	sessionControl := config.control
 	if value, ok := authResponse.Meta["control"].(bool); ok {
 		sessionControl = value
@@ -538,6 +551,7 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 	if _, err := c.request("stream_start", options, nil); err != nil {
 		return viewerSessionOutcome{}, fmt.Errorf("start stream: %w", err)
 	}
+	c.conn.SetBulkRate(options.MaxMbps * 1_000_000 / 8)
 	mux := http.NewServeMux()
 	var transitioning atomic.Bool
 	mux.HandleFunc("/api/ui/version", func(w http.ResponseWriter, _ *http.Request) {
@@ -590,6 +604,7 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 				http.Error(w, err.Error(), 502)
 				return
 			}
+			c.conn.SetBulkRate(p.MaxMbps * 1_000_000 / 8)
 			if err := saveStreamOptions(viewerDirectory, p); err != nil {
 				http.Error(w, err.Error(), 500)
 				return

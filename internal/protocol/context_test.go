@@ -14,13 +14,15 @@ func TestQueuedWriteCancellationKeepsConnection(t *testing.T) {
 	defer b.Close()
 	writer, reader := NewConn(a), NewConn(b)
 	// Occupy only the writer gate, exactly as another frame/file write does.
-	writer.write <- struct{}{}
+	if err := writer.write.acquire(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if err := writer.WriteMessageContext(ctx, Message{Kind: "event", Method: "input"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)
 	}
-	<-writer.write
+	writer.write.release()
 	done := make(chan error, 1)
 	go func() { done <- writer.WriteMessage(Message{Kind: "request", ID: "healthy", Method: "ping"}) }()
 	_ = b.SetReadDeadline(time.Now().Add(time.Second))

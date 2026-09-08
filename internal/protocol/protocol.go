@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync/atomic"
+	"time"
 )
 
 const (
@@ -31,39 +33,65 @@ type Message struct {
 
 type Conn struct {
 	net.Conn
-	reader *bufio.Reader
-	write  chan struct{}
+	reader          *bufio.Reader
+	write           priorityGate
+	bulk            chan struct{}
+	interleave      atomic.Bool
+	acceptFragments atomic.Bool
+	bulkRate        atomic.Int64
+	bulkNext        time.Time       // protected by bulk gate
+	packetBuf       []byte          // protected by write gate, never shared between connections
+	partial         *partialMessage // owned by the single ReadMessage caller
 }
 
 func NewConn(c net.Conn) *Conn {
-	return &Conn{Conn: c, reader: bufio.NewReaderSize(c, 64<<10), write: make(chan struct{}, 1)}
+	return &Conn{Conn: c, reader: bufio.NewReaderSize(c, 64<<10), bulk: make(chan struct{}, 1)}
 }
 
 func (c *Conn) ReadMessage() (Message, error) {
+	for {
+		message, complete, err := c.readPacket()
+		if err != nil {
+			c.partial = nil
+			return Message{}, err
+		}
+		if complete {
+			return message, nil
+		}
+	}
+}
+
+func (c *Conn) readPacket() (Message, bool, error) {
 	var message Message
 	var sizes [8]byte
 	if _, err := io.ReadFull(c.reader, sizes[:]); err != nil {
-		return message, err
+		return message, false, err
 	}
 	headerSize := binary.BigEndian.Uint32(sizes[:4])
 	dataSize := binary.BigEndian.Uint32(sizes[4:])
+	if headerSize&fragmentFlag != 0 {
+		if !c.acceptFragments.Load() {
+			return message, false, errors.New("unnegotiated interleaved message")
+		}
+		return c.readFragment(headerSize&^fragmentFlag, dataSize)
+	}
 	if headerSize == 0 || headerSize > MaxHeaderSize || dataSize > MaxDataSize {
-		return message, fmt.Errorf("invalid message sizes %d/%d", headerSize, dataSize)
+		return message, false, fmt.Errorf("invalid message sizes %d/%d", headerSize, dataSize)
 	}
 	header := make([]byte, headerSize)
 	if _, err := io.ReadFull(c.reader, header); err != nil {
-		return message, err
+		return message, false, err
 	}
 	if err := json.Unmarshal(header, &message); err != nil {
-		return message, fmt.Errorf("decode message: %w", err)
+		return message, false, fmt.Errorf("decode message: %w", err)
 	}
 	if dataSize > 0 {
 		message.Data = make([]byte, dataSize)
 		if _, err := io.ReadFull(c.reader, message.Data); err != nil {
-			return message, err
+			return message, false, err
 		}
 	}
-	return message, nil
+	return message, true, nil
 }
 
 func (c *Conn) WriteMessage(message Message) error {
@@ -86,6 +114,20 @@ func (c *Conn) WriteMessageContext(ctx context.Context, message Message) error {
 	if len(data) > MaxDataSize {
 		return errors.New("message data is too large")
 	}
+	if c.interleave.Load() && len(data) > fragmentSize {
+		return c.writeFragments(ctx, header, data)
+	}
+	return c.writePacket(ctx, header, data, false, len(data)+len(header) <= fragmentSize)
+}
+
+func (c *Conn) writePacket(ctx context.Context, header, data []byte, fragment, priority bool) error {
+	if err := c.write.acquire(ctx, priority); err != nil {
+		return err
+	}
+	defer c.write.release()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Keep common input/dirty-tile messages in one transport write. Each write
 	// becomes its own encrypted record, so splitting prefix/header/data wastes
 	// encryption work and socket calls. Large payloads are not copied again.
@@ -94,21 +136,24 @@ func (c *Conn) WriteMessageContext(ctx context.Context, message Message) error {
 	if small {
 		capacity += len(data)
 	}
-	packet := make([]byte, 8+len(header), capacity)
-	binary.BigEndian.PutUint32(packet[:4], uint32(len(header)))
+	var packet []byte
+	if capacity <= 64<<10 {
+		if cap(c.packetBuf) < capacity {
+			c.packetBuf = make([]byte, capacity)
+		}
+		packet = c.packetBuf[:8+len(header)]
+	} else {
+		packet = make([]byte, 8+len(header), capacity)
+	}
+	headerSize := uint32(len(header))
+	if fragment {
+		headerSize |= fragmentFlag
+	}
+	binary.BigEndian.PutUint32(packet[:4], headerSize)
 	binary.BigEndian.PutUint32(packet[4:8], uint32(len(data)))
 	copy(packet[8:], header)
 	if small {
 		packet = append(packet, data...)
-	}
-	select {
-	case c.write <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	defer func() { <-c.write }()
-	if err := ctx.Err(); err != nil {
-		return err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = c.Conn.Close() })
 	defer stop()

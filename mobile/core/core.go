@@ -14,6 +14,7 @@ import (
 
 	"github.com/yudesk/yudesk/internal/approval"
 	"github.com/yudesk/yudesk/internal/identity"
+	"github.com/yudesk/yudesk/internal/peerpath"
 	"github.com/yudesk/yudesk/internal/relay"
 )
 
@@ -62,6 +63,7 @@ type Engine struct {
 	streaming       bool
 	failures        []time.Time
 	changed         chan struct{}
+	peerOptions     *peerpath.Options // test-only isolated ICE endpoints; nil uses defaults
 }
 
 // NewEngine must receive Android's private files directory, never shared storage.

@@ -1,6 +1,32 @@
 # 当前部署状态（2026-09-08）
 
-**当前桌面版本：`2.0.0`（本轮未替换）；Android：`2.0.0-preview.2`，仅预览。**
+## 当前：P2P 网络更新 `p2p-20260908.1`
+
+**桌面 2.0.0 与 Android 2.0.0-preview.3 已部署。** 官网标注发布日期为 **2026-09-08 22:07（北京时间）**；服务端 PID `48511`。Windows x64、Linux x64、macOS Intel/Apple Silicon 与 Android 下载均已替换。
+
+- 认证及 PIN/审批通过后优先 ICE/STUN UDP 直连，初始打洞失败自动中转；显示当前线路与真实应用 RTT。直连中途丢失安全结束，重新连接后重新选路；不是无缝迁移。
+- 新增公网 UDP 8233，三次真实 STUN 请求与校验指纹通过；原 TCP 8233 及 HTTP 8235 不变，TCP TLS 1.3 固定证书验证通过。UPnP 仅添加这一个 UDP 映射，路由器重启后可能需要重建。
+- 后台断开、禁用、删除及授权到期仍能终止直连。部署前在线/连接中为 3/1，服务切换会中断会话；随后后台为 2/0。未创建测试设备或修改许可。数据库 `quick_check` 为 ok，备份及发布后账号/设备/授权码均为 **0/11/9**，配置文件校验一致。
+- 使用发布索引导出的独立源码构建，没有混入工作区未完成的 Windows 原生窗口实验；沿用原窗口实现。Linux 全量 race/vet、Windows P2P 套件、实际 macOS STUN 套件、20 项 Node 回归通过。macOS 测试修正了回环别名与 UDP 最大发送量的系统差异，未修改服务器网卡配置。
+- Android 版本代码 2000003，签名与旧包一致；四 ABI JNI/APK、Go 核心三轮 race、19 项 Java 测试、lint（无问题）、签名与 16KB ZIP/ELF 对齐通过。仍无手机真机验收，不宣称所有安卓兼容或零延迟；Android 声音、文件与剪贴板功能边界见 [Android 说明](ANDROID.md)。
+- 旧程序、下载包、配置及一致性数据库备份：`/Users/yu/bin/yudesk/backups/p2p-20260908.1`。本次发布文件：`releases/p2p-20260908.1`。未覆盖旧 GitHub Release 附件；本次 GitHub 更新是私有仓库 main 的源码提交，安装包以官网为准。
+- 完整第三方许可覆盖桌面及 mobile 两套模块图，共 78 个模块版本、124 份许可正文，随 APK 与官网资料发布；许可页面为 `/THIRD_PARTY_NOTICES.txt`。
+- 公网完整下载全部五个平台文件、桌面校验清单和许可文档，SHA-256 全部与发布包一致；首页版本/北京时间日期、健康检查与未登录管理页 401 校验通过。
+
+本次校验值：
+
+| 产物 | SHA-256 |
+| --- | --- |
+| Windows x64 | `288712c50721278c0ebcb6d653ae7f5edd28fe0ae761742b9b2fc4443590a625` |
+| Linux x64 | `84fd7f991abd9ccead7b3b073293ba10d4197d2ed3837477d93702f9b3562ced` |
+| macOS Intel | `816d5554459886c1cc70d8b12f43f12b1ddcb0826f5355f9e4e1ada0da38e6e7` |
+| macOS Apple Silicon | `56294f63163735649226db13e6f3875be5af7e7ef1a954aade234e06db96d714` |
+| Android preview.3 | `cc40e6dd7a08a3b642122d143621ef405aa61192d5c1a955a7cc9b943f895f8d` |
+| macOS 服务端 | `ffc9db54e68b84456815d63d5ea5ab157555e9359efd24ccd4bd724c628f7e54` |
+
+## 历史：Android preview.2（以下不是当前版本）
+
+**当时桌面版本：`2.0.0`（未替换）；Android：`2.0.0-preview.2`，仅预览。**
 
 2026-09-08 **11:57（北京时间）仅更新 Android APK**。公网完整下载为 25,522,471 字节，SHA-256 与本地签名包一致。桌面下载及其 09:39 发布日期保持不变，中转未重启（PID `48296`），设备、许可、配置及数据库未修改。Android 本轮发布与备份目录分别为 `releases/android-v2.0.0-preview.2`、`backups/android-v2.0.0-preview.2`。
 

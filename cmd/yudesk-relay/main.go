@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/yudesk/yudesk/internal/account"
+	"github.com/yudesk/yudesk/internal/natstun"
 	"github.com/yudesk/yudesk/internal/relay"
 	"github.com/yudesk/yudesk/internal/releaseinfo"
 	"github.com/yudesk/yudesk/internal/security"
@@ -70,6 +72,7 @@ type adminFlash struct {
 
 func main() {
 	listen := flag.String("listen", ":9347", "relay listen address")
+	stunListen := flag.String("stun", "auto", "UDP STUN binding address; auto uses the relay address, empty disables")
 	token := flag.String("token", "", "optional legacy relay token; empty requires account session auth")
 	tlsFlag := flag.Bool("tls", true, "enable TLS for relay connections")
 	httpTLS := flag.Bool("http-tls", false, "serve the homepage and account API over TLS using -cert and -key")
@@ -120,6 +123,19 @@ func main() {
 		log.Fatal(err)
 	}
 	defer ln.Close()
+	if *stunListen == "auto" {
+		*stunListen = ln.Addr().String()
+	}
+	if *stunListen != "" {
+		stunCtx, cancelSTUN := context.WithCancel(context.Background())
+		defer cancelSTUN()
+		go func() {
+			if err := natstun.ListenAndServe(stunCtx, *stunListen); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("STUN unavailable; TCP relay remains enabled: %v", err)
+			}
+		}()
+		log.Printf("P2P STUN discovery configured on %s/udp (no media relay)", *stunListen)
+	}
 	store, err := account.Open(*accountsFile)
 	if err != nil {
 		log.Fatal(err)
@@ -1538,6 +1554,9 @@ func registerDownloadRoutes(mux *http.ServeMux, downloadDir string, guide func(*
 	mux.HandleFunc("/SHA256SUMS.txt", func(w http.ResponseWriter, r *http.Request) {
 		serveNamedDownloadFile(w, r, downloadDir, "SHA256SUMS.txt", "text/plain; charset=utf-8")
 	})
+	mux.HandleFunc("/THIRD_PARTY_NOTICES.txt", func(w http.ResponseWriter, r *http.Request) {
+		serveNamedDownloadFile(w, r, downloadDir, "THIRD_PARTY_NOTICES.txt", "text/plain; charset=utf-8")
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]any{"ok": true}) })
 }
 
@@ -1737,7 +1756,7 @@ func serveDownloadHome(w http.ResponseWriter, root string) {
 	if release, err := releaseinfo.Read(root); err == nil {
 		version, date = release.Version, release.Date()+"（北京时间）"
 	}
-	_ = downloadPage.Execute(w, map[string]any{"Platforms": downloadPlatforms(root), "Checksums": regularFile(filepath.Join(root, "SHA256SUMS.txt")), "Version": version, "PublishedAt": date})
+	_ = downloadPage.Execute(w, map[string]any{"Platforms": downloadPlatforms(root), "Checksums": regularFile(filepath.Join(root, "SHA256SUMS.txt")), "Notices": regularFile(filepath.Join(root, "THIRD_PARTY_NOTICES.txt")), "Version": version, "PublishedAt": date})
 }
 
 type guideConfig struct {
