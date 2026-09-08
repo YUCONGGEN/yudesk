@@ -27,21 +27,30 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.27.1'
           cache-dependency-path: |
             go.sum
             mobile/go.sum
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
       - name: Verify SDK and provision explicit versions
         shell: bash
         run: |
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.3.13750724'
+          : "${ANDROID_HOME:?The runner must provide an Android SDK}"
+          sdk_manager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$sdk_manager" ]; then
+            sdk_manager="$(command -v sdkmanager || true)"
+          fi
+          if [ -z "$sdk_manager" ] || [ ! -x "$sdk_manager" ]; then
+            echo 'Android SDK command-line tools are missing from this runner' >&2
+            exit 1
+          fi
+          "$sdk_manager" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.3.13750724'
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
       - name: Go tests, JNI binding, Java tests, lint, APK
         run: bash mobile/scripts/build-android.sh
