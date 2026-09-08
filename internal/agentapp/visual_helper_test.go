@@ -13,6 +13,7 @@ import (
 
 	"github.com/yudesk/yudesk/internal/desktop"
 	"github.com/yudesk/yudesk/internal/identity"
+	"github.com/yudesk/yudesk/internal/peerpath"
 	"github.com/yudesk/yudesk/internal/relay"
 )
 
@@ -28,6 +29,9 @@ func TestVisualLatencyAgentHelper(t *testing.T) {
 	}
 	var marker atomic.Uint32
 	a := &agent{id: id.ID, pin: id.PIN, name: "visual-latency-fixture", privateKey: id.PrivateKey, allowControl: true, quit: make(chan struct{})}
+	// This benchmark injects delay in the relay. Local ICE shortcuts would
+	// bypass it and incorrectly label LAN timings as a 100 ms WAN result.
+	a.peerOptions = &peerpath.Options{STUNURLs: []string{}, Timeout: time.Nanosecond}
 	a.inputFactory = func() *inputSession {
 		s := newInputSession()
 		s.apply = func(events []desktop.InputEvent) error {

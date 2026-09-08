@@ -1,6 +1,6 @@
 package cn.yucg.yudesk;
 
-/** UI-independent mouse state machine. Button edges are never throttled. */
+/** UI-independent mouse state machine. Button edges and drag points are never throttled. */
 final class PointerController {
     static final class Event {
         final String type;
@@ -25,6 +25,7 @@ final class PointerController {
     boolean relative(){return relative;}
     boolean dragging(){return drag;}
     boolean active(){return active;}
+    boolean holdingButton(){return buttonDown;}
     int x(){return Math.round(x);}
     int y(){return Math.round(y);}
     void mode(boolean value){cancel();relative=value;}
@@ -39,17 +40,22 @@ final class PointerController {
         if(!relative||drag){buttonDown=true;sink.send(event("move",0),event("down",1));}
     }
     void move(float px,float py,long time)throws Exception{
+        move(px,py,time,false);
+    }
+    private void move(float px,float py,long time,boolean finishing)throws Exception{
         if(!active)return;
         if(relative){
-            if(!moved&&Math.hypot(px-originX,py-originY)<=slop)return;
+            if(!buttonDown&&!moved&&Math.hypot(px-originX,py-originY)<=slop)return;
             moved=true;x+=(px-lastX)*map.sourceWidth/Math.max(1,map.width);y+=(py-lastY)*map.sourceHeight/Math.max(1,map.height);clamp();
         }else{x=map.x(px);y=map.y(py);}
         lastX=px;lastY=py;
-        if(time-lastMove>=16){lastMove=time;sink.send(event("move",0));}
+        // Hover keeps the existing 16 ms throttle. A held button makes each
+        // sample part of a path; up sends its final point with the button edge.
+        if((buttonDown&&!finishing)||(!buttonDown&&time-lastMove>=16)){lastMove=time;sink.send(event("move",0));}
     }
     void up(float px,float py,long time)throws Exception{
         if(!active)return;
-        move(px,py,time);active=false;
+        move(px,py,time,true);active=false;
         if(buttonDown){buttonDown=false;sink.send(event("move",0),event("up",1));}
         else if(!moved&&time-downTime<=600){click(1);}
         else if(moved){sink.send(event("move",0));}

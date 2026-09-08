@@ -54,7 +54,8 @@
   for(const region of document.querySelectorAll('[data-window-drag]')){
     region.addEventListener('pointerdown',event=>{
       if(event.button!==0||event.target.closest('button,a,input,label,select,form'))return;
-      // Only Windows uses the custom caption; other OSes keep their native one.
+      // Windows drags its owned host through this API. macOS/Linux packaged
+      // WebViews install their own trusted-pointer native drag bridge.
       if(!/Win/.test(navigator.platform))return;
       event.preventDefault();
       command('/api/ui/drag').catch(()=>{});

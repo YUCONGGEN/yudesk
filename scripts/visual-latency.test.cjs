@@ -41,7 +41,9 @@ const {chromium}=require('playwright');
     });
     const samples=measurement.values;
     const sorted=samples.slice(5).sort((a,b)=>a-b),percentile=p=>+sorted[Math.ceil(sorted.length*p)-1].toFixed(1);
-    const link=await page.evaluate(async()=>{const v=await(await fetch('/api/stats?access_token='+encodeURIComponent(document.body.dataset.token))).json();return {probeOK:v.probeOK,measuredRTTMs:+v.rttMs.toFixed(1)}});
+    const link=await page.evaluate(async()=>{const v=await(await fetch('/api/stats?access_token='+encodeURIComponent(document.body.dataset.token))).json();return {transport:v.transport,probeOK:v.probeOK,measuredRTTMs:+v.rttMs.toFixed(1)}});
+    assert.equal(link.transport,'relay','propagation-delay benchmark must not bypass the test relay through local P2P');
+    assert.ok(link.probeOK&&link.measuredRTTMs>=Number(process.env.YUDESK_VISUAL_MIN_RTT_MS||0),'injected RTT must be present in the measured path');
     console.log(JSON.stringify({metric:'input-event-to-matching-canvas-pixels',syntheticDesktop:true,samples:sorted.length,p50Ms:percentile(.5),p95Ms:percentile(.95),maxMs:percentile(1),idleWakeMs:+samples[30].toFixed(1),...link}));
     if(process.env.YUDESK_VISUAL_TRACE==='1')console.log(JSON.stringify({slowSamples:measurement.slow}));
   }finally{await browser.close();}

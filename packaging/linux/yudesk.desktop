@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=YuDesk
+GenericName=Remote Desktop
+Comment=Connect with permission using YuDesk
+Exec=/usr/lib/yudesk/yudesk
+TryExec=/usr/lib/yudesk/yudesk
+Icon=yudesk
+Terminal=false
+Categories=Network;RemoteAccess;
+StartupNotify=false

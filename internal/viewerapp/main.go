@@ -51,6 +51,7 @@ type client struct {
 	pending   map[string]chan responseResult
 	closed    chan struct{}
 	closeOnce sync.Once
+	closeErr  error // published by closing closed; read only after <-closed
 	frames    *frameHub
 	tiles     *tileHub
 	audio     *audioHub
@@ -86,6 +87,7 @@ func (c *client) readLoop() {
 	for {
 		message, err := c.conn.ReadMessage()
 		if err != nil {
+			c.closeErr = err
 			return
 		}
 		if message.Kind == "event" {
@@ -94,7 +96,8 @@ func (c *client) readLoop() {
 				c.stats.frame(message.Meta)
 				var frame stream.TileFrame
 				if message.Method == "tiles" {
-					if json.Unmarshal(message.Params, &frame) != nil {
+					if err := json.Unmarshal(message.Params, &frame); err != nil {
+						c.closeErr = err
 						_ = c.conn.Close()
 						return
 					}
@@ -105,6 +108,7 @@ func (c *client) readLoop() {
 					frame = stream.TileFrame{Width: int(w), Height: int(h), Reset: true, Tiles: []stream.Tile{{Width: int(w), Height: int(h), Size: len(message.Data), MIME: "image/jpeg"}}}
 				}
 				if err := c.tiles.publish(frame, message.Data, message.Method == "frame"); err != nil {
+					c.closeErr = err
 					_ = c.conn.Close()
 					return
 				}
@@ -304,6 +308,7 @@ type viewerConnectRequest struct {
 type viewerSessionOutcome struct {
 	webAddr          string
 	returnToLauncher bool
+	message          string
 }
 
 func Main()        { main(false) }
@@ -345,7 +350,7 @@ func main(unified bool) {
 	}
 }
 
-func runViewer(config viewerConfig) error {
+func runViewer(config viewerConfig) (resultErr error) {
 	viewerDirectory, accessToken, err := loadViewerState(config.stateDir)
 	if err != nil {
 		return err
@@ -379,6 +384,15 @@ func runViewer(config viewerConfig) error {
 		}
 	}
 	defer instanceLock.Close()
+	journal, journalErr := openLifecycleJournal(viewerDirectory)
+	if journalErr != nil {
+		log.Print("YuDesk 退出诊断日志暂不可写；程序仍继续运行")
+	}
+	journal.record("app_started", nil)
+	defer func() {
+		journal.record("app_stopped", resultErr)
+		journal.Close()
+	}()
 
 	useLauncher := config.pin == "" || config.deviceID == ""
 	launcherAddr := config.web
@@ -400,7 +414,7 @@ func runViewer(config viewerConfig) error {
 		}
 	}
 	if config.once == "" {
-		config.ui, err = newViewerHost(config.web, accessToken)
+		config.ui, err = newViewerHost(config.web, accessToken, journal)
 		if err != nil {
 			return err
 		}
@@ -439,6 +453,7 @@ func runViewer(config viewerConfig) error {
 
 		outcome, err := runViewerSession(config, viewerDirectory, accessToken)
 		if err != nil {
+			journal.record("session_connect_failed", err)
 			if !useLauncher {
 				return err
 			}
@@ -453,6 +468,7 @@ func runViewer(config viewerConfig) error {
 		}
 
 		useLauncher = true
+		launcherMessage = outcome.message
 		launcherAddr = outcome.webAddr
 		config.web = outcome.webAddr
 		config.deviceID = ""
@@ -676,9 +692,14 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 	sessionDone := make(chan struct{})
 	var sessionOnce sync.Once
 	var returnToLauncher atomic.Bool
-	finishSession := func(shouldReturn bool) {
+	var sessionMessage string // published by closing sessionDone
+	finishSession := func(shouldReturn bool, message string) {
 		sessionOnce.Do(func() {
+			if parent.Err() != nil {
+				shouldReturn, message = false, ""
+			}
 			returnToLauncher.Store(shouldReturn)
+			sessionMessage = message
 			close(sessionDone)
 		})
 	}
@@ -691,7 +712,7 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 		case <-sessionDone:
 			return
 		}
-		finishSession(false)
+		finishSession(false, "")
 	}()
 	mux.HandleFunc("/api/disconnect", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -702,7 +723,10 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 		serveViewerTransitionPage(w, "正在结束远程控制", "即将返回控制端连接界面。", accessToken, "launcher")
 		go func() {
 			time.Sleep(200 * time.Millisecond)
-			finishSession(true)
+			if config.ui != nil {
+				config.ui.journal.record("session_ended", nil)
+			}
+			finishSession(true, "")
 		}()
 	})
 	mux.HandleFunc("/api/exit", func(w http.ResponseWriter, r *http.Request) {
@@ -713,7 +737,7 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 		serveViewerExitPage(w, "YuDesk 控制端已退出")
 		go func() {
 			time.Sleep(200 * time.Millisecond)
-			finishSession(false)
+			finishSession(false, "")
 		}()
 	})
 	listener, err := listenViewerPage(config.web, config.ui)
@@ -740,7 +764,12 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 	go func() {
 		select {
 		case <-c.closed:
-			finishSession(false)
+			if config.ui != nil {
+				config.ui.journal.record("session_disconnected", c.closeErr)
+			}
+			// A failed remote stream ends this session, not the local application.
+			// Parent cancellation / explicit Exit remain process-level decisions.
+			finishSession(true, "远程连接已断开，请检查对方设备或网络后重新连接。")
 		case <-sessionDone:
 		}
 		_ = raw.Close()
@@ -752,7 +781,7 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 		return viewerSessionOutcome{}, err
 	}
 	<-sessionDone
-	return viewerSessionOutcome{webAddr: listener.Addr().String(), returnToLauncher: returnToLauncher.Load()}, nil
+	return viewerSessionOutcome{webAddr: listener.Addr().String(), returnToLauncher: returnToLauncher.Load(), message: sessionMessage}, nil
 }
 
 func runViewerLauncher(addr string, openUI bool, stateDir, token string) (viewerConnectRequest, bool, error) {

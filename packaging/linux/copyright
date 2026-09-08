@@ -1,0 +1,16 @@
+YuDesk desktop packaging
+Project: YuDesk
+Source: http://www.yucg.cn:8235/
+
+The complete collected Go dependency license texts and notices are installed
+beside this file as THIRD_PARTY_NOTICES.txt, preserving their original contents.
+Any first-party LICENSE, COPYING, or NOTICE documents supplied by the repository
+are copied beside this file. This packaging metadata does not grant a new license
+to the first-party program.
+
+GTK 3 and WebKitGTK 4.1 are dynamically linked system dependencies, not bundled
+copies. Their Debian/Ubuntu packages supply their respective copyright and
+license documents under /usr/share/doc. Additional release-specific notices,
+if supplied to the packager, are retained in the additional/ directory.
+
+The blue Yu icon is generated from the project's existing icon.svg artwork.

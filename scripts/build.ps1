@@ -6,6 +6,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($Target -ne 'windows') {
+    Write-Warning 'Unix outputs are core binaries, not standalone GUI apps. Build the native helper and run scripts/package-unix.sh before publishing the .pkg/.deb installers.'
+}
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $components = @('yudesk')
 $obsoleteComponents = @('yudesk-account', 'yudesk-admin', 'yudesk-relay', 'yudesk-update')

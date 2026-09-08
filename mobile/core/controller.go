@@ -26,7 +26,7 @@ type Session struct {
 	mu              sync.Mutex
 	pending         map[string]chan readResult
 	sequence        atomic.Uint64
-	out             chan protocol.Message
+	out             *latestMoveQueue[protocol.Message]
 	frame           *Frame
 	acks            map[int64]string
 	changed         chan struct{}
@@ -141,7 +141,7 @@ func openSessionWithOptions(parent context.Context, conn net.Conn, pin string, c
 		_ = conn.Close()
 		return nil, err
 	}
-	s := &Session{ctx: ctx, cancel: cancel, conn: pc, pending: map[string]chan readResult{}, out: make(chan protocol.Message, 64), acks: map[int64]string{}, changed: make(chan struct{}), message: "正在连接…", transport: route.Mode, transportReason: route.Reason}
+	s := &Session{ctx: ctx, cancel: cancel, conn: pc, pending: map[string]chan readResult{}, out: newLatestMoveQueue[protocol.Message](), acks: map[int64]string{}, changed: make(chan struct{}), message: "正在连接…", transport: route.Mode, transportReason: route.Reason}
 	go s.writer()
 	go s.reader()
 	go func() { <-ctx.Done(); _ = pc.Close() }()
@@ -203,24 +203,25 @@ func (s *Session) enqueue(m protocol.Message) error {
 		return errors.New("连接已结束")
 	default:
 	}
-	select {
-	case s.out <- m:
-		return nil
-	default:
-		s.fail("发送队列已满，已安全断开，请重新连接")
-		return errors.New("发送队列已满")
+	var input []byte
+	if m.Kind == "event" && m.Method == "input" {
+		input = m.Params
 	}
+	if s.out.offer(m, input, m.Method == "input_release") {
+		return nil
+	}
+	s.fail("发送队列已满，已安全断开，请重新连接")
+	return errors.New("发送队列已满")
 }
 func (s *Session) writer() {
 	for {
-		select {
-		case <-s.ctx.Done():
+		m, ok := s.out.next(s.ctx)
+		if !ok {
 			return
-		case m := <-s.out:
-			if err := write(s.ctx, s.conn, m); err != nil {
-				s.fail("网络写入失败：" + err.Error())
-				return
-			}
+		}
+		if err := write(s.ctx, s.conn, m); err != nil {
+			s.fail("网络写入失败：" + err.Error())
+			return
 		}
 	}
 }

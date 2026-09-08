@@ -17,8 +17,6 @@ import cn.yucg.bridge.core.Frame;
 import cn.yucg.bridge.core.Session;
 import org.json.JSONArray;
 import org.json.JSONObject;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 // Created only with a live authenticated Session; never inflated from XML.
@@ -55,12 +53,12 @@ final class RemoteView extends View {
     void start(){if(decoder!=null||stopped)return;decoder=new Thread(()->{
         long revision=0;
         while(!stopped){try{Frame f=session.nextFrame(revision,500);if(f==null)continue;revision=f.getRevision();byte[] bytes=f.getData();Bitmap decoded=BitmapFactory.decodeByteArray(bytes,0,bytes.length);if(decoded==null)throw new Exception("无法解码远程画面");
-            CountDownLatch drawn=new CountDownLatch(1);
-            if(!post(()->{try{if(stopped){frames.discardUnpublished(decoded);return;}if(!frames.publish(decoded))return;mapping=new ScreenMapping(getWidth(),getHeight(),decoded.getWidth(),decoded.getHeight());pointer.geometry(mapping);ready=true;invalidate();}finally{drawn.countDown();}})){frames.discardUnpublished(decoded);break;}
-            // No chain of queued native images when the UI cannot consume them.
-            while(!stopped&&!drawn.await(500,TimeUnit.MILLISECONDS)){}
+            // At most one pending bitmap and one UI callback. A stalled UI
+            // receives the newest completed decode when it resumes.
+            if(frames.offer(decoded)&&!post(this::publishFrame)){frames.close();break;}
         }catch(Exception ex){if(!stopped)post(()->notice(ex.getMessage()));break;}}
     },"YuDesk-render");decoder.start();}
+    private void publishFrame(){if(stopped||!frames.publishPending())return;Bitmap bitmap=frames.current();mapping=new ScreenMapping(getWidth(),getHeight(),bitmap.getWidth(),bitmap.getHeight());pointer.geometry(mapping);ready=true;invalidate();}
     void stop(){if(stopped)return;cancelInput();stopped=true;ready=false;if(decoder!=null)decoder.interrupt();frames.close();invalidate();}
     void setReady(boolean value){if(!value&&ready)cancelInput();if(ready!=value){ready=value;invalidate();}}
     void setControl(boolean value){if(control&&!value)cancelInput();control=value;invalidate();}
@@ -79,14 +77,17 @@ final class RemoteView extends View {
     @Override protected void onDetachedFromWindow(){stop();super.onDetachedFromWindow();}
     void send(JSONArray events)throws Exception{if(!control)throw new Exception("当前为仅观看模式，对方未授权操作");if(mapping==null||!ready||stopped)throw new Exception("画面尚未就绪");session.sendInputJSON(new JSONObject().put("events",events).put("width",mapping.sourceWidth).put("height",mapping.sourceHeight).toString());}
     private void notice(String message){long now=SystemClock.elapsedRealtime();if(now-lastError>3000){lastError=now;error.accept(message);}}
+    private void moveHistory(MotionEvent event)throws Exception{
+        if(pointer.holdingButton())for(int i=0;i<event.getHistorySize();i++)pointer.move(event.getHistoricalX(i),event.getHistoricalY(i),event.getHistoricalEventTime(i));
+    }
     @Override public boolean onTouchEvent(MotionEvent event){
         if(!control||!ready||mapping==null||stopped)return true;
         try{switch(event.getActionMasked()){
             case MotionEvent.ACTION_DOWN:multi=false;pointer.down(event.getX(),event.getY(),event.getEventTime());getParent().requestDisallowInterceptTouchEvent(true);break;
             case MotionEvent.ACTION_MOVE:
                 if(multi){int a=event.findPointerIndex(scrollA),b=event.findPointerIndex(scrollB);if(pointer.relative()&&a>=0&&b>=0){float center=(event.getY(a)+event.getY(b))/2;pointer.scroll((center-scrollY)/getResources().getDisplayMetrics().density);scrollY=center;}}
-                else pointer.move(event.getX(),event.getY(),event.getEventTime());break;
-            case MotionEvent.ACTION_UP:if(!multi){pointer.up(event.getX(),event.getY(),event.getEventTime());performClick();}else cancelInput();multi=false;getParent().requestDisallowInterceptTouchEvent(false);inputChanged.run();break;
+                else{moveHistory(event);pointer.move(event.getX(),event.getY(),event.getEventTime());}break;
+            case MotionEvent.ACTION_UP:if(!multi){moveHistory(event);pointer.up(event.getX(),event.getY(),event.getEventTime());performClick();}else cancelInput();multi=false;getParent().requestDisallowInterceptTouchEvent(false);inputChanged.run();break;
             case MotionEvent.ACTION_CANCEL:cancelInput();getParent().requestDisallowInterceptTouchEvent(false);break;
             case MotionEvent.ACTION_POINTER_DOWN:cancelInput();multi=true;scrollA=event.getPointerId(0);scrollB=event.getPointerId(1);scrollY=(event.getY(0)+event.getY(1))/2;break;
             case MotionEvent.ACTION_POINTER_UP:scrollA=scrollB=-1;break; // Wait for all fingers to lift; never turn a scroll into a click.

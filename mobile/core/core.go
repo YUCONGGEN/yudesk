@@ -18,7 +18,7 @@ import (
 	"github.com/yudesk/yudesk/internal/relay"
 )
 
-const Version = "2.0.0-preview.2"
+const Version = "2.0.0-preview.5"
 const relayAddress = "www.yucg.cn:8233"
 const fingerprint = "20FC953E48B6BEED7FB3A5F73BF177CC4E2557CF274C409FF4F0179E5FA0F836"
 
@@ -57,7 +57,7 @@ type Engine struct {
 	frame           *Frame
 	frameSequence   int64
 	frameWake       chan struct{}
-	input           chan string
+	input           *latestMoveQueue[string]
 	inputErrors     chan string
 	canInput        bool
 	streaming       bool
@@ -76,7 +76,7 @@ func NewEngine(privateDirectory, deviceName string) (*Engine, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{ctx: ctx, cancel: cancel, identity: id, dir: privateDirectory, name: strings.TrimSpace(deviceName), frameWake: make(chan struct{}, 1), input: make(chan string, 64), inputErrors: make(chan string, 8), changed: make(chan struct{}), approvals: approval.New()}
+	e := &Engine{ctx: ctx, cancel: cancel, identity: id, dir: privateDirectory, name: strings.TrimSpace(deviceName), frameWake: make(chan struct{}, 1), input: newLatestMoveQueue[string](), inputErrors: make(chan string, 8), changed: make(chan struct{}), approvals: approval.New()}
 	if e.name == "" {
 		e.name = "Android"
 	}
@@ -162,17 +162,8 @@ func (e *Engine) stopAgentLocked() {
 	e.releaseLocked()
 }
 func (e *Engine) releaseLocked() {
-	for {
-		select {
-		case <-e.input:
-		default:
-			select {
-			case e.input <- `{"release":true}`:
-			default:
-			}
-			return
-		}
-	}
+	e.input.clear()
+	e.input.offer(`{"release":true}`, nil, true)
 }
 func (e *Engine) reconcileLocked() {
 	if !e.permittedLocked() || !e.state.Sharing {

@@ -360,8 +360,9 @@ func (f *brokerPeerpathFixture) assertEmpty(t *testing.T) {
 	})
 }
 
-func (f *brokerPeerpathFixture) assertDirectStops(t *testing.T, pair [2]*protocol.Conn, stop func()) {
+func (f *brokerPeerpathFixture) assertDirectStops(t *testing.T, pair [2]*protocol.Conn, stop func()) [2]error {
 	t.Helper()
+	var reasons [2]error
 	var reads [2]chan error
 	for i, c := range pair {
 		if err := c.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
@@ -373,6 +374,7 @@ func (f *brokerPeerpathFixture) assertDirectStops(t *testing.T, pair [2]*protoco
 	stop()
 	for i, c := range pair {
 		err := brokerPeerpathAwait(t, "direct shutdown", reads[i])
+		reasons[i] = err
 		if !errors.Is(err, peerpath.ErrRelayLost) && !errors.Is(err, peerpath.ErrDirectLost) {
 			t.Errorf("endpoint %d direct read must terminate with path loss, not a test deadline: %v", i, err)
 		}
@@ -390,6 +392,7 @@ func (f *brokerPeerpathFixture) assertDirectStops(t *testing.T, pair [2]*protoco
 		t.Fatal("fixture cancellation masked server-initiated shutdown")
 	}
 	f.assertEmpty(t)
+	return reasons
 }
 
 func TestBrokerPeerpathTerminateDevice(t *testing.T) {
@@ -486,9 +489,18 @@ func TestBrokerPeerpathNaturalLicenseExpiry(t *testing.T) {
 	}
 	// No test-side cancellation or socket close: the real license deadline on
 	// the broker's existing TLS connections must end both direct endpoints.
-	f.assertDirectStops(t, pair, func() {})
-	if time.Now().Before(expires) {
-		t.Fatal("session ended before its license deadline")
+	reasons := f.assertDirectStops(t, pair, func() {})
+	// The database expiry is wall time; net deadlines are converted to the
+	// runtime monotonic clock. Virtualized clock synchronization reproduced a
+	// 1.6ms discrepancy at expiry, not an authorization/path failure seconds
+	// early. Keep a strict small tolerance and test new admission only after
+	// that wall-clock boundary; never change the production license deadline.
+	const clockTolerance = 10 * time.Millisecond
+	if early := time.Until(expires); early > clockTolerance {
+		t.Fatalf("session ended %s before its license deadline: %v", early, reasons)
+	} else if early > 0 {
+		t.Logf("wall/monotonic expiry boundary difference: %s", early)
+		time.Sleep(early + clockTolerance)
 	}
 	ctx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
 	defer cancel()

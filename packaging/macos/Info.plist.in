@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleDisplayName</key><string>YuDesk</string>
+  <key>CFBundleName</key><string>YuDesk</string>
+  <key>CFBundleIdentifier</key><string>com.yudesk.desktop</string>
+  <key>CFBundleExecutable</key><string>yudesk-launcher</string>
+  <key>LSUIElement</key><true/>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>CFBundleVersion</key><string>@VERSION@</string>
+  <key>YuDeskPackageRevision</key><string>@REVISION@</string>
+  <key>CFBundleIconFile</key><string>YuDesk.icns</string>
+  <key>LSMinimumSystemVersion</key><string>@MACOS_MIN@</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppTransportSecurity</key>
+  <dict><key>NSAllowsLocalNetworking</key><true/></dict>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>YuDesk connects to devices you choose for attended remote desktop sessions.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>YuDesk uses audio only when you enable it for a remote session.</string>
+</dict>
+</plist>

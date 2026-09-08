@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -42,6 +43,11 @@ func HandleCommand(handler Handler) bool {
 		err = serveWorker(handler)
 	case "-desktop-service-install":
 		err = install(false)
+	case "-desktop-setup-install", "-desktop-setup-remove":
+		err = install(os.Args[1] == "-desktop-setup-remove")
+		if err != nil {
+			os.Exit(1)
+		} // caller displays a styled, non-privileged error
 	case "-desktop-service-remove":
 		err = install(true)
 	case "-desktop-service-check":
@@ -100,24 +106,75 @@ func showInstallError(err error) {
 }
 
 func ElevateInstall(remove bool) error {
+	if !setupMu.TryLock() {
+		return errors.New("安装操作正在进行，请稍候")
+	}
+	defer setupMu.Unlock()
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	verb, _ := windows.UTF16PtrFromString("runas")
 	file, _ := windows.UTF16PtrFromString(exe)
-	arg := "-desktop-service-install"
+	arg := "-desktop-setup-install"
 	if remove {
-		arg = "-desktop-service-remove"
+		arg = "-desktop-setup-remove"
 	}
 	params, _ := windows.UTF16PtrFromString(arg)
-	return windows.ShellExecute(0, verb, file, params, nil, windows.SW_HIDE)
+	info := shellExecuteInfo{Mask: 0x40 | 0x100 | 0x400, Verb: verb, File: file, Parameters: params, Show: windows.SW_HIDE}
+	info.Size = uint32(unsafe.Sizeof(info))
+	ok, _, callErr := windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteExW").Call(uintptr(unsafe.Pointer(&info)))
+	if ok == 0 {
+		return fmt.Errorf("管理员授权未完成: %w", callErr)
+	}
+	if info.Process == 0 {
+		return errors.New("无法获取安装进程状态")
+	}
+	defer windows.CloseHandle(info.Process)
+	result, err := windows.WaitForSingleObject(info.Process, 180000)
+	if err != nil {
+		return err
+	}
+	if result != windows.WAIT_OBJECT_0 {
+		return errors.New("安装仍在等待系统处理，请稍后检查状态")
+	}
+	var code uint32
+	if err = windows.GetExitCodeProcess(info.Process, &code); err != nil {
+		return err
+	}
+	if code != 0 {
+		return errors.New("安装未完成，请退出旧安装版后重试；原有设备和授权保留")
+	}
+	return nil
+}
+
+var setupMu sync.Mutex
+
+// SHELLEXECUTEINFOW: keep the OS UAC prompt, and wait for a real installation
+// result rather than reporting ShellExecute's successful dispatch as success.
+type shellExecuteInfo struct {
+	Size, Mask                        uint32
+	Window                            uintptr
+	Verb, File, Parameters, Directory *uint16
+	Show                              int32
+	Instance, IDList                  uintptr
+	Class                             *uint16
+	ClassKey                          uintptr
+	HotKey                            uint32
+	Icon                              uintptr
+	Process                           windows.Handle
 }
 
 func RestartInstalled() error {
 	s := Status()
 	if !s.Installed {
 		return errors.New("请先安装锁屏服务")
+	}
+	if s.UpdateRequired {
+		return errors.New("安装目录中还是其他版本，请先更新安装版，不能切换回旧程序")
+	}
+	if !s.Running {
+		return errors.New("安装服务未运行，请先修复安装版")
 	}
 	cmd := exec.Command(s.Path, "-desktop-wait-parent", strconv.Itoa(os.Getpid()))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -137,12 +194,15 @@ func Status() State {
 	defer windows.CloseServiceHandle(m)
 	h, err := windows.OpenService(m, windows.StringToUTF16Ptr(serviceName), windows.SERVICE_QUERY_STATUS)
 	if err != nil {
-		s.Message = "便携模式：锁屏控制需安装服务"
+		s.Message = "尚未安装，请授权启用安装版；也可暂用便携模式"
 		return s
 	}
 	service := &mgr.Service{Name: serviceName, Handle: h}
 	defer service.Close()
 	s.Installed = true
+	if !s.TrustedClient {
+		s.UpdateRequired = !installedBinaryMatches(exe, s.Path)
+	}
 	status, err := service.Query()
 	s.Running = err == nil && status.State == svc.Running
 	id, idErr := sessionID(uint32(os.Getpid()))
@@ -153,6 +213,8 @@ func Status() State {
 	}
 	if !s.Running {
 		s.Message = "锁屏服务未运行"
+	} else if s.UpdateRequired {
+		s.Message = "安装目录中是其他版本，请更新并切换到当前安装版"
 	} else if !s.TrustedClient {
 		s.Message = "服务已安装，请切换到安装版"
 	} else if idErr != nil || id != windows.WTSGetActiveConsoleSessionId() {
@@ -189,7 +251,7 @@ func protectDirectory(dir string) error {
 	return windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, owner, nil, dacl, nil)
 }
 
-func install(remove bool) error {
+func install(remove bool) (resultErr error) {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return errors.New("请允许管理员授权")
 	}
@@ -205,6 +267,14 @@ func install(remove bool) error {
 	service, openErr := m.OpenService(serviceName)
 	if openErr == nil {
 		defer service.Close()
+		previous, _ := service.Query()
+		defer func() {
+			// Copy failures (for example an old GUI still holding the executable)
+			// must not leave a previously healthy installation silently stopped.
+			if resultErr != nil && !remove && previous.State == svc.Running {
+				_ = service.Start()
+			}
+		}()
 		config, err := service.Config()
 		if err != nil {
 			return err
@@ -285,7 +355,30 @@ func install(remove bool) error {
 		}
 		defer service.Close()
 	}
-	return service.Start()
+	if err := service.Start(); err != nil {
+		return err
+	}
+	return waitForInstalledService(service.Query, 10*time.Second)
+}
+
+func waitForInstalledService(query func() (svc.Status, error), timeout time.Duration) error {
+	until := time.Now().Add(timeout)
+	for {
+		status, err := query()
+		if err != nil {
+			return err
+		}
+		if status.State == svc.Running {
+			return nil
+		}
+		if status.State == svc.Stopped {
+			return errors.New("安装服务启动失败，请修复安装后重试")
+		}
+		if !time.Now().Before(until) {
+			return errors.New("安装服务尚未就绪，请稍后检查状态")
+		}
+		time.Sleep(min(50*time.Millisecond, time.Until(until)))
+	}
 }
 
 type desktopService struct{}

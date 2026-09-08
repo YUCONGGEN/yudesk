@@ -44,7 +44,9 @@
         const results=await Promise.allSettled(jobs);const failure=results.find(x=>x.status==='rejected');if(failure)throw failure.reason;
       }
       if(meta.reset){canvas.width=meta.width;canvas.height=meta.height;}
-      const ctx=canvas.getContext('2d',{alpha:false});
+      // A low-latency presentation hint, not a network RTT measurement.
+      // Unsupported browsers ignore it and retain the normal 2D path.
+      const ctx=canvas.getContext('2d',{alpha:false,desynchronized:true});
       for(const {t,bitmap} of images)ctx.drawImage(bitmap,t.x,t.y);
       canvas.dataset.ready='1';
     }finally{for(const {bitmap} of images)bitmap.close();}

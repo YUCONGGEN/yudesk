@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,59 @@ import (
 	"github.com/yudesk/yudesk/internal/protocol"
 	"github.com/yudesk/yudesk/internal/secureconn"
 )
+
+func TestSlowOSInputDoesNotBlockPingOrCaptureGeometry(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	blocked, resume := make(chan struct{}), make(chan struct{})
+	var entered, released sync.Once
+	s := newInputSession()
+	s.apply = func([]desktop.InputEvent) error { entered.Do(func() { close(blocked); <-resume }); return nil }
+	a := &agent{id: secureconn.DeviceID(pub), privateKey: key, pin: "fixture-pin", allowControl: true, inputFactory: func() *inputSession { return s }}
+	local, remote := net.Pipe()
+	done := make(chan struct{})
+	go func() { a.handle(local); close(done) }()
+	defer func() {
+		released.Do(func() { close(resume) })
+		remote.Close()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("input worker not joined")
+		}
+	}()
+	_ = remote.SetDeadline(time.Now().Add(3 * time.Second))
+	secured, err := secureconn.Connect(remote, a.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := protocol.NewConn(secured)
+	if err = c.WriteMessage(protocol.Message{Kind: "request", Method: "auth", ID: "auth", Params: []byte(`{"pin":"fixture-pin"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := c.ReadMessage(); err != nil || !m.OK {
+		t.Fatal("auth", err)
+	}
+	if err = c.WriteMessage(inputMove(1)); err != nil {
+		t.Fatal(err)
+	}
+	<-blocked
+	geometry := make(chan struct{})
+	go func() { s.geometry(1920, 1080); close(geometry) }()
+	select {
+	case <-geometry:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("input driver blocks capture geometry")
+	}
+	start := time.Now()
+	_ = remote.SetDeadline(time.Now().Add(500 * time.Millisecond))
+	if err = c.WriteMessage(protocol.Message{Kind: "request", Method: "ping", ID: "ping"}); err != nil {
+		t.Fatal("input driver blocks protocol reader", err)
+	}
+	if m, err := c.ReadMessage(); err != nil || m.ID != "ping" || !m.OK {
+		t.Fatal("input driver blocks ping", err)
+	}
+	t.Logf("ping completed in %v while fake OS input was blocked; geometry remains independent", time.Since(start))
+}
 
 func TestInputContinuesWhileDownstreamResponseIsBlocked(t *testing.T) {
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)

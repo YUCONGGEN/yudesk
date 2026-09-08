@@ -16,10 +16,22 @@ func TestNativeManagedWindowHideReopenAndClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.window.profile = t.TempDir()
+	profile, err := os.MkdirTemp("", "yudesk-headless-fixture-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.window.profile = profile
+	t.Cleanup(func() {
+		if err := h.window.Close(); err != nil {
+			t.Errorf("browser cleanup: %v", err)
+		}
+		h.Close()
+		if err := os.RemoveAll(profile); err != nil {
+			t.Logf("temporary browser cache cleanup deferred: %v", err)
+		}
+	})
 	h.window.candidates = []string{browser}
 	h.window.headless = true
-	defer h.Close()
 	waitAttached := func() {
 		t.Helper()
 		until := time.Now().Add(4 * time.Second)

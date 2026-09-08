@@ -1,6 +1,33 @@
-# 当前部署状态（2026-09-08）
+# 当前部署状态（2026-09-09）
 
-## 当前：P2P 网络更新 `p2p-20260908.1`
+## 当前：跨平台安装与响应更新 `installed-20260909.1`
+
+桌面 **2.0.0** 与 Android **2.0.0-preview.5 / 2000005** 已一起部署。官网发布日期为 **2026-09-09 06:59（北京时间）**，服务端 PID `19796`，网站仍为 `http://www.yucg.cn:8235/`，TCP/UDP 8233 保持不变。
+
+- Windows 默认推荐安装版，经过明确确认及管理员授权；窗口无系统标题栏，修复会话断开误退出与窗口监控恢复。macOS 两个架构提供完整 `.pkg`，Linux x64 提供 `.deb`，均为原生无系统标题栏窗口。Android 是原生 APK，保持 NoActionBar 和真实系统共享授权/通知。iOS 与原生鸿蒙继续暂停。
+- 桌面输入使用有界独立队列，截图尺寸发布不被慢输入锁阻塞；Android 仅合并悬停、保留拖动轨迹和释放顺序，采用最新解码帧交接及末帧补采。继续身份与 PIN/审批通过后 P2P 优先，失败中转。
+- Linux 安装包 revision 4 修复复现的 WebKitGTK DOM 全屏中止，改为可信操作触发原生窗口全屏，三轮全屏/恢复及 Esc、隐藏复用通过。Mac revision 4 修复 Finder 再次打开、安装标记资源目录及完整 app 签名封装；两个包在真实 Mac 生成并展开严格验签通过，但安装器未 Developer ID 签名、公证。
+- 全量 Go 测试/vet、核心 race、Windows vet、23 项输入/画面/文件/声音/兼容测试、14 项弹窗/窗口测试通过。最终 Windows 包统一端联调通过；Windows/Mac 安装标记、匿名管道和会话生命周期测试通过。Linux 真实 WebKit 页面/中文/下载/恢复与最终 Go+helper 生命周期通过。Android 四 ABI、29 项 Java 单测、三轮 Go race、lint、签名与 16KB 对齐通过。
+- 官网五个安装包及许可文件从公网完整下载，SHA-256 全部匹配；版本/日期、旧 Unix 地址重定向、健康检查与未登录后台 401 通过。线上页面五个下载入口、功能截图及无脚本错误通过。三次真实公网 STUN 请求/指纹及 TCP TLS 1.3 固定证书验证通过；STUN 往返不是双端画面延迟指标。
+- 部署前后账号/设备/授权码记录数均为 **0 / 11 / 9**，SQLite 完整性正常，配置文件哈希不变；在线/连接中均为 **3 / 0**（检查时快照）。备份位置 `/Users/yu/bin/yudesk/backups/installed-20260909.1`，包含旧程序、下载、配置和一致性数据库快照；未删除设备或修改许可。
+- GitHub 目标是既有私有仓库 `YUCONGGEN/yudesk` 的新标签 `v2.0.0-update-20260909`；[本轮 Release](https://github.com/YUCONGGEN/yudesk/releases/tag/v2.0.0-update-20260909) 发布五个平台附件及校验/许可，旧 Release 不覆盖。实际推送及附件发布状态以该页面为准。
+
+最终下载 SHA-256：
+
+| 产物 | SHA-256 |
+| --- | --- |
+| Windows x64 EXE | `a0b17e7dde88638459f55cf68118bb63a8850c144e07851ff964a8fa1c97f428` |
+| Linux x64 DEB | `1b3cee47435dc7609faa2243495190e9914c51f9c43f8e647832054ea77030b6` |
+| macOS Intel PKG | `37aa9e468a2c2a2b1bf06303ae11dbe0916a3b81366d0daeb901e28a754f8275` |
+| macOS Apple Silicon PKG | `3485aefe2782f77350a5816a792bf9c38c5baef3f65b3dfeacf1ed19a26beaae` |
+| Android preview.5 APK | `2caac0f0b2e1e3d2c60978610f6f379b568629af91ac889bba0676f5554ca79d` |
+| macOS 服务端 | `5e564e13e5d84d1a39f2ca596c3f3020e2e05be2bc71fb8ff26f6af4d9a834c7` |
+
+HTTP 下载不提供来源真实性保证，应通过可信的 GitHub 渠道核对校验值。更新前完全退出旧 YuDesk，再安装新包；两端都需要升级。未替换当前开发电脑正在运行的旧主程序或实际安装服务。
+
+验证限制：没有 Android 真机、Mac Intel 图形真机、完整 Windows 管理员安装/锁屏或长时间跨外网验收；macOS 13+ 的包未公证且被控输入另需 cliclick/辅助功能授权，Linux 完整输入限兼容 X11 桌面。Android 仍是原调试签名预览系列。Mac 系统声音与 Android 文件/系统声音未补齐。约 100ms RTT 基线的输入到画面中位数仍约 120ms，没有证明平均值明显下降，不能承诺零延迟或固定帧率；详情见 [跨平台验证](ALL_PLATFORM_RELEASE_20260909.md)、[桌面基准](DESKTOP_INSTALLED_LATENCY_20260909.md)、[Android 专项](ANDROID_LATENCY_20260909.md)。
+
+## 历史：P2P 网络更新 `p2p-20260908.1`（已替换）
 
 **桌面 2.0.0 与 Android 2.0.0-preview.3 已部署。** 官网标注发布日期为 **2026-09-08 22:07（北京时间）**；服务端 PID `48511`。Windows x64、Linux x64、macOS Intel/Apple Silicon 与 Android 下载均已替换。
 

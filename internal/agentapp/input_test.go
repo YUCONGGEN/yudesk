@@ -1,11 +1,26 @@
 package agentapp
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/yudesk/yudesk/internal/desktop"
 )
+
+func TestInputCancellationStopsRemainingBatch(t *testing.T) {
+	s := newInputSession()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls int
+	s.apply = func([]desktop.InputEvent) error { calls++; cancel(); return nil }
+	if err := s.handleContext(ctx, json.RawMessage(`{"events":[{"type":"move"},{"type":"move"},{"type":"move"}]}`)); err != context.Canceled {
+		t.Fatal("batch ignored cancellation", err)
+	}
+	if calls != 1 {
+		t.Fatalf("injected %d events after cancellation", calls)
+	}
+}
 
 func TestInputDragCoordinatesAndRelease(t *testing.T) {
 	s := newInputSession()

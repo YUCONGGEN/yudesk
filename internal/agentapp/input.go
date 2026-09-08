@@ -1,16 +1,18 @@
 package agentapp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 
 	"github.com/yudesk/yudesk/internal/desktop"
 )
 
 type inputSession struct {
 	mu             sync.Mutex
-	width, height  int
+	geometryValue  atomic.Uint64
 	x, y           int
 	buttons        map[int]bool
 	keys           map[string]desktop.InputEvent
@@ -23,9 +25,19 @@ func newInputSession() *inputSession {
 	return &inputSession{buttons: map[int]bool{}, keys: map[string]desktop.InputEvent{}, apply: desktop.ApplyInput, wake: make(chan struct{}, 1)}
 }
 
-func (s *inputSession) geometry(w, h int) { s.mu.Lock(); s.width, s.height = w, h; s.mu.Unlock() }
+// Capture must never wait for a slow input driver or privileged desktop IPC.
+// Publish the pair atomically so resize cannot mix dimensions from two frames.
+func (s *inputSession) geometry(w, h int) {
+	if w > 0 && h > 0 {
+		s.geometryValue.Store(uint64(uint32(w))<<32 | uint64(uint32(h)))
+	}
+}
 
 func (s *inputSession) handle(raw json.RawMessage) error {
+	return s.handleContext(context.Background(), raw)
+}
+
+func (s *inputSession) handleContext(ctx context.Context, raw json.RawMessage) error {
 	var p struct {
 		Events []desktop.InputEvent `json:"events"`
 		Width  int                  `json:"width"`
@@ -39,21 +51,29 @@ func (s *inputSession) handle(raw json.RawMessage) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	geometry := s.geometryValue.Load()
+	width, height := int(geometry>>32), int(uint32(geometry))
 	if s.releasePending {
 		if err := s.releaseLocked(); err != nil {
 			return err
 		}
 	}
 	for i := range p.Events {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		e := &p.Events[i]
 		switch e.Type {
 		case "move", "down", "up":
 			if (e.Type == "down" || e.Type == "up") && (e.Button < 1 || e.Button > 3) {
 				return errors.New("invalid mouse button")
 			}
-			if p.Width > 0 && p.Height > 0 && s.width > 0 && s.height > 0 {
-				e.X = desktop.ScaleCoordinate(e.X, p.Width, s.width)
-				e.Y = desktop.ScaleCoordinate(e.Y, p.Height, s.height)
+			if p.Width > 0 && p.Height > 0 && width > 0 && height > 0 {
+				e.X = desktop.ScaleCoordinate(e.X, p.Width, width)
+				e.Y = desktop.ScaleCoordinate(e.Y, p.Height, height)
 			}
 			s.x, s.y = e.X, e.Y
 		}

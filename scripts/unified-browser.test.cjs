@@ -64,17 +64,20 @@ const {chromium}=require('playwright');
     // Test optional admin-consent controls only with mocked endpoints. This
     // fixture must never install/uninstall services or restart the user's app.
     const serviceActions=[];
-    let installed=false;
+    let installed=false,updateRequired=false,installFails=false,packagePlatform='';
     const serviceMatch=u=>u.pathname.startsWith('/api/local/service/');
     await left.route(serviceMatch,route=>{
       const pathname=new URL(route.request().url()).pathname;
-      if(pathname.endsWith('/status'))return route.fulfill({json:{supported:true,installed,running:installed,trustedClient:false,message:installed?'服务已安装，请切换到安装版':'便携模式：锁屏控制需安装服务'}});
+      if(pathname.endsWith('/status')&&packagePlatform)return route.fulfill({json:{supported:true,packageManaged:true,platform:packagePlatform,installed:true,running:true,trustedClient:true,message:'安装版 · 原生无标题栏窗口'}});
+      if(pathname.endsWith('/status'))return route.fulfill({json:{supported:true,installed,updateRequired,running:installed,trustedClient:false,message:installed?'服务已安装，请切换到安装版':'尚未安装，请授权启用安装版'}});
       assert.equal(route.request().postDataJSON().confirmed,true);
       serviceActions.push(pathname);
-      installed=pathname.endsWith('/install');
+      if(pathname.endsWith('/install')){if(installFails)return route.fulfill({status:409,body:'测试：管理员取消安装'});installed=true;updateRequired=false;}
+      if(pathname.endsWith('/remove'))installed=false;
       return route.fulfill({json:{ok:true}});
     });
     await left.locator('nav [data-tab="settings"]').click();
+    assert.equal(await left.locator('#runMode').inputValue(),'installed');
     await noPageScroll(left);
     await left.screenshot({path:path.resolve('.smoke/compact-settings.png')});
     await left.locator('#installService').click();
@@ -85,14 +88,52 @@ const {chromium}=require('playwright');
     assert.deepEqual(serviceActions,[],'cancelling the custom confirmation must not install a service');
     await left.locator('#installService').click();
     await left.locator('#confirmAccept').click();
-    await left.waitForFunction(()=>document.getElementById('restartInstalled').hidden===false);
+    // The progress label precedes the asynchronous restart POST. Wait for the
+    // whole action to finish, not a paint that can race the request dispatch.
+    await left.waitForFunction(()=>document.getElementById('serviceAction').textContent.includes('安装成功')&&!document.getElementById('installService').disabled);
+    assert.deepEqual(serviceActions,['/api/local/service/install','/api/local/service/restart'],'installation must automatically hand off only after success');
+    await left.waitForFunction(()=>document.getElementById('removeService').hidden===false);
     await left.locator('#removeService').click();
     await left.locator('#appConfirm').waitFor({state:'visible'});
-    assert.match(await left.locator('#appConfirm').textContent(),/卸载锁屏服务/);
+    assert.match(await left.locator('#appConfirm').textContent(),/卸载桌面服务/);
     await left.locator('#confirmAccept').click();
     await left.waitForFunction(()=>document.getElementById('removeService').hidden===true);
-    assert.deepEqual(serviceActions,['/api/local/service/install','/api/local/service/remove']);
+    assert.deepEqual(serviceActions,['/api/local/service/install','/api/local/service/restart','/api/local/service/remove']);
+    installed=true;updateRequired=true;
+    await left.waitForFunction(()=>document.getElementById('installService').textContent.includes('更新并启用'));
+    assert.equal(await left.locator('#restartInstalled').isVisible(),false,'must not offer switching back to an outdated installation');
+    installFails=true;
+    await left.locator('#installService').click();await left.locator('#confirmAccept').click();
+    await left.waitForFunction(()=>document.getElementById('serviceAction').textContent.includes('操作未完成'));
+    assert.equal(serviceActions.at(-1),'/api/local/service/install');
+    assert.equal(serviceActions.filter(v=>v.endsWith('/restart')).length,1,'failed/cancelled installation must not restart');
+    await left.evaluate(()=>{localStorage.removeItem('yudesk.runMode');});
+    await left.reload();
+    await left.evaluate(()=>{document.body.dataset.installPrompt='true';});
+    await left.locator('#appConfirm').waitFor({state:'visible',timeout:8000});
+    assert.match(await left.locator('#appConfirm').textContent(),/默认使用安装版/);
+    const beforeDecline=serviceActions.length;
+    await left.locator('#confirmCancel').click();
+    await left.waitForFunction(()=>document.getElementById('runMode').value==='portable',{}, {timeout:3000}).catch(async error=>{throw Error('mode after decline: '+JSON.stringify(await left.evaluate(()=>({value:document.getElementById('runMode').value,html:document.getElementById('runMode').outerHTML,stored:localStorage.getItem('yudesk.runMode')})))+' '+error.message);});
+    assert.equal(serviceActions.length,beforeDecline,'declining initial consent must not invoke UAC');
+    await left.evaluate(()=>{document.body.dataset.installPrompt='false';});
     assert.deepEqual(dialogs,[],'service consent must not use browser dialogs');
+    // Unix uses a real OS package, not a Windows service or a renamed binary.
+    // Settings must remain visible even when a stale portable preference exists.
+    const beforePackages=serviceActions.length;
+    for(const platform of ['darwin','linux']){
+      packagePlatform=platform;
+      await left.reload();await left.locator('nav [data-tab="settings"]').click();
+      await left.waitForFunction(()=>document.getElementById('serviceTitle').textContent==='安装与运行');
+      assert.equal(await left.locator('#windowsService').isVisible(),true);
+      assert.equal(await left.locator('#runMode').inputValue(),'installed');
+      assert.equal(await left.locator('#runMode').isDisabled(),true);
+      assert.equal(await left.locator('#installService').isVisible(),false);
+      assert.match(await left.locator('#serviceDescription').textContent(),platform==='darwin'?/macOS 安装包/:/Linux 安装包/);
+      await noPageScroll(left);
+    }
+    assert.equal(serviceActions.length,beforePackages,'Unix settings must not invoke Windows service commands');
+    packagePlatform='';await left.reload();
     await left.unroute(serviceMatch);
     await left.locator('nav [data-tab="devices"]').click();await left.locator('#addDevice').click();
     await left.locator('#addName').fill('办公室电脑');await left.locator('#addCode').fill(remoteCode);await left.locator('#addForm button[type="submit"]').click();

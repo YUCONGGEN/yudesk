@@ -1719,15 +1719,15 @@ type downloadPlatform struct {
 
 var downloadLayout = []downloadPlatform{
 	{Name: "Windows", Detail: "Windows 10/11 · x64", Links: componentLinks("windows-amd64", ".exe")},
-	{Name: "Linux", Detail: "Linux desktop · x64", Links: componentLinks("linux-amd64", "")},
-	{Name: "macOS Intel", Detail: "Intel Mac · x64", Links: componentLinks("darwin-amd64", "")},
-	{Name: "macOS Apple Silicon", Detail: "M1/M2/M3/M4 · arm64", Links: componentLinks("darwin-arm64", "")},
+	{Name: "Linux", Detail: "Debian 12+ / Ubuntu 22.04+ · x64", Links: componentLinks("linux-amd64", ".deb")},
+	{Name: "macOS Intel", Detail: "macOS 13+ · Intel · 未公证", Links: componentLinks("darwin-amd64", ".pkg")},
+	{Name: "macOS Apple Silicon", Detail: "macOS 13+ · Apple Silicon · 未公证", Links: componentLinks("darwin-arm64", ".pkg")},
 	{Name: "Android 预览版", Detail: "Android 8+ · 需真机验收", Links: []downloadLink{{Name: "YuDesk Android", Description: "控制 / 授权共享屏幕 · 预览测试", Path: "android/yudesk.apk"}}},
 }
 
 func componentLinks(platform, suffix string) []downloadLink {
 	return []downloadLink{
-		{Name: "YuDesk", Description: "控制与被控合一 · 双击运行", Path: platform + "/yudesk" + suffix},
+		{Name: "YuDesk 安装版", Description: "控制与被控合一 · 安装后打开", Path: platform + "/yudesk" + suffix},
 	}
 }
 
@@ -1775,6 +1775,15 @@ func serveDownload(w http.ResponseWriter, r *http.Request, root string) {
 		return
 	}
 	relative := strings.TrimPrefix(r.URL.Path, "/download/")
+	// Unix GUI clients include a native window helper and desktop integration;
+	// old executable URLs now lead to the complete installer, never a broken
+	// standalone binary without its window component.
+	for platform, suffix := range map[string]string{"linux-amd64": ".deb", "darwin-amd64": ".pkg", "darwin-arm64": ".pkg"} {
+		if relative == platform+"/yudesk" {
+			http.Redirect(w, r, "/download/"+platform+"/yudesk"+suffix, http.StatusTemporaryRedirect)
+			return
+		}
+	}
 	// Old bookmarks download the unified application, not stale role binaries.
 	for _, platform := range []string{"windows-amd64", "linux-amd64", "darwin-amd64", "darwin-arm64"} {
 		suffix := ""
@@ -2083,8 +2092,8 @@ const adminScript = `(() => {
 var guidePage = template.Must(template.New("guide").Parse(`<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YuDesk 使用教程</title>
 <style>*{box-sizing:border-box}body{margin:0;background:#07111f;color:#eaf2ff;font:15px/1.7 system-ui;letter-spacing:.1px}main{max-width:900px;margin:auto;padding:42px 22px 80px}a{color:#67a7ff;text-decoration:none}h1{font-size:38px;margin:12px 0}h2{margin-top:8px;color:#91bdff}.lead,.note{color:#9db0c8}.step{background:#101d2d;border:1px solid #243953;border-radius:14px;padding:20px 24px;margin:15px 0}pre{overflow:auto;background:#07111f;border:1px solid #20344c;border-radius:9px;padding:14px;color:#cbe1ff}code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.warn{border-left:3px solid #e3a839;padding-left:12px;color:#eacb91}.ok{color:#78dba9}</style></head>
-<body><main><a href="/">← 返回下载主页</a><h1>YuDesk 使用教程</h1>{{if .DeviceMode}}<p class="lead">无需注册账号、无需输入命令，下载后双击运行即可。</p>
-<section class="step"><h2>1. 下载统一版</h2><p>每个平台只需要一个 <strong>YuDesk</strong>。控制电脑与被控电脑都下载对应系统的同一个程序，双击运行，无需账号。</p></section>
+<body><main><a href="/">← 返回下载主页</a><h1>YuDesk 使用教程</h1>{{if .DeviceMode}}<p class="lead">无需注册账号。下载对应安装包，完成安装与必要的系统授权后打开。</p>
+<section class="step"><h2>1. 下载统一版</h2><p>每个平台只需要一个 <strong>YuDesk</strong>。控制电脑与被控电脑都安装对应系统的同一个程序，无需账号。Windows 确认安装及管理员授权；macOS 双击 .pkg；Linux 使用软件安装器打开 .deb。macOS 包尚未签名公证，可能被系统阻止。</p></section>
 <section class="step"><h2>2. 查看本机信息</h2><p>首页显示服务器分配的 <strong>9 位数字设备码</strong>与 <strong>6 位 PIN</strong>，可一键复制。保留“允许连接本机”开关开启。授权码输入默认收起，点击“输入授权码”后展开填写。</p></section>
 <section class="step"><h2>3. 发放授权</h2><p>管理员访问官网的“授权管理”，可以按天或小时生成授权码，也可以根据设备码直接授权或续期。普通用户无需登录账号。</p></section>
 <section class="step"><h2>4. 连接与设备列表</h2><p>在“连接远程设备”输入对方设备码和六位 PIN，选择控制或仅观看，可选声音。设备列表显示本机和已保存设备，可添加、查询、移除及再次连接，状态每 30 秒异步更新。</p><p class="ok">“结束控制”返回同一个首页，本机仍可接收连接。输入与画面使用端到端加密；短设备码通过已验证的 TLS 中转解析。</p></section>

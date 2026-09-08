@@ -25,7 +25,7 @@ func testEngine(t *testing.T) *Engine {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{ctx: ctx, cancel: cancel, identity: id, name: "test Android", state: status{Running: true, Online: true, Active: true, Sharing: true, Accessibility: true}, frameWake: make(chan struct{}, 1), input: make(chan string, 64), inputErrors: make(chan string, 8), changed: make(chan struct{}), approvals: approval.New()}
+	e := &Engine{ctx: ctx, cancel: cancel, identity: id, name: "test Android", state: status{Running: true, Online: true, Active: true, Sharing: true, Accessibility: true}, frameWake: make(chan struct{}, 1), input: newLatestMoveQueue[string](), inputErrors: make(chan string, 8), changed: make(chan struct{}), approvals: approval.New()}
 	t.Cleanup(e.Close)
 	return e
 }
@@ -194,7 +194,7 @@ func TestSyntheticTwoWaySession(t *testing.T) {
 	if err = s.SendInputJSON(input); err != nil {
 		t.Fatal(err)
 	}
-	until(t, func() bool { return len(e.input) > 0 })
+	until(t, func() bool { return e.input.len() > 0 })
 	if got := e.NextInputJSON(10); got != input {
 		t.Fatalf("input altered: %s", got)
 	}
@@ -373,7 +373,7 @@ func TestSlowRendererDoesNotBlockIncomingInput(t *testing.T) {
 	if err = s.SendInputJSON(raw); err != nil {
 		t.Fatal(err)
 	}
-	until(t, func() bool { return len(e.input) > 0 })
+	until(t, func() bool { return e.input.len() > 0 })
 	if e.NextInputJSON(10) != raw {
 		t.Fatal("input blocked behind unacknowledged video")
 	}

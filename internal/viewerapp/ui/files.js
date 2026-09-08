@@ -93,7 +93,7 @@
       // Other browsers use their native streaming downloader with native progress/cancel.
       if(!root.showSaveFilePicker) {
         const link=document.createElement('a');link.href=url('/api/download',{path:remotePath});link.download=name;document.body.append(link);link.click();link.remove();
-        message('下载已交给浏览器：在下载列表中查看进度或取消。传输中请保持本页面打开。');return;
+        message(/YuDeskNative\//.test(root.navigator?.userAgent||'')?'请选择文件保存位置。传输中请保持本页面打开，完成或失败会在这里提示。':'下载已交给浏览器：在下载列表中查看进度或取消。传输中请保持本页面打开。');return;
       }
       const task=new AbortController();active=task;busy(true);progress.value=0;let writer,reader;
       try {

@@ -18,7 +18,7 @@ import (
 	"github.com/yudesk/yudesk/internal/winhost"
 )
 
-const unifiedVersion = "desktop-unified-" + releaseinfo.Version
+const unifiedVersion = "desktop-unified-" + releaseinfo.Version + "-installed-frameless-v1"
 
 //go:embed ui/dashboard.html
 var dashboardHTML string
@@ -66,7 +66,7 @@ func enableUnified(host *viewerHost, config viewerConfig, directory, token strin
 			if host.ctx.Err() == nil {
 				_ = openBrowser(viewerUIURL(host.listener.Addr().String(), token), false)
 			}
-		}, host.cancel)
+		}, func() { host.requestExit("tray_exit") })
 		if trayErr != nil {
 			log.Printf("YuDesk 托盘: %v", trayErr)
 		} else {
@@ -89,7 +89,7 @@ func enableUnified(host *viewerHost, config viewerConfig, directory, token strin
 		if d.hidden.Load() && config.openUI {
 			_ = openBrowser(viewerUIURL(host.listener.Addr().String(), token), false)
 		}
-		time.AfterFunc(1500*time.Millisecond, host.cancel)
+		time.AfterFunc(1500*time.Millisecond, func() { host.requestExit("device_stopped") })
 	}()
 	return nil
 }
@@ -98,7 +98,7 @@ func (d *unifiedDesk) Close() { d.device.Close() }
 func (d *unifiedDesk) render(w http.ResponseWriter, id, message string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = dashboardPage.Execute(w, map[string]any{"Token": d.token, "DeviceID": id, "Message": message, "Version": releaseinfo.Version})
+	_ = dashboardPage.Execute(w, map[string]any{"Token": d.token, "DeviceID": id, "Message": message, "Version": releaseinfo.Version, "InstallPrompt": d.config.openUI && d.config.stateDir == "" && d.config.deviceDir == ""})
 }
 
 func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
@@ -106,7 +106,7 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 	if path == "/api/local/service/status" && r.Method == http.MethodGet {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = json.NewEncoder(w).Encode(winhost.Status())
+		_ = json.NewEncoder(w).Encode(desktopInstallationStatus())
 		return true
 	}
 	if d.stopped.Load() && path == "/" {
@@ -178,7 +178,7 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 	case "/api/local/service/restart":
 		err = winhost.RestartInstalled()
 		if err == nil {
-			time.AfterFunc(200*time.Millisecond, d.host.cancel)
+			time.AfterFunc(200*time.Millisecond, func() { d.host.requestExit("service_restart") })
 		}
 	case "/api/local/receiving":
 		d.device.SetReceiving(p.Enabled)

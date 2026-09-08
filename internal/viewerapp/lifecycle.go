@@ -30,23 +30,29 @@ type viewerHost struct {
 	window   *appWindow
 	tray     *appTray
 	openUI   bool
+	journal  *lifecycleJournal
 }
 
-func newViewerHost(addr, token string) (*viewerHost, error) {
+func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHost, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &viewerHost{ctx: ctx, cancel: cancel, listener: l}
+	if len(journals) > 0 {
+		h.journal = journals[0]
+	}
 	h.window = newAppWindow(l.Addr().String(), token)
+	h.window.journal = h.journal
 	h.version.Store("desktop-input-files-v3")
 	// X always exits the app. Only the explicit End Control action returns home.
-	windowClosed := cancel
+	windowClosed := func() { h.requestExit("window_closed") }
 	tracker := uilifecycle.NewWithCallback(700*time.Millisecond, func() {
 		// Managed native windows report target destruction directly, avoiding
 		// duplicate/late HTTP watcher callbacks after the dashboard reopens.
 		if !h.window.managed.Load() {
+			h.journal.record("browser_watch_closed", nil)
 			windowClosed()
 		}
 	})
@@ -115,7 +121,7 @@ func newViewerHost(addr, token string) (*viewerHost, error) {
 			// No exit confirmation/result page, and no navigation to a dead URL.
 			w.WriteHeader(http.StatusNoContent)
 			_ = http.NewResponseController(w).Flush()
-			cancel()
+			h.requestExit("exit_clicked")
 			return
 		}
 		h.mu.RLock()
@@ -147,8 +153,21 @@ func newViewerHost(addr, token string) (*viewerHost, error) {
 		case <-ctx.Done():
 		}
 	}()
-	go func() { _ = h.server.Serve(l); cancel() }()
+	go func() {
+		err := h.server.Serve(l)
+		if h.ctx.Err() == nil {
+			h.journal.record("local_server_stopped", err)
+		}
+		cancel()
+	}()
 	return h, nil
+}
+
+func (h *viewerHost) requestExit(reason string) {
+	if h.ctx.Err() == nil {
+		h.journal.record(reason, nil)
+	}
+	h.cancel()
 }
 
 func (h *viewerHost) setTrayVisible(visible bool) {
@@ -194,7 +213,7 @@ func (h *viewerHost) Close() {
 	if t != nil {
 		t.Close()
 	}
-	_ = h.window.Hide()
+	_ = h.window.Close()
 	_ = h.server.Close()
 }
 

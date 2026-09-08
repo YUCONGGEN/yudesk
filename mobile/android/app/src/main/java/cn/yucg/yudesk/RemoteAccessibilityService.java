@@ -18,7 +18,7 @@ import org.json.JSONObject;
 public final class RemoteAccessibilityService extends AccessibilityService {
     private static volatile RemoteAccessibilityService instance;
     private final Handler main=new Handler(Looper.getMainLooper());
-    private final InputQueue<Command> queue=new InputQueue<>(64,c->c.value.optString("type").equals("move"));
+    private final InputQueue<Command> queue=new InputQueue<>(64,c->c.value.optString("type"),c->c.value.optInt("button"),(a,b)->a.w==b.w&&a.h==b.h);
     private GestureDescription.StrokeDescription stroke;
     private boolean busy,down,releaseRequested;
     private float x,y;

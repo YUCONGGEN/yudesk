@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,18 +30,23 @@ const appWindowWidth, appWindowHeight = 860, 600
 type appWindow struct {
 	mu            sync.Mutex
 	url, profile  string
+	profileRoot   string
 	candidates    []string // overridden only by native isolated-browser tests
 	headless      bool
 	browserPID    uint32
 	processDone   chan struct{}
-	stopBrowser   func() // releases only this private renderer process group
+	stopBrowser   func() error // releases only this private renderer process group
 	managed       atomic.Bool
 	onClose       func()
 	cancelMonitor func()
+	journal       *lifecycleJournal
+	native        *nativeAppWindow
+	shell         *windowShell
+	useShell      bool
 }
 
 func newAppWindow(address, token string) *appWindow {
-	return &appWindow{url: viewerUIURL(address, token), candidates: chromiumBrowsers()}
+	return &appWindow{url: viewerUIURL(address, token), candidates: chromiumBrowsers(), useShell: runtime.GOOS == "darwin" || runtime.GOOS == "linux"}
 }
 
 func (b *appWindow) initProfile() error {
@@ -120,57 +126,15 @@ func (b *appWindow) target(c *websocket.Conn) (string, error) {
 			return target.TargetID, nil
 		}
 	}
-	return "", errors.New("app window has not opened")
-}
-
-// Observe the actual owned target, not an abandoned HTTP fetch. Chromium may
-// retain an unconsumed fetch after its tab closes, which makes X detection late.
-func (b *appWindow) monitor(id string) error {
-	b.stopMonitor()
-	c, err := b.connection()
-	if err != nil {
-		return err
-	}
-	if err = windowCommand(c, "Target.setDiscoverTargets", map[string]any{"discover": true}, nil); err != nil {
-		c.Close()
-		return err
-	}
-	_ = c.SetReadDeadline(time.Time{})
-	ctx, cancel := context.WithCancel(context.Background())
-	b.cancelMonitor = func() { cancel(); _ = c.Close() }
-	b.managed.Store(true)
-	go func() {
-		defer c.Close()
-		for {
-			var event struct {
-				Method string
-				Params struct{ TargetID string }
-			}
-			err := c.ReadJSON(&event)
-			if ctx.Err() != nil {
-				return
-			}
-			if err != nil || event.Method == "Target.targetDestroyed" && event.Params.TargetID == id {
-				if b.onClose != nil {
-					b.onClose()
-				}
-				return
-			}
-		}
-	}()
-	return nil
-}
-
-func (b *appWindow) stopMonitor() {
-	if b.cancelMonitor != nil {
-		b.cancelMonitor()
-		b.cancelMonitor = nil
-	}
+	return "", errWindowTargetMissing
 }
 
 func (b *appWindow) Show() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.useShell && !b.headless {
+		return b.showShell()
+	}
 	if err := b.initProfile(); err != nil {
 		return err
 	}
@@ -178,21 +142,24 @@ func (b *appWindow) Show() error {
 		id, err := b.target(c)
 		if err == nil {
 			// Activating a minimized Chromium target alone does not restore it.
-			var state struct{ Bounds struct{ WindowState string } }
-			if windowCommand(c, "Browser.getWindowForTarget", map[string]any{"targetId": id}, &state) == nil && state.Bounds.WindowState == "minimized" {
-				_ = setAppWindowState(c, id, "normal")
+			if b.native == nil {
+				var state struct{ Bounds struct{ WindowState string } }
+				if windowCommand(c, "Browser.getWindowForTarget", map[string]any{"targetId": id}, &state) == nil && state.Bounds.WindowState == "minimized" {
+					_ = setAppWindowState(c, id, "normal")
+				}
+				err = windowCommand(c, "Target.activateTarget", map[string]any{"targetId": id}, nil)
 			}
-			err = windowCommand(c, "Target.activateTarget", map[string]any{"targetId": id}, nil)
 			c.Close()
 			if err != nil {
 				return err
 			}
-			return b.monitor(id)
+			return b.finishShow(id)
 		}
 		// Chromium can remain alive after its final app target closes. Starting
 		// --app into that empty instance is not reliable (notably in headless
 		// and background mode); finish only this private instance first.
 		b.stopMonitor()
+		b.closeNativeWindow()
 		_ = windowCommand(c, "Browser.close", nil, nil)
 		c.Close()
 		if b.processDone != nil {
@@ -207,6 +174,26 @@ func (b *appWindow) Show() error {
 		}
 	}
 	var started bool
+	if b.profileRoot == "" {
+		b.profileRoot = b.profile
+	}
+	// A replaced renderer gets fresh browser cache/lock files. Connection
+	// history and settings belong to Go, not Chromium's profile. This avoids
+	// racing a recently exited browser's storage/AV handles on hide/reopen on
+	// platforms without an in-process native host (and headless fixtures).
+	if b.processDone != nil {
+		if b.stopBrowser != nil {
+			if err := b.stopBrowser(); err != nil {
+				return err
+			}
+			b.stopBrowser = nil
+		}
+		fresh, err := os.MkdirTemp(b.profileRoot, "renderer-")
+		if err != nil {
+			return err
+		}
+		b.profile = fresh
+	}
 	for _, candidate := range b.candidates {
 		resolved, err := exec.LookPath(candidate)
 		if err != nil {
@@ -216,25 +203,16 @@ func (b *appWindow) Show() error {
 		if b.headless {
 			args = append(args, "--headless=new", "--disable-gpu")
 		}
-		cmd := exec.Command(resolved, args...)
-		configureBrowserProcess(cmd)
-		if cmd.Start() != nil {
-			continue
-		}
-		guard, err := newBrowserGuard(cmd)
+		pid, done, guard, err := startBrowserProcess(resolved, args)
 		if err != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
 			continue
 		}
 		if b.stopBrowser != nil {
 			b.stopBrowser()
 		}
 		b.stopBrowser = guard
-		done := make(chan struct{})
-		b.browserPID = uint32(cmd.Process.Pid)
+		b.browserPID = pid
 		b.processDone = done
-		go func() { _ = cmd.Wait(); close(done) }() // only the child we started
 		started = true
 		break
 	}
@@ -242,6 +220,7 @@ func (b *appWindow) Show() error {
 		return errors.New("请安装 Microsoft Edge、Google Chrome 或 Chromium 以打开 YuDesk 窗口")
 	}
 	deadline := time.Now().Add(8 * time.Second)
+	var startupErr error
 	for time.Now().Before(deadline) {
 		if c, err := b.connection(); err == nil {
 			id, err := b.target(c)
@@ -252,16 +231,34 @@ func (b *appWindow) Show() error {
 					_ = windowCommand(c, "Browser.setWindowBounds", map[string]any{"windowId": result.WindowID, "bounds": map[string]any{"width": appWindowWidth, "height": appWindowHeight}}, nil)
 				}
 				c.Close()
-				if !b.headless {
-					b.removeNativeCaption()
-				}
-				return b.monitor(id)
+				return b.finishShow(id)
 			}
+			startupErr = err
 			c.Close()
+		} else {
+			startupErr = err
 		}
 		time.Sleep(80 * time.Millisecond)
 	}
-	return errors.New("YuDesk 窗口启动超时，请重新双击打开")
+	return fmt.Errorf("YuDesk 窗口启动超时，请重新双击打开: %w", startupErr)
+}
+
+// Every entry point (launch, tray, duplicate launch and hide/reopen) must prepare
+// the native frame before reporting success. Page transitions keep this host.
+func (b *appWindow) finishShow(id string) error {
+	if !b.headless {
+		if err := b.showNativeWindow(); err != nil {
+			b.stopMonitor()
+			b.closeNativeWindow()
+			if b.stopBrowser != nil {
+				b.stopBrowser()
+				b.stopBrowser = nil
+			}
+			b.browserPID = 0
+			return err
+		}
+	}
+	return b.monitor(id)
 }
 
 func setAppWindowState(c *websocket.Conn, id, state string) error {
@@ -277,6 +274,12 @@ func setAppWindowState(c *websocket.Conn, id, state string) error {
 func (b *appWindow) Minimize() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.shell != nil {
+		return b.shell.send("minimize", "")
+	}
+	if handled, err := b.minimizeNativeWindow(); handled {
+		return err
+	}
 	if b.profile == "" {
 		return errors.New("当前页面不是 YuDesk 独立窗口")
 	}
@@ -292,24 +295,47 @@ func (b *appWindow) Minimize() error {
 	return setAppWindowState(c, id, "minimized")
 }
 
-// Close the private renderer, not the Go app. Reopening recreates the same UI
-// using the existing app state. This really removes the window and taskbar item.
+// Windows hides the actual owned host and keeps its renderer/session intact.
+// Its destruction watcher remains active, so a renderer crash cannot leave a
+// hidden, unresponsive Go app. Platforms without a host close only their UI.
 func (b *appWindow) Hide() error {
 	b.mu.Lock()
+	if b.shell != nil {
+		err := b.shell.send("hide", "")
+		b.mu.Unlock()
+		return err
+	}
+	handled, err := b.hideNativeWindow()
+	b.mu.Unlock()
+	if handled {
+		return err
+	}
+	return b.Close()
+}
+
+// Exit disposes the native host and only our dedicated browser process group.
+func (b *appWindow) Close() (result error) {
+	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.shell != nil {
+		b.shell.close()
+		b.shell = nil
+	}
 	b.stopMonitor()
+	nativeErr := b.closeNativeWindow()
 	defer func() {
+		b.browserPID = 0
 		if b.stopBrowser != nil {
-			b.stopBrowser()
+			result = errors.Join(result, b.stopBrowser())
 			b.stopBrowser = nil
 		}
 	}()
 	if b.profile == "" {
-		return nil
+		return nativeErr
 	} // no managed window in headless/CLI mode
 	c, err := b.connection()
 	if err != nil {
-		return nil
+		return nativeErr
 	} // already closed
 	defer c.Close()
 	// An empty private profile is also ours; Browser.close cannot touch the
@@ -325,11 +351,9 @@ func (b *appWindow) Hide() error {
 	// The OS-owned process group below also closes storage/crash helpers that
 	// outlive the browser's main process; it never includes the user's profile.
 	if b.stopBrowser != nil {
-		b.stopBrowser()
-		b.stopBrowser = nil
-		return nil
+		return nativeErr
 	}
-	return err
+	return errors.Join(err, nativeErr)
 }
 
 func openBrowser(address string, _ bool) error {
@@ -338,13 +362,13 @@ func openBrowser(address string, _ bool) error {
 		return err
 	}
 	u.Path = "/api/ui/show"
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), nil)
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 12 * time.Second}
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 20 * time.Second}
 	defer client.CloseIdleConnections()
 	response, err := client.Do(r)
 	if err != nil {

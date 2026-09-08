@@ -138,7 +138,9 @@ public final class MainActivity extends Activity {
         root.addView(remote,new LinearLayout.LayoutParams(-1,0,1));root.addView(remoteToolbar.bottom,new LinearLayout.LayoutParams(-1,dp(48)));
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);getWindow().setNavigationBarColor(0xff0c1420);getWindow().setStatusBarColor(0xff0c1420);immersiveRemote();content(root);remote.start();
     }
-    private void immersiveRemote(){getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LAYOUT_STABLE);}
+    // NoActionBar removes the app titlebar. Keep system bars visible, including
+    // sharing/privacy indicators when this device also hosts an incoming session.
+    private void immersiveRemote(){getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE);}
     private void rotateRemote(){if(remote==null)return;remote.cancelInput();boolean landscape=getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE;setRequestedOrientation(landscape?ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT:ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);}
     @Override public void onConfigurationChanged(Configuration configuration){super.onConfigurationChanged(configuration);if(remote!=null){remote.cancelInput();remoteToolbar.orientation(configuration.orientation==Configuration.ORIENTATION_LANDSCAPE);immersiveRemote();}}
     @Override public void onWindowFocusChanged(boolean hasFocus){super.onWindowFocusChanged(hasFocus);if(hasFocus&&remote!=null)immersiveRemote();}

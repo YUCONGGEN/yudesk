@@ -1185,6 +1185,26 @@ func (a *agent) handle(raw net.Conn) {
 		default:
 		}
 	}
+	inputs := newInputQueue(func(m protocol.Message) {
+		var err error
+		if m.Method == "input_release" {
+			err = input.release()
+		} else {
+			err = input.handleContext(ctx, m.Params)
+			if err != nil {
+				_ = input.release()
+			}
+		}
+		notifyInput(err)
+		if m.Kind == "request" {
+			if err != nil {
+				reply(protocol.Failure(m.ID, m.Method+": "+err.Error()))
+			} else {
+				reply(protocol.Response(m.ID, nil, nil))
+			}
+		}
+	})
+	defer func() { cancel(); inputs.stop() }()
 	for {
 		var m protocol.Message
 		var err error
@@ -1218,13 +1238,8 @@ func (a *agent) handle(raw net.Conn) {
 				if !sessionControl {
 					continue
 				}
-				if m.Method == "input_release" {
-					notifyInput(input.release())
-				} else if err := input.handle(m.Params); err != nil {
-					_ = input.release()
-					notifyInput(err)
-				} else {
-					notifyInput(nil)
+				if !inputs.enqueue(m) {
+					return
 				}
 			}
 			continue
@@ -1236,19 +1251,11 @@ func (a *agent) handle(raw net.Conn) {
 			callErr = errors.New("session is view-only")
 		} else if m.Method == "info" {
 			meta = map[string]any{"id": a.id, "name": a.name, "control": sessionControl, "agentControl": a.allowControl, "files": sessionControl && a.fileRoot() != "", "fileTransferV2": true, "streamV2": true, "audio": audioEnabled, "audioReason": audioReason}
-		} else if m.Method == "input" {
-			if !a.allowControl {
-				callErr = errors.New("remote control is disabled")
-			} else {
-				callErr = input.handle(m.Params)
-				if callErr != nil {
-					_ = input.release()
-				}
-				notifyInput(callErr)
+		} else if m.Method == "input" || m.Method == "input_release" {
+			if !inputs.enqueue(m) {
+				return
 			}
-		} else if m.Method == "input_release" {
-			callErr = input.release()
-			notifyInput(callErr)
+			continue
 		} else if m.Method == "ping" {
 			// Pings and legacy input retain priority over disk/helper work.
 		} else {

@@ -38,7 +38,8 @@ public final class CaptureService extends Service {
     private volatile boolean stopping;
     private boolean registered;
     private int width,height,density;
-    private long lastFrame;
+    private final CapturePacer pacer=new CapturePacer(33);
+    private final Runnable captureLatest=()->{pacer.begin();if(reader!=null&&!stopping)image(reader);};
     private String lastRequest="";
     private final BroadcastReceiver screenOff=new BroadcastReceiver(){@Override public void onReceive(Context c,Intent i){app.notice="手机已锁屏，屏幕共享已停止；解锁后需要重新授权。";stopSelf();}};
     private final DisplayManager.DisplayListener displayChanges=new DisplayManager.DisplayListener(){
@@ -74,15 +75,19 @@ public final class CaptureService extends Service {
     private DisplayMetrics metrics(){DisplayMetrics m=new DisplayMetrics();((WindowManager)getSystemService(WINDOW_SERVICE)).getDefaultDisplay().getRealMetrics(m);return m;}
     private void configureReader(int sourceWidth,int sourceHeight){
         float scale=Math.min(1f,1280f/Math.max(sourceWidth,sourceHeight));width=Math.max(2,Math.round(sourceWidth*scale));height=Math.max(2,Math.round(sourceHeight*scale));
-        reader=ImageReader.newInstance(width,height,PixelFormat.RGBA_8888,2);reader.setOnImageAvailableListener(this::image,capture);
+        reader=ImageReader.newInstance(width,height,PixelFormat.RGBA_8888,2);reader.setOnImageAvailableListener(source->{
+            if(source!=reader||stopping)return;
+            long delay=pacer.schedule(SystemClock.elapsedRealtime());
+            if(delay>=0)capture.postDelayed(captureLatest,delay);
+        },capture);
     }
     private void resize(int w,int h){if(stopping||projection==null||display==null||w<1||h<1)return;float scale=Math.min(1f,1280f/Math.max(w,h));if(Math.max(2,Math.round(w*scale))==width&&Math.max(2,Math.round(h*scale))==height)return;
-        try{display.setSurface(null);if(reader!=null)reader.close();configureReader(w,h);display.resize(width,height,density);display.setSurface(reader.getSurface());recycle();}catch(Exception ex){fail("屏幕尺寸改变后共享已停止，请重新授权");}
+        try{capture.removeCallbacks(captureLatest);pacer.reset();display.setSurface(null);if(reader!=null)reader.close();configureReader(w,h);display.resize(width,height,density);display.setSurface(reader.getSurface());recycle();}catch(Exception ex){fail("屏幕尺寸改变后共享已停止，请重新授权");}
     }
     private void image(ImageReader source){
         if(source!=reader||stopping)return;
         try(Image image=source.acquireLatestImage()){
-            if(image==null||stopping||engine==null||!engine.wantsFrame())return;long now=SystemClock.elapsedRealtime();if(now-lastFrame<33)return;lastFrame=now;
+            if(image==null||stopping||engine==null||!engine.wantsFrame())return;pacer.captured(SystemClock.elapsedRealtime());
             Image.Plane plane=image.getPlanes()[0];int stride=plane.getPixelStride(),row=plane.getRowStride();if(stride!=4||row%4!=0)throw new IllegalStateException("设备不支持 RGBA 屏幕输出");int paddedWidth=row/4;
             if(padded==null||padded.getWidth()!=paddedWidth||padded.getHeight()!=height){recycle();padded=Bitmap.createBitmap(paddedWidth,height,Bitmap.Config.ARGB_8888);frame=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);}
             ByteBuffer buffer=plane.getBuffer();buffer.rewind();

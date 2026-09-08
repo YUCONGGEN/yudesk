@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+  <title>YuDesk @VERSION@</title>
+  <organization>com.yudesk</organization>
+  <options customize="never" require-scripts="false" hostArchitectures="@MACH_ARCH@"/>
+  <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+  <volume-check>
+    <allowed-os-versions><os-version min="@MACOS_MIN@"/></allowed-os-versions>
+  </volume-check>
+  <welcome file="Welcome.html" mime-type="text/html"/>
+  <conclusion file="Conclusion.html" mime-type="text/html"/>
+  <choices-outline><line choice="desktop"/></choices-outline>
+  <choice id="desktop" visible="false" title="YuDesk">
+    <pkg-ref id="com.yudesk.desktop"/>
+  </choice>
+  <pkg-ref id="com.yudesk.desktop" version="@VERSION@.@REVISION@" onConclusion="none">YuDesk-component.pkg</pkg-ref>
+</installer-gui-script>

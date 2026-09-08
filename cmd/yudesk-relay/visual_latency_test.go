@@ -132,6 +132,7 @@ func TestNativeVisualLatency(t *testing.T) {
 			v := f.connectViewer(viewerDir, id)
 			base := f.page(filepath.Join(viewerDir, "viewer-session.url"))
 			browser := exec.Command("node", script, base)
+			browser.Env = append(os.Environ(), fmt.Sprintf("YUDESK_VISUAL_MIN_RTT_MS=%d", (2*delay).Milliseconds()))
 			output, err := browser.CombinedOutput()
 			if err != nil {
 				t.Fatalf("visual latency measurement: %v %s", err, output)

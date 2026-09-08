@@ -485,25 +485,22 @@ func (e *Engine) queueInputForSession(raw []byte, control bool, epoch uint64) er
 	if (epoch != 0 && epoch != e.incomingSession) || !control || !e.canInput || !e.state.Accessibility || !e.permittedLocked() || !e.state.Sharing {
 		return errors.New("仅观看或未开启无障碍控制权限")
 	}
-	select {
-	case e.input <- string(raw):
+	if e.input.offer(string(raw), raw, false) {
 		return nil
-	default:
-		e.releaseLocked()
-		return errors.New("输入队列已满，操作已释放，请重试")
 	}
+	e.releaseLocked()
+	return errors.New("输入队列已满，操作已释放，请重试")
 }
 
 // NextInputJSON waits on a dedicated native input thread; never blocks capture.
 func (e *Engine) NextInputJSON(timeoutMillis int) string {
-	t := time.NewTimer(time.Duration(min(1000, max(1, timeoutMillis))) * time.Millisecond)
-	defer t.Stop()
-	select {
-	case s := <-e.input:
+	ctx, cancel := context.WithTimeout(e.ctx, time.Duration(min(1000, max(1, timeoutMillis)))*time.Millisecond)
+	defer cancel()
+	if s, ok := e.input.next(ctx); ok {
 		return s
-	case <-t.C:
-		return ""
-	case <-e.ctx.Done():
+	}
+	if e.ctx.Err() != nil {
 		return `{"release":true}`
 	}
+	return ""
 }

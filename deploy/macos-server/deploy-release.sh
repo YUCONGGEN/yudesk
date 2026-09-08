@@ -24,11 +24,12 @@ backup="$root/backups/$name"
 test -f "$archive" && test ! -L "$archive"
 test ! -e "$release" && test ! -e "$backup"
 test "$(shasum -a 256 "$archive" | awk '{print $1}')" = "$archive_hash"
-files='windows-amd64/yudesk.exe linux-amd64/yudesk darwin-amd64/yudesk darwin-arm64/yudesk android/yudesk.apk SHA256SUMS.txt release.json THIRD_PARTY_NOTICES.txt'
+files='windows-amd64/yudesk.exe linux-amd64/yudesk linux-amd64/yudesk.deb darwin-amd64/yudesk darwin-amd64/yudesk.pkg darwin-arm64/yudesk darwin-arm64/yudesk.pkg android/yudesk.apk SHA256SUMS.txt release.json THIRD_PARTY_NOTICES.txt'
 tar -tzf "$archive" | while IFS= read -r entry; do
   case "$entry" in
     server/yudesk-relay|RELEASE-SHA256SUMS.txt) ;;
     downloads/windows-amd64/yudesk.exe|downloads/linux-amd64/yudesk|downloads/darwin-amd64/yudesk|downloads/darwin-arm64/yudesk|downloads/android/yudesk.apk|downloads/SHA256SUMS.txt|downloads/release.json|downloads/THIRD_PARTY_NOTICES.txt) ;;
+    downloads/linux-amd64/yudesk.deb|downloads/darwin-amd64/yudesk.pkg|downloads/darwin-arm64/yudesk.pkg) ;;
     *) echo "Unexpected archive entry: $entry" >&2; exit 1;;
   esac
 done
@@ -58,8 +59,10 @@ finish() {
       if [ -f "$backup/downloads/$file" ]; then
         cp -p "$backup/downloads/$file" "$root/downloads/$file.rollback"
         mv "$root/downloads/$file.rollback" "$root/downloads/$file"
-      elif [ "$file" = THIRD_PARTY_NOTICES.txt ]; then
-        rm -f "$root/downloads/THIRD_PARTY_NOTICES.txt"
+      else
+        # Only the fixed, validated release-file list above is eligible. Remove
+        # new installer files on rollback if the previous release had none.
+        rm -f "$root/downloads/$file"
       fi
     done
     "$root/start.sh"
@@ -82,7 +85,7 @@ for file in $files; do
   mv "$root/downloads/$file.next" "$root/downloads/$file"
 done
 "$root/start.sh"
-for route in /healthz / /download/windows-amd64/yudesk.exe /download/linux-amd64/yudesk /download/darwin-amd64/yudesk /download/darwin-arm64/yudesk /download/android/yudesk.apk /SHA256SUMS.txt /THIRD_PARTY_NOTICES.txt; do
+for route in /healthz / /download/windows-amd64/yudesk.exe /download/linux-amd64/yudesk.deb /download/darwin-amd64/yudesk.pkg /download/darwin-arm64/yudesk.pkg /download/android/yudesk.apk /SHA256SUMS.txt /THIRD_PARTY_NOTICES.txt; do
   /usr/bin/curl --noproxy '*' --connect-timeout 3 --max-time 15 -fsSI "http://127.0.0.1:8235$route" >/dev/null
 done
 for file in $files; do
