@@ -157,7 +157,33 @@ const {chromium}=require('playwright');
     assert.ok(await left.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     assert.ok((await left.locator('#connectButton').boundingBox()).height<=46);
     await left.screenshot({path:path.resolve('.smoke/unified-dashboard.png')});
+    // A signed host publishes a distinct, short-lived 9-digit meeting number.
+    // Joining is immediate but the protocol must keep it view-only.
+    await right.locator('nav [data-tab="meeting"]').click();
+    await right.locator('#startMeeting').click();
+    await right.waitForFunction(()=>/^\d{3} \d{3} \d{3}$/.test(document.getElementById('meetingCode').textContent));
+    const meetingInvite=(await right.locator('#meetingCode').textContent()).replace(/\D/g,'');
+    assert.equal(meetingInvite.length,9);
+    assert.notEqual(meetingInvite,remoteCode,'meeting number must remain distinct from the permanent device code');
+    assert.equal(await right.locator('#meetingDot').isVisible(),true);
+    await noPageScroll(right);
+    await right.screenshot({path:path.resolve('.smoke/unified-meeting-host.png')});
+    await left.locator('nav [data-tab="meeting"]').click();
+    await left.locator('#meetingInvite').fill(meetingInvite);
+    await left.locator('#joinMeeting').click({noWaitAfter:true});
+    await left.waitForFunction(()=>document.getElementById('screen')?.dataset.ready==='1');
+    assert.equal(await right.locator('#incomingApproval').isVisible(),false,'meeting number must join without host confirmation');
+    assert.equal(await left.locator('body').getAttribute('data-control'),'false');
+    assert.match(await left.locator('#status').textContent(),/仅观看/);
+    await left.locator('form[action^="/api/disconnect"] button').click();
+    await left.locator('#confirmDisconnect').click();
+    await left.waitForFunction(()=>document.getElementById('localCode')?.textContent.match(/^\d{3} \d{3} \d{3}$/));
+    await right.locator('#endMeeting').click();
+    await right.locator('#confirmAccept').click();
+    await right.waitForFunction(()=>document.getElementById('meetingActive').hidden===true);
+    assert.equal(await right.locator('#meetingDot').isVisible(),false);
     // Pause must withdraw the waiting data connection, not just change a switch.
+    await right.locator('nav [data-tab="remote"]').click();
     await right.locator('#receiving').uncheck();
     const leftEndpoint=p=>{const u=new URL(leftURL);u.pathname=p;return u;};
     const status=leftEndpoint('/api/device/status');status.searchParams.set('ids',remoteCode);
@@ -236,6 +262,6 @@ const {chromium}=require('playwright');
     await checkFooter(left);
     assert.deepEqual(errors,[]);
     assert.deepEqual(dialogs,[],'no browser alert/confirm/prompt is allowed');
-    console.log(JSON.stringify({dashboard:'compact, responsive, clickable home brand and collapsed activation passed',identity:'9-digit unique alias and 6-digit PIN passed',devices:'add/search/status/reconnect passed',session:'settings collapsed by default; hide/close removed; pinned resolution, real desktop and return passed',pause:'withdraw and restore receiving passed',window:'dashboard hide/minimize/close and session minimize-only controls passed',consent:'custom service confirmation and 60-second PIN-less local approval passed; no browser dialogs'}));
+    console.log(JSON.stringify({dashboard:'compact, responsive, clickable home brand and collapsed activation passed',identity:'9-digit unique alias and 6-digit PIN passed',meeting:'temporary 9-digit number, immediate join, screen share, view-only and expiry controls passed',devices:'add/search/status/reconnect passed',session:'settings collapsed by default; hide/close removed; pinned resolution, real desktop and return passed',pause:'withdraw and restore receiving passed',window:'dashboard hide/minimize/close and session minimize-only controls passed',consent:'custom service confirmation and 60-second PIN-less remote approval passed; no browser dialogs'}));
   }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

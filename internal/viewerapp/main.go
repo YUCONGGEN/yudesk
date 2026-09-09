@@ -293,7 +293,7 @@ type viewerConfig struct {
 	relayToken, relayAuth, relayCA        string
 	relayFingerprint, web, once, stateDir string
 	relayTLS, relayInsecure, openUI       bool
-	control, audio                        bool
+	control, audio, meeting               bool
 	fps, quality                          int
 }
 
@@ -302,6 +302,7 @@ type viewerConnectRequest struct {
 	pin      string
 	control  bool
 	audio    bool
+	meeting  bool
 	webAddr  string
 }
 
@@ -442,6 +443,7 @@ func runViewer(config viewerConfig) (resultErr error) {
 			config.pin = request.pin
 			config.control = request.control
 			config.audio = request.audio
+			config.meeting = request.meeting
 			config.web = request.webAddr
 			launcherAddr = request.webAddr
 			// The existing launcher window follows the local mode endpoint into
@@ -459,6 +461,7 @@ func runViewer(config viewerConfig) (resultErr error) {
 			}
 			config.deviceID = ""
 			config.pin = ""
+			config.meeting = false
 			config.web = launcherAddr
 			launcherMessage = "连接失败：" + err.Error()
 			continue
@@ -473,6 +476,7 @@ func runViewer(config viewerConfig) (resultErr error) {
 		config.web = outcome.webAddr
 		config.deviceID = ""
 		config.pin = ""
+		config.meeting = false
 		config.openUI = false
 	}
 }
@@ -519,7 +523,7 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 	var wire *measuredConn
 	pathOptions := peerpath.DefaultOptions()
 	pathOptions.Wrap = func(conn net.Conn) net.Conn { wire = &measuredConn{Conn: conn}; return wire }
-	pc, authResponse, route, err := peerpath.Authenticate(sessionCtx, secured, map[string]any{"pin": config.pin, "mode": mode, "audio": config.audio, "audioOnDemand": true, "interleaveV1": true, "p2pV1": config.relayAddr != ""}, pathOptions)
+	pc, authResponse, route, err := peerpath.Authenticate(sessionCtx, secured, map[string]any{"pin": config.pin, "mode": mode, "meeting": config.meeting, "audio": config.audio, "audioOnDemand": true, "interleaveV1": true, "p2pV1": config.relayAddr != ""}, pathOptions)
 	if err != nil {
 		return viewerSessionOutcome{}, fmt.Errorf("authentication failed: %w", err)
 	}
@@ -548,8 +552,13 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 			name = value
 		}
 	}
-	if err := updateHistory(viewerDirectory, connectionRecord{DeviceID: publicID, Name: name}, false); err != nil {
-		log.Printf("save connection history: %v", err)
+	// A meeting number is an ephemeral invitation, not a remembered device.
+	// Keeping the resolved full identity out of history also avoids exposing an
+	// implementation detail that the participant never entered.
+	if !config.meeting {
+		if err := updateHistory(viewerDirectory, connectionRecord{DeviceID: publicID, Name: name}, false); err != nil {
+			log.Printf("save connection history: %v", err)
+		}
 	}
 	if config.once != "" {
 		m, err := c.request("get_screenshot", nil, nil)
@@ -897,7 +906,12 @@ func runViewerLauncherWithMessage(addr string, openUI bool, stateDir, token, ini
 		}
 		deviceID := strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(r.FormValue("device_id"))), " ", "")
 		pin := strings.TrimSpace(r.FormValue("pin"))
-		if (!relay.IsDeviceCode(deviceID) && len(deviceID) != 24) || (pin != "" && (len(pin) < 6 || len(pin) > 8)) {
+		meeting := r.FormValue("meeting") == "1"
+		maxPINLength := 8
+		if meeting {
+			maxPINLength = 9
+		}
+		if (!relay.IsDeviceCode(deviceID) && len(deviceID) != 24) || (pin != "" && (len(pin) < 6 || len(pin) > maxPINLength)) {
 			http.Error(w, "设备码或 PIN 格式不正确", http.StatusBadRequest)
 			return
 		}
@@ -920,6 +934,10 @@ func runViewerLauncherWithMessage(addr string, openUI bool, stateDir, token, ini
 			return
 		}
 		listenAudio := r.FormValue("audio") == "1"
+		if meeting && (mode != "view" || !relay.IsMeetingCode(pin)) {
+			http.Error(w, "会议连接必须使用 9 位会议号并保持仅观看模式", http.StatusBadRequest)
+			return
+		}
 		if err := checkViewerPresence(r.Context(), statusServer, deviceID); err != nil {
 			http.Redirect(w, r, "/?access_token="+url.QueryEscape(token)+"&device_id="+url.QueryEscape(deviceID)+"&message="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 			return
@@ -935,7 +953,7 @@ func runViewerLauncherWithMessage(addr string, openUI bool, stateDir, token, ini
 		}
 		go func() {
 			time.Sleep(200 * time.Millisecond)
-			finish(viewerConnectRequest{deviceID: deviceID, pin: pin, control: mode == "control", audio: listenAudio, webAddr: listener.Addr().String()}, true)
+			finish(viewerConnectRequest{deviceID: deviceID, pin: pin, control: mode == "control", audio: listenAudio, meeting: meeting, webAddr: listener.Addr().String()}, true)
 		}()
 	})
 	mux.HandleFunc("/exit", func(w http.ResponseWriter, r *http.Request) {

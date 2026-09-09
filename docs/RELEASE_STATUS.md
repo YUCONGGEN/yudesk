@@ -1,5 +1,27 @@
 # 当前部署状态（2026-09-09）
 
+## 当前客户端与服务：临时会议 `meeting-20260909.1`
+
+桌面 **2.0.0** 会议版本已于 **2026-09-09 23:52（北京时间）**部署。Windows x64、Linux x64 revision 7、macOS Intel / Apple Silicon revision 7 均已更新；Android 继续使用 **2.0.0-preview.5** 原 APK，iOS 与原生鸿蒙仍暂停。
+
+- 主界面在“远程控制”和“设备列表”之间新增紧凑会议页，提供“快速会议”和“加入会议”。主持人共享本机屏幕，服务器生成独立的 9 位临时会议号；参与者输入会议号后直接加入，无需确认。会议只允许一位参与者，协议端强制仅观看，可选系统声音，不开放输入控制与文件访问。
+- 会议目录只在服务器内存保存“会议号 → 完整设备身份”映射。创建/结束必须由设备 Ed25519 身份签名并通过有效设备授权；解析采用校验证书的 TLS，按来源限流。会议号在两小时后、主持人结束、主持设备管理通道离线或服务器重启时失效；媒体仍走现有端到端加密通道，P2P 优先、失败中转。
+- 全量 `go test -short ./...`、会议相关 race 检测和 43 项窗口/弹窗回归通过。Windows 最终 EXE 双端联调实际完成“创建 9 位会议号 → 无确认入会 → 真实桌面画面 → 仅观看 → 主持人结束并使会议号失效”，固定窗口无页面滚动或溢出。Linux 包在 Ubuntu 22.04 环境构建；macOS 双架构由真实 Mac SDK 构建，arm64 helper 自检、包展开、架构与 ad-hoc strict/deep 验签通过。没有将构建成功表述为 Linux/macOS 图形真机会议验收。
+- 部署后服务 PID **82461**，服务端 SHA-256 为 `c816acd030c2cb1fc0e6668bb5d5eff4dfda3688a7b4822bc5b5f40b4e55ea49`。账号/设备/授权码保持 **0 / 11 / 9**，数据库 `quick_check` 为 `ok`，配置 SHA-256 仍为 `c2ba4b3f89c17519e05a5b9cb778c71d7a3aa1f587d42347c0ef966e5ecda24c`；TCP TLS 1.3 指纹和 UDP 8233 监听保持不变。备份位于 `/Users/yu/bin/yudesk/backups/meeting-20260909.1`。
+- 官网显示桌面版本 **2.0.0**、发布日期 **2026-09-09 23:52（北京时间）**。五个公网安装文件均完整重新下载并与本地 SHA-256 一致；Android 是原文件复核，不含本轮桌面会议入口。
+- 私有 GitHub Release 目标：[v2.0.0-meeting-20260909](https://github.com/YUCONGGEN/yudesk/releases/tag/v2.0.0-meeting-20260909)。实际源码提交和七个附件状态以该链接为准，旧 Release 不覆盖。
+
+| 产物 | SHA-256 |
+| --- | --- |
+| Windows x64 EXE | `7f306731b030056c67afcc33c5f5d1c40b8e29e7490df914aece4f97e402cd23` |
+| Linux x64 DEB | `45d16fdb7c03558499edc5551ed97495cba762d72e93380ed866f99af211025a` |
+| macOS Intel PKG | `ea808d538a1a8538bd3594f790e2c3a3983a870e7f24418382cbb7a4d05b3a33` |
+| macOS Apple Silicon PKG | `397dab466cf9a8dc63e4fdb9d2c83eeef057eec33fb83c7f15b6daa57d5c56e3` |
+| Android preview.5 APK（不变） | `2caac0f0b2e1e3d2c60978610f6f379b568629af91ac889bba0676f5554ca79d` |
+| macOS 服务端 | `c816acd030c2cb1fc0e6668bb5d5eff4dfda3688a7b4822bc5b5f40b4e55ea49` |
+
+当前会议范围是“一位主持人共享屏幕 + 一位参与者观看”，不是完整多人音视频会议：尚无摄像头、麦克风、成员列表、聊天、录制、主持权转移或 Android 会议入口。macOS 包仍未 Developer ID 签名/公证，Linux Wayland 与 Mac 图形真机需继续验收。更新前请完全退出旧 YuDesk，再下载安装新包。
+
 ## 当前服务：官网实时状态 `homepage-stats-20260909.2`
 
 下载主页已显示 **在线设备**、**参与连接**及当前会话数。在线设备按活跃设备码去重；参与连接按每个会话的控制端与被控端合计，因此始终等于会话数的两倍。主页请求时服务端直接渲染当前值，外部脚本随后立即校准，并每 **30 秒**异步更新；更新失败保留原数字并显示“更新暂缓”，不刷新整页。公开接口 `/api/public-stats` 仅返回三个非负整数，不公开设备名称、设备码、PIN 或连接地址，拒绝非 GET 请求并禁止缓存。

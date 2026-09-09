@@ -23,6 +23,7 @@ type Hello struct {
 	ID        string `json:"id"`
 	Name      string `json:"name,omitempty"`
 	PIN       string `json:"pin,omitempty"`
+	Action    string `json:"action,omitempty"`
 	Token     string `json:"token"`
 	Auth      string `json:"auth,omitempty"`
 	PublicKey []byte `json:"publicKey,omitempty"`

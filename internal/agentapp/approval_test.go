@@ -121,3 +121,43 @@ func TestConsentRejectDisconnectAndWrongPIN(t *testing.T) {
 		})
 	}
 }
+
+func TestMeetingJoinsWithoutConsentAndIsViewOnly(t *testing.T) {
+	a, c, _ := consentAgent(t)
+	a.statusMu.Lock()
+	a.meetingPIN = "654321987"
+	a.meetingUntil = time.Now().Add(time.Minute)
+	a.statusMu.Unlock()
+	if err := c.WriteMessage(protocol.Message{Kind: "request", ID: "1", Method: "auth", Params: []byte(`{"pin":"654321987","mode":"view","meeting":true}`)}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := c.ReadMessage()
+	if err != nil || !m.OK || m.Meta["control"] != false || a.approvals.Pending() != nil {
+		t.Fatalf("meeting was not view-only: %+v", m)
+	}
+}
+
+func TestMeetingRejectsControlAndExpiredInvitation(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode string
+		expires    time.Time
+	}{
+		{name: "control", mode: "control", expires: time.Now().Add(time.Minute)},
+		{name: "expired", mode: "view", expires: time.Now().Add(-time.Second)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, c, _ := consentAgent(t)
+			a.statusMu.Lock()
+			a.meetingPIN = "654321987"
+			a.meetingUntil = tc.expires
+			a.statusMu.Unlock()
+			if err := c.WriteMessage(protocol.Message{Kind: "request", ID: "1", Method: "auth", Params: []byte(`{"pin":"654321987","mode":"` + tc.mode + `","meeting":true}`)}); err != nil {
+				t.Fatal(err)
+			}
+			m, err := c.ReadMessage()
+			if err != nil || m.OK || a.approvals.Pending() != nil {
+				t.Fatalf("unsafe meeting request accepted: message=%+v err=%v", m, err)
+			}
+		})
+	}
+}

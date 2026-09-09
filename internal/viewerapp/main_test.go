@@ -280,6 +280,44 @@ func TestViewerLauncherReturnsViewOnlyAudioSelection(t *testing.T) {
 	}
 }
 
+func TestViewerLauncherReturnsTemporaryMeetingSelection(t *testing.T) {
+	status := onlineTestServer(t)
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	_ = probe.Close()
+	directory, token, err := loadViewerState(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan viewerConnectRequest, 1)
+	go func() {
+		request, _, _ := runViewerLauncherWithMessage(addr, false, directory, token, "", status.URL)
+		done <- request
+	}()
+	target := viewerUIURL(addr, token)
+	deadline := time.Now().Add(2 * time.Second)
+	for !viewerUIAvailable(target) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	connectURL := strings.Replace(target, "/?", "/connect?", 1)
+	response, err := http.Post(connectURL, "application/x-www-form-urlencoded", strings.NewReader("device_id=123456789&pin=654321987&mode=view&meeting=1&audio=1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	select {
+	case request := <-done:
+		if !request.meeting || request.control || !request.audio || request.deviceID != "123456789" || request.pin != "654321987" {
+			t.Fatalf("unexpected meeting capabilities: %+v", request)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("viewer launcher did not return the meeting request")
+	}
+}
+
 func TestIndexUsesRequestedStreamDefaults(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	serveIndex(17, 63, "test-token").ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))

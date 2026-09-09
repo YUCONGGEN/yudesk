@@ -93,6 +93,7 @@ func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hel
 		b.Lock()
 		if b.controls[hello.ID] == control {
 			delete(b.controls, hello.ID)
+			b.removeMeetingLocked(hello.ID)
 		}
 		b.Unlock()
 	}()

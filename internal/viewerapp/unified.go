@@ -1,6 +1,7 @@
 package viewerapp
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -139,6 +140,18 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		_ = json.NewEncoder(w).Encode(d.device.Status())
 		return true
 	}
+	if path == "/api/local/meeting/resolve" && r.Method == http.MethodGet {
+		ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+		defer cancel()
+		result, err := relay.ResolveMeeting(ctx, d.config.relayAddr, relay.DialOptions{TLS: d.config.relayTLS, CAFile: d.config.relayCA, Fingerprint: d.config.relayFingerprint, Insecure: d.config.relayInsecure}, strings.TrimSpace(r.URL.Query().Get("code")))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return true
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+		return true
+	}
 	if path == "/api/devices" && r.Method == http.MethodGet {
 		records, err := loadHistory(d.directory)
 		if err != nil {
@@ -186,6 +199,10 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		err = d.device.SetFiles(p.Enabled)
 	case "/api/local/pin/rotate":
 		_, err = d.device.RotatePIN()
+	case "/api/local/meeting/start":
+		_, err = d.device.StartMeeting(2 * time.Hour)
+	case "/api/local/meeting/end":
+		d.device.EndMeeting()
 	case "/api/local/activate":
 		err = d.device.Activate(strings.TrimSpace(p.Key))
 	case "/api/local/device/add":

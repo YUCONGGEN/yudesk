@@ -30,6 +30,12 @@ type Device struct {
 	identityDir string
 	dialMu      sync.Mutex
 	dialCancel  context.CancelFunc
+	meetingMu   sync.Mutex
+	context     context.Context
+	relayAddr   string
+	transport   relay.DialOptions
+	meetingOpen func(context.Context) (relay.MeetingInfo, error)
+	meetingEnd  func(context.Context) error
 }
 
 type DeviceStatus struct {
@@ -49,6 +55,9 @@ type DeviceStatus struct {
 	ActiveUntil   string            `json:"activeUntil"`
 	Files         bool              `json:"files"`
 	FileDirectory string            `json:"fileDirectory"`
+	Meeting       bool              `json:"meeting"`
+	MeetingCode   string            `json:"meetingCode,omitempty"`
+	MeetingUntil  time.Time         `json:"meetingUntil,omitempty"`
 }
 
 func StartEmbedded(parent context.Context, o EmbeddedOptions) (*Device, error) {
@@ -102,7 +111,7 @@ func StartEmbedded(parent context.Context, o EmbeddedOptions) (*Device, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	d := &Device{a: a, cancel: cancel, done: make(chan struct{}), server: o.Server, identityDir: o.Directory}
+	d := &Device{a: a, cancel: cancel, done: make(chan struct{}), server: o.Server, identityDir: o.Directory, context: ctx, relayAddr: o.Relay, transport: o.Transport}
 	d.receiving.Store(true)
 	go func() {
 		select {
@@ -185,6 +194,11 @@ func (d *Device) Status() DeviceStatus {
 	s := DeviceStatus{ID: a.id, Code: a.deviceCode, PIN: a.pin, Name: a.name, Status: a.relayStatus, Message: a.uiMessage, Online: a.managementOnline, Connected: a.connected, Active: a.activeUntil.After(time.Now()), ActiveUntil: "未激活"}
 	s.PINSynced = a.managementOnline && a.reportedPIN == a.pin
 	s.PINRevision = a.pinRevision
+	if a.managementOnline && a.meetingUntil.After(time.Now()) && relay.IsMeetingCode(a.meetingPIN) {
+		s.Meeting = true
+		s.MeetingCode = a.meetingPIN
+		s.MeetingUntil = a.meetingUntil
+	}
 	if s.Active {
 		s.ActiveUntil = displayLicenseExpiry(a.activeUntil)
 	}
@@ -234,6 +248,143 @@ func (d *Device) RotatePIN() (string, error) {
 		a.clearAuthenticationFailures()
 	}
 	return pin, err
+}
+
+// StartMeeting publishes only a short-lived lookup to the authenticated relay.
+// The same random code is then checked again inside the end-to-end channel.
+func (d *Device) StartMeeting(duration time.Duration) (string, error) {
+	if duration <= 0 || duration > 8*time.Hour {
+		return "", errors.New("会议时长无效")
+	}
+	d.meetingMu.Lock()
+	defer d.meetingMu.Unlock()
+	d.SetReceiving(true)
+	a := d.a
+	a.statusMu.Lock()
+	now := time.Now()
+	if a.quitting() {
+		a.statusMu.Unlock()
+		return "", errors.New("设备已停止，无法创建会议")
+	}
+	if !a.activeUntil.After(now) {
+		a.statusMu.Unlock()
+		return "", errors.New("设备尚未激活，无法创建会议")
+	}
+	if !a.managementOnline {
+		a.statusMu.Unlock()
+		return "", errors.New("服务器尚未连接，请稍后再创建会议")
+	}
+	if a.connected {
+		a.statusMu.Unlock()
+		return "", errors.New("当前正在远程连接，请结束连接后再创建会议")
+	}
+	deviceID, key := a.id, a.privateKey
+	a.statusMu.Unlock()
+	baseContext := d.context
+	if baseContext == nil {
+		baseContext = context.Background()
+	}
+	requestCtx, cancel := context.WithTimeout(baseContext, 10*time.Second)
+	defer cancel()
+	var info relay.MeetingInfo
+	var err error
+	if d.meetingOpen != nil {
+		info, err = d.meetingOpen(requestCtx)
+	} else {
+		info, err = relay.OpenMeeting(requestCtx, d.relayAddr, d.transport, deviceID, key)
+	}
+	if err != nil {
+		return "", err
+	}
+	if !info.Active || !relay.IsMeetingCode(info.Code) || !info.ExpiresAt.After(time.Now()) {
+		return "", errors.New("服务器未能创建有效会议")
+	}
+	a.statusMu.Lock()
+	if a.quitting() || a.connected || !a.activeUntil.After(time.Now()) {
+		a.statusMu.Unlock()
+		d.closeMeetingDirectory()
+		return "", errors.New("设备状态已改变，请稍后重新创建会议")
+	}
+	a.meetingGeneration++
+	generation := a.meetingGeneration
+	a.meetingPIN = info.Code
+	a.meetingUntil = info.ExpiresAt
+	a.statusMu.Unlock()
+	time.AfterFunc(time.Until(info.ExpiresAt), func() { d.expireMeeting(generation) })
+	return info.Code, nil
+}
+
+func (d *Device) EndMeeting() {
+	d.meetingMu.Lock()
+	wasOpen := d.clearMeetingLocked(0)
+	d.meetingMu.Unlock()
+	if wasOpen {
+		d.closeMeetingDirectory()
+	}
+}
+
+func (d *Device) expireMeeting(generation uint64) {
+	d.meetingMu.Lock()
+	wasOpen := d.clearMeetingLocked(generation)
+	d.meetingMu.Unlock()
+	if wasOpen {
+		d.closeMeetingDirectory()
+	}
+}
+
+// A zero generation means an explicit stop; otherwise only the timer that
+// created the current invitation may expire it.
+func (d *Device) clearMeetingLocked(generation uint64) bool {
+	a := d.a
+	a.statusMu.Lock()
+	if generation != 0 && (a.meetingGeneration != generation || a.meetingUntil.After(time.Now())) {
+		a.statusMu.Unlock()
+		return false
+	}
+	wasOpen := a.meetingUntil.After(time.Time{}) || a.meetingPIN != ""
+	meetingSession := a.meetingSession
+	a.meetingGeneration++
+	a.meetingPIN = ""
+	a.meetingUntil = time.Time{}
+	a.statusMu.Unlock()
+	if !wasOpen {
+		return false
+	}
+	if meetingSession {
+		a.connectionMu.Lock()
+		if a.relayConnection != nil {
+			_ = a.relayConnection.Close()
+		}
+		a.connectionMu.Unlock()
+	}
+	return true
+}
+
+func (d *Device) closeMeetingDirectory() {
+	requestCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if d.meetingEnd != nil {
+		_ = d.meetingEnd(requestCtx)
+		return
+	}
+	_ = relay.CloseMeeting(requestCtx, d.relayAddr, d.transport, d.a.id, d.a.privateKey)
+}
+
+func (a *agent) meetingAllowed(pin string) bool {
+	a.statusMu.RLock()
+	defer a.statusMu.RUnlock()
+	return a.meetingUntil.After(time.Now()) && a.meetingPIN != "" && len(pin) == len(a.meetingPIN) && subtleConstantTime(pin, a.meetingPIN)
+}
+
+func subtleConstantTime(left, right string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	var different byte
+	for i := range len(left) {
+		different |= left[i] ^ right[i]
+	}
+	return different == 0
 }
 func (d *Device) Activate(key string) error { _, err := d.a.activate(d.server, key); return err }
 

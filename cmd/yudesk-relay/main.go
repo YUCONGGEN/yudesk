@@ -62,6 +62,8 @@ type broker struct {
 	accounts       *account.Store
 	deviceLicenses bool
 	lookups        map[string]lookupWindow
+	meetings       map[string]meetingRoom
+	meetingDevices map[string]string
 }
 
 type adminFlash struct {
@@ -234,12 +236,20 @@ func (b *broker) handle(c net.Conn) {
 		return
 	}
 	var h relay.Hello
-	if json.Unmarshal([]byte(parts[1]), &h) != nil || h.ID == "" || (h.Role != "agent" && h.Role != "viewer" && h.Role != "control" && h.Role != "resolve") {
+	if json.Unmarshal([]byte(parts[1]), &h) != nil || h.ID == "" || (h.Role != "agent" && h.Role != "viewer" && h.Role != "control" && h.Role != "resolve" && h.Role != "meeting" && h.Role != "meeting-resolve") {
 		return
 	}
 	h.ID = strings.ToUpper(h.ID)
 	if h.Role == "resolve" {
 		b.handleResolve(c, h.ID)
+		return
+	}
+	if h.Role == "meeting-resolve" {
+		b.handleMeetingResolve(c, h.ID)
+		return
+	}
+	if h.Role == "meeting" {
+		b.handleMeeting(c, r, h)
 		return
 	}
 	if h.Role == "control" {

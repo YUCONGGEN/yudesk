@@ -83,6 +83,10 @@ type agent struct {
 	licenseExpiry           time.Time
 	managed                 bool
 	managementOnline        bool // protected by statusMu
+	meetingPIN              string
+	meetingUntil            time.Time
+	meetingGeneration       uint64
+	meetingSession          bool
 	terminationMu           sync.Mutex
 }
 
@@ -919,6 +923,7 @@ func (a *agent) handle(raw net.Conn) {
 	var auth struct {
 		PIN           string `json:"pin"`
 		Mode          string `json:"mode"`
+		Meeting       bool   `json:"meeting"`
 		Audio         bool   `json:"audio"`
 		AudioOnDemand bool   `json:"audioOnDemand"`
 		InterleaveV1  bool   `json:"interleaveV1"`
@@ -938,6 +943,17 @@ func (a *agent) handle(raw net.Conn) {
 	type firstReadResult struct {
 		message protocol.Message
 		err     error
+	}
+	if auth.Meeting {
+		if auth.Mode != "view" {
+			_ = c.WriteMessage(protocol.Failure(first.ID, "会议仅支持观看模式"))
+			return
+		}
+		if !a.meetingAllowed(auth.PIN) {
+			a.recordAuthenticationFailure()
+			_ = c.WriteMessage(protocol.Failure(first.ID, "会议号无效或已过期"))
+			return
+		}
 	}
 	var afterApproval chan firstReadResult
 	if auth.PIN == "" {
@@ -968,12 +984,26 @@ func (a *agent) handle(raw net.Conn) {
 			return
 		}
 		close(ready)
-	} else if !a.matchesPIN(auth.PIN) {
+	} else if !auth.Meeting && !a.matchesPIN(auth.PIN) {
 		a.recordAuthenticationFailure()
 		_ = c.WriteMessage(protocol.Failure(first.ID, "invalid PIN"))
 		return
 	}
+	if auth.Meeting && !a.meetingAllowed(auth.PIN) {
+		_ = c.WriteMessage(protocol.Failure(first.ID, "会议已结束或会议号已过期"))
+		return
+	}
 	a.clearAuthenticationFailures()
+	if auth.Meeting {
+		a.statusMu.Lock()
+		a.meetingSession = true
+		a.statusMu.Unlock()
+		defer func() {
+			a.statusMu.Lock()
+			a.meetingSession = false
+			a.statusMu.Unlock()
+		}()
+	}
 	_ = secured.SetReadDeadline(time.Time{})
 	sessionControl := a.allowControl && !strings.EqualFold(strings.TrimSpace(auth.Mode), "view")
 	audioAvailable, audioReason := systemaudio.Available()
