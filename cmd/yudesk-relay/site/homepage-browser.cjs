@@ -13,6 +13,7 @@ const { chromium } = require('playwright');
   try {
     for (const [width, height] of [[1440, 1000], [1024, 768], [768, 1024], [390, 844], [320, 740]]) {
       const context = await browser.newContext({ viewport: { width, height }, reducedMotion: 'reduce' });
+      let statsRequests = 0;
       await context.route('**/*', route => {
         const url = new URL(route.request().url());
         if (url.origin === new URL(origin).origin) return route.continue();
@@ -20,12 +21,18 @@ const { chromium } = require('playwright');
         return route.abort();
       });
       const page = await context.newPage();
+      page.on('request', request => { if (new URL(request.url()).pathname === '/api/public-stats') statsRequests++; });
       page.on('pageerror', error => failures.push(error.message));
       page.on('console', message => { if (message.type() === 'error') failures.push(message.text()); });
       page.on('response', response => { if (response.status() >= 400) failures.push(response.status() + ' ' + response.url()); });
       await page.goto(origin, { waitUntil: 'networkidle' });
       assert.equal(await page.locator('h1').count(), 1);
       assert.equal(await page.locator('.download-grid .download').count(), 5);
+      assert.equal(await page.locator('.live-status').count(), 1);
+      assert.match(await page.locator('#live-online').textContent(), /^\d+$/);
+      assert.match(await page.locator('#live-connected').textContent(), /^\d+$/);
+      assert.match(await page.locator('#live-sessions').textContent(), /^\d+ 个会话/);
+      assert.ok(statsRequests >= 1, width + ': live statistics were not refreshed');
       const firstDownload = await page.locator('.download-grid .download').first().boundingBox();
       assert.ok(firstDownload && firstDownload.y + firstDownload.height < height, width + ': first download must be above fold');
       assert.equal(await page.locator('.steps>li').count(), 3);

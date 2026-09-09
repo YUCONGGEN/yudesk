@@ -151,7 +151,7 @@ func main() {
 		go serveAccounts(b, *httpAddr, *downloads, *httpTLS, *certFile, *keyFile, fingerprint, *publicRelay, *publicAccount, adminKey)
 	}
 	if *downloadHTTP != "" {
-		go serveDownloads(*downloadHTTP, *downloads, fingerprint, *publicRelay, *publicAccount, *deviceLicenses)
+		go serveDownloads(b, *downloadHTTP, *downloads, fingerprint, *publicRelay, *publicAccount, *deviceLicenses)
 	}
 	for {
 		c, e := ln.Accept()
@@ -475,7 +475,7 @@ func serveAccounts(b *broker, addr, downloadDir string, useTLS bool, certFile, k
 	}
 	registerDownloadRoutes(mux, downloadDir, func(r *http.Request) guideConfig {
 		return makeGuideConfig(r, scheme, fingerprint, publicRelay, publicAccount, b.deviceLicenses)
-	})
+	}, b.homepageStats)
 	if b.deviceLicenses {
 		registerStandaloneDeviceRoutes(mux, b, adminKey)
 	}
@@ -1520,11 +1520,11 @@ func formatAdminDuration(duration time.Duration) string {
 	return fmt.Sprintf("%d 小时", hours)
 }
 
-func serveDownloads(addr, downloadDir, fingerprint, publicRelay, publicAccount string, deviceMode bool) {
+func serveDownloads(b *broker, addr, downloadDir, fingerprint, publicRelay, publicAccount string, deviceMode bool) {
 	mux := http.NewServeMux()
 	registerDownloadRoutes(mux, downloadDir, func(r *http.Request) guideConfig {
 		return makeGuideConfig(r, "http", fingerprint, publicRelay, publicAccount, deviceMode)
-	})
+	}, b.homepageStats)
 	log.Printf("HTTP download homepage (no account API): http://%s", addr)
 	server := &http.Server{Addr: addr, Handler: securityHeaders(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	if err := server.ListenAndServe(); err != nil {
@@ -1532,14 +1532,27 @@ func serveDownloads(addr, downloadDir, fingerprint, publicRelay, publicAccount s
 	}
 }
 
-func registerDownloadRoutes(mux *http.ServeMux, downloadDir string, guide func(*http.Request) guideConfig) {
+func registerDownloadRoutes(mux *http.ServeMux, downloadDir string, guide func(*http.Request) guideConfig, statsProviders ...func() homepageStats) {
+	stats := func() homepageStats { return homepageStats{} }
+	if len(statsProviders) > 0 && statsProviders[0] != nil {
+		stats = statsProviders[0]
+	}
 	registerHomepageSite(mux)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		serveDownloadHome(w, downloadDir)
+		serveDownloadHome(w, downloadDir, stats())
+	})
+	mux.HandleFunc("/api/public-stats", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		writeJSON(w, stats())
 	})
 	mux.HandleFunc("/guide", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/guide" {
@@ -1748,7 +1761,33 @@ func downloadPlatforms(root string) []downloadPlatform {
 	return result
 }
 
-func serveDownloadHome(w http.ResponseWriter, root string) {
+type homepageStats struct {
+	OnlineDevices    int `json:"onlineDevices"`
+	ConnectedDevices int `json:"connectedDevices"`
+	ActiveSessions   int `json:"activeSessions"`
+}
+
+func (b *broker) homepageStats() homepageStats {
+	b.Lock()
+	defer b.Unlock()
+	online := make(map[string]struct{}, len(b.controls)+len(b.devices)+len(b.active))
+	for deviceID, control := range b.controls {
+		if control != nil && !control.stopping {
+			online[deviceID] = struct{}{}
+		}
+	}
+	for deviceID, device := range b.devices {
+		if device.role == "agent" {
+			online[deviceID] = struct{}{}
+		}
+	}
+	for deviceID := range b.active {
+		online[deviceID] = struct{}{}
+	}
+	return homepageStats{OnlineDevices: len(online), ConnectedDevices: len(b.active) * 2, ActiveSessions: len(b.active)}
+}
+
+func serveDownloadHome(w http.ResponseWriter, root string, snapshots ...homepageStats) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
@@ -1756,7 +1795,11 @@ func serveDownloadHome(w http.ResponseWriter, root string) {
 	if release, err := releaseinfo.Read(root); err == nil {
 		version, date = release.Version, release.Date()+"（北京时间）"
 	}
-	_ = downloadPage.Execute(w, map[string]any{"Platforms": downloadPlatforms(root), "Checksums": regularFile(filepath.Join(root, "SHA256SUMS.txt")), "Notices": regularFile(filepath.Join(root, "THIRD_PARTY_NOTICES.txt")), "Version": version, "PublishedAt": date})
+	stats := homepageStats{}
+	if len(snapshots) > 0 {
+		stats = snapshots[0]
+	}
+	_ = downloadPage.Execute(w, map[string]any{"Platforms": downloadPlatforms(root), "Checksums": regularFile(filepath.Join(root, "SHA256SUMS.txt")), "Notices": regularFile(filepath.Join(root, "THIRD_PARTY_NOTICES.txt")), "Version": version, "PublishedAt": date, "Stats": stats})
 }
 
 type guideConfig struct {

@@ -15,7 +15,7 @@ import (
 // Keep the website self-contained. Only the explicit public assets below are
 // served; HTML sources and any other files in site are never downloadable.
 //
-//go:embed site/homepage.css site/desktop-home.png site/desktop-devices.png site/desktop-approval.png site/beian.svg
+//go:embed site/homepage.css site/homepage.js site/desktop-home.png site/desktop-devices.png site/desktop-approval.png site/beian.svg
 var homepageFiles embed.FS
 
 //go:embed site/homepage.html
@@ -33,13 +33,15 @@ var homepageAssets = loadHomepageAssets()
 
 func loadHomepageAssets() map[string]homepageAsset {
 	assets := make(map[string]homepageAsset)
-	for _, name := range []string{"homepage.css", "desktop-home.png", "desktop-devices.png", "desktop-approval.png", "beian.svg"} {
+	for _, name := range []string{"homepage.css", "homepage.js", "desktop-home.png", "desktop-devices.png", "desktop-approval.png", "beian.svg"} {
 		data, err := homepageFiles.ReadFile("site/" + name)
 		if err != nil {
 			continue
 		}
 		asset := homepageAsset{data: data, contentType: "text/css; charset=utf-8", version: fmt.Sprintf("%x", sha256.Sum256(data))[:16]}
-		if name == "beian.svg" {
+		if name == "homepage.js" {
+			asset.contentType = "text/javascript; charset=utf-8"
+		} else if name == "beian.svg" {
 			asset.contentType = "image/svg+xml"
 		} else if strings.HasSuffix(name, ".png") {
 			config, err := png.DecodeConfig(bytes.NewReader(data))

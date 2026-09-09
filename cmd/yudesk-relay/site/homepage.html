@@ -8,6 +8,7 @@
   <title>YuDesk · 下载与产品介绍</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='11' fill='%231478f7'/%3E%3Ctext x='20' y='27' text-anchor='middle' fill='white' font-size='23' font-family='system-ui,sans-serif'%3EYu%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="{{siteURL "homepage.css"}}">
+  <script src="{{siteURL "homepage.js"}}" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#downloads">跳到下载区</a>
@@ -24,6 +25,13 @@
       <div><p class="eyebrow">YUDESK / 远程桌面</p><h1 id="download-title">连接另一台电脑。<br class="mobile-break">从这里开始。</h1><p class="lead">一个程序，控制与被控合一。无需注册用户账号。</p></div>
       <div class="release"><span class="release-label">桌面客户端{{if .Version}} <strong>v{{.Version}}</strong>{{end}}</span><p class="release-date">发布日期：{{.PublishedAt}}</p><a class="text-link" href="/guide">查看完整使用教程 <span aria-hidden="true">↗</span></a></div>
     </div>
+    <section class="live-status" aria-label="服务器实时状态">
+      <div class="live-heading"><span class="live-dot" aria-hidden="true"></span><div><strong>服务器实时状态</strong><small id="live-updated">每 30 秒自动更新</small></div></div>
+      <dl class="live-counts">
+        <div><dt>在线设备</dt><dd id="live-online">{{.Stats.OnlineDevices}}</dd><small>当前已连接服务器</small></div>
+        <div><dt>参与连接</dt><dd id="live-connected">{{.Stats.ConnectedDevices}}</dd><small id="live-sessions">{{.Stats.ActiveSessions}} 个会话，控制端与被控端合计</small></div>
+      </dl>
+    </section>
     <div class="download-heading" id="downloads"><h2>选择你的平台</h2><span>两端都需安装并打开 YuDesk</span></div>
     <div class="download-grid">
       {{range .Platforms}}<section class="download-card"><div class="platform-heading"><h3>{{.Name}}</h3><p class="detail">{{.Detail}}</p></div>{{range .Links}}<div class="download-item"><div class="download-copy"><strong>{{.Name}}{{if $.Version}} {{$.Version}}{{end}}</strong><small>{{.Description}}{{if .Size}} · {{.Size}}{{end}}</small></div>{{if .Available}}<a class="button download" href="/download/{{.Path}}?v={{.Version}}" aria-label="下载 {{.Name}} {{.Path}}">下载 <span aria-hidden="true">↓</span></a>{{else}}<span class="missing">暂未上传</span>{{end}}</div>{{end}}</section>{{end}}

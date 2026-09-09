@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"html/template"
 	"net/http"
 	"net/http/httptest"
@@ -48,6 +49,8 @@ func TestHomepageContentAndDownloads(t *testing.T) {
 	for _, want := range []string{
 		"v2.0.0", "2026-09-08 08:00", "（北京时间）", "Android 预览版",
 		`id="downloads"`, `id="about-title"`, `id="features"`, `id="how-it-works"`, `id="support"`,
+		`aria-label="服务器实时状态"`, `id="live-online">0`, `id="live-connected">0`, "每 30 秒自动更新",
+		`src="` + homepageAssetURL("homepage.js") + `"`,
 		`href="/guide"`, `href="/admin"`, `href="/SHA256SUMS.txt"`, "安装包 SHA-256 校验和",
 		`href="/THIRD_PARTY_NOTICES.txt"`, "第三方许可",
 		"真实客户端界面，设备信息为演示数据", "非实测截图", "尚未实现系统声音采集",
@@ -70,7 +73,7 @@ func TestHomepageContentAndDownloads(t *testing.T) {
 			}
 		}
 	}
-	for _, unwanted := range []string{".smoke/", "unified-session.png", "<script", "cdn.", "fonts.googleapis", "#ZgotmplZ"} {
+	for _, unwanted := range []string{".smoke/", "unified-session.png", "<script>", "cdn.", "fonts.googleapis", "#ZgotmplZ"} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("unexpected home content: %s", unwanted)
 		}
@@ -110,7 +113,7 @@ func TestHomepageSiteRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	registerDownloadRoutes(mux, t.TempDir(), func(*http.Request) guideConfig { return guideConfig{} })
 	handler := securityHeaders(mux)
-	for _, name := range []string{"homepage.css", "desktop-home.png", "desktop-devices.png", "desktop-approval.png", "beian.svg"} {
+	for _, name := range []string{"homepage.css", "homepage.js", "desktop-home.png", "desktop-devices.png", "desktop-approval.png", "beian.svg"} {
 		t.Run(name, func(t *testing.T) {
 			asset, ok := homepageAssets[name]
 			if !ok {
@@ -178,13 +181,60 @@ func TestHomepageEmbedExcludesQA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 5 {
+	if len(entries) != 6 {
 		t.Fatalf("unexpected production asset count: %d", len(entries))
 	}
 	for _, entry := range entries {
 		if _, ok := homepageAssets[entry.Name()]; !ok || entry.IsDir() {
 			t.Errorf("non-public file embedded: %s", entry.Name())
 		}
+	}
+}
+
+func TestHomepageLiveStats(t *testing.T) {
+	b := &broker{
+		controls: map[string]*deviceControl{
+			"CONTROL": {},
+			"STOPPED": {stopping: true},
+		},
+		devices: map[string]waiting{
+			"CONTROL": {role: "agent"},
+			"WAITING": {role: "agent"},
+			"VIEWER":  {role: "viewer"},
+		},
+		active: map[string]activeSession{
+			"WAITING": {},
+			"ACTIVE":  {},
+		},
+	}
+	stats := b.homepageStats()
+	if stats.OnlineDevices != 3 || stats.ConnectedDevices != 4 || stats.ActiveSessions != 2 {
+		t.Fatalf("unexpected public stats: %+v", stats)
+	}
+
+	home := httptest.NewRecorder()
+	serveDownloadHome(home, homepageTestDownloads(t), stats)
+	for _, want := range []string{`id="live-online">3`, `id="live-connected">4`, `id="live-sessions">2 个会话，控制端与被控端合计`} {
+		if !strings.Contains(home.Body.String(), want) {
+			t.Errorf("homepage missing live statistic %q", want)
+		}
+	}
+
+	mux := http.NewServeMux()
+	registerDownloadRoutes(mux, t.TempDir(), func(*http.Request) guideConfig { return guideConfig{} }, b.homepageStats)
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/public-stats", nil))
+	var decoded homepageStats
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decoded) != nil || decoded != stats {
+		t.Fatalf("unexpected public stats response: status=%d decoded=%+v body=%s", response.Code, decoded, response.Body.String())
+	}
+	if !strings.Contains(response.Header().Get("Cache-Control"), "no-store") {
+		t.Fatal("public stats response must not be cached")
+	}
+	post := httptest.NewRecorder()
+	mux.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/api/public-stats", nil))
+	if post.Code != http.StatusMethodNotAllowed || post.Header().Get("Allow") != http.MethodGet {
+		t.Fatal("public stats endpoint accepts writes")
 	}
 }
 
