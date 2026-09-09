@@ -138,6 +138,43 @@ def check_layout(helper,pane_name):
     return info
 
 
+def check_drag(helper):
+    # Measure real WM movement, including presses after a move grab consumed
+    # the release. DOM dispatch alone cannot validate this path.
+    spec=importlib.util.spec_from_file_location('drag_fixture',Path(__file__).with_name('test-drag.py'))
+    module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    windows=module.xdo('search','--onlyvisible','--pid',helper.process.pid).splitlines()
+    assert len(windows)==1,'drag targets only the fixture helper window'
+    window=windows[0]; module.xdo('windowactivate','--sync',window)
+    original=module.geometry(window)
+    helper.evaluate("window.__dragInputs=[];document.addEventListener('mousedown',e=>window.__dragInputs.push({trusted:e.isTrusted,button:e.button}),true);true")
+    samples=[]
+    for _ in range(4):
+        module.xdo('windowmove','--sync',window,original['X'],original['Y'])
+        point=helper.evaluate("(()=>{const r=document.getElementById('pageTitle').getBoundingClientRect();return [Math.round(r.x+r.width/2),Math.round(r.y+r.height/2)]})()")
+        helper.evaluate('window.__dragInputs=[];true')
+        module.xdo('mousemove','--sync','--window',window,*point); time.sleep(.35)
+        before=module.geometry(window)
+        try:
+            module.xdo('mousedown',1); time.sleep(.15)
+            for dx,dy in ((30,15),(60,30),(90,45)):
+                module.xdo('mousemove','--sync',before['X']+point[0]+dx,before['Y']+point[1]+dy); time.sleep(.08)
+        finally: module.xdo('mouseup',1)
+        time.sleep(.2); after=module.geometry(window)
+        module.xdo('mousemove','--sync',after['X']+point[0]+20,after['Y']+point[1]+10)
+        time.sleep(.1)
+        inputs=helper.evaluate('window.__dragInputs')
+        assert any(e['trusted'] and e['button']==0 for e in inputs),inputs
+        assert after['X']-before['X']==90 and after['Y']-before['Y']==45,(before,after,inputs)
+        assert after['WIDTH']==before['WIDTH'] and after['HEIGHT']==before['HEIGHT']
+        assert module.geometry(window)==after,'window followed pointer after release'
+        samples.append({'before':before,'after':after,'inputs':inputs})
+    module.xdo('windowmove','--sync',window,original['X'],original['Y'])
+    assert helper.evaluate('window.webkit?.messageHandlers?.yudeskDrag===undefined')
+    print('PASS real dashboard: 4 trusted XTEST drags each move (90,45), stable size, release stops movement; native bridge remains isolated',flush=True)
+    return samples
+
+
 def check_fullscreen(helper):
     # Exercise the exact current session.js handler, not a newly invented one.
     # Other session services (input/frames/relay) intentionally remain absent.
@@ -223,6 +260,7 @@ def run(binary,output):
             path=output/('webkit-'+name+'.png'); helper.send('test-snapshot',str(path)); helper.event('test_snapshot_saved')
             assert path.stat().st_size>5000
             print('PASS real WebKit '+pane+': no scroll/clipping, footer visible, package-managed installed mode, no JS errors; '+path.name,flush=True)
+        report['drag']=check_drag(helper)
         report['fullscreen']=check_fullscreen(helper)
         # Keep the real periodic status loops alive long enough to exercise them.
         time.sleep(3.2)

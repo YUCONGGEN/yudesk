@@ -85,6 +85,20 @@ for file in $files; do
   mv "$root/downloads/$file.next" "$root/downloads/$file"
 done
 "$root/start.sh"
+# start.sh returning a PID does not mean the HTTP listener has bound yet.
+# Keep rollback armed, but allow bounded startup time before checking assets.
+ready=0
+attempt=0
+while [ "$attempt" -lt 20 ]; do
+  if /usr/bin/curl --noproxy '*' --connect-timeout 1 --max-time 1 -fsS 'http://127.0.0.1:8235/healthz' >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  kill -0 "$(cat "$root/run/yudesk-relay.pid")" || break
+  attempt=$((attempt + 1))
+  sleep 1
+done
+test "$ready" = 1
 for route in /healthz / /download/windows-amd64/yudesk.exe /download/linux-amd64/yudesk.deb /download/darwin-amd64/yudesk.pkg /download/darwin-arm64/yudesk.pkg /download/android/yudesk.apk /SHA256SUMS.txt /THIRD_PARTY_NOTICES.txt; do
   /usr/bin/curl --noproxy '*' --connect-timeout 3 --max-time 15 -fsSI "http://127.0.0.1:8235$route" >/dev/null
 done

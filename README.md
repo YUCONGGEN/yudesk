@@ -1,5 +1,7 @@
 # YuDesk 2.0.0
 
+2026-09-09 **12:44（北京时间）窗口拖动修复批次 `drag-20260909.1` 已部署**：主界面、远程页和连接过渡页使用可拖动顶部区域，Windows 原生输入与 Linux 连续拖动回归通过；macOS 同步修复事件桥并更新双架构安装包，真机拖动尚待验证。更新前请完全退出旧程序，再安装新包。详情见 [拖动修复与验证边界](docs/WINDOW_DRAG_20260909.md)。Android 保持 preview.5，未因桌面拖动改动重新发布移动端代码。
+
 本版提供只填设备码的 **60 秒连接审批**、Windows 托盘及紧凑窗口、官网产品介绍和脱敏功能截图。2026-09-09 跨平台更新已部署：默认安装版、Windows/macOS/Linux 原生无系统标题栏窗口及 Android 输入/画面交接优化；下载校验与验证范围见 [发布状态](docs/RELEASE_STATUS.md)、[跨平台集成](docs/ALL_PLATFORM_RELEASE_20260909.md)。Android 双向端保持 **preview.5 预览版**，构建和真机验收边界见 [Android 说明](docs/ANDROID.md)；iOS 暂停。
 
 当前界面与声音说明：[紧凑窗口及关闭行为](docs/WINDOW_LIFECYCLE.md)、[按需系统声音及平台限制](docs/AUDIO.md)。设备授权在“设置”内默认折叠；不提供隐私屏或虚拟屏。

@@ -41,8 +41,8 @@ struct LocalOrigin: Equatable {
 
 private let dragScript = """
 (() => {
-  document.addEventListener('pointerdown', e => {
-    if (!e.isTrusted || e.button !== 0 || !e.isPrimary || !(e.target instanceof Element)) return;
+  document.addEventListener('mousedown', e => {
+    if (!e.isTrusted || e.button !== 0 || !(e.target instanceof Element)) return;
     if (!e.target.closest('[data-window-drag]') || e.target.closest('button,a,input,label,select,textarea,form,[contenteditable],[role="button"]')) return;
     window.webkit.messageHandlers.yudeskDrag.postMessage('drag');
   }, true);

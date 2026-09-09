@@ -152,6 +152,7 @@ def run(test_binary, production_binary, output):
         print('PASS 860x600 frameless, hide/show preserves page, minimize/restore',flush=True)
         before=p.state()
         p.evaluate("document.querySelector('header').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,isPrimary:true})); true")
+        p.evaluate("document.querySelector('header').dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0})); true")
         after=p.state(); assert (before['x'],before['y'])==(after['x'],after['y'])
         assert p.evaluate("window.webkit?.messageHandlers?.yudeskDrag === undefined")
         print('PASS synthetic drag ignored; isolated native bridge hidden from page world',flush=True)

@@ -79,6 +79,23 @@ func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHo
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		if r.URL.Path == "/api/ui/drag-regions" {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", 405)
+				return
+			}
+			regions, err := readWindowDragRegions(http.MaxBytesReader(w, r.Body, 8192))
+			if err != nil {
+				http.Error(w, "invalid drag regions", 400)
+				return
+			}
+			if err = h.window.SetDragRegions(regions); err != nil {
+				http.Error(w, err.Error(), 503)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if r.URL.Path == "/api/ui/minimize" || r.URL.Path == "/api/ui/drag" {
 			if r.Method != http.MethodPost {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

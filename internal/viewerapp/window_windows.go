@@ -200,11 +200,16 @@ func (b *appWindow) browserHandle() uintptr {
 func (b *appWindow) Drag() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	hwnd := b.nativeHandle()
+	if b.native == nil || b.native.closing.Load() {
+		return errors.New("YuDesk 窗口尚未就绪，请稍后再试")
+	}
+	hwnd := b.native.ownedHandle()
 	if hwnd == 0 {
 		return errors.New("未找到 YuDesk 窗口")
 	}
-	ok, _, err := postAppWindowMessage.Call(hwnd, 0x0112, 0xF012, 0) // WM_SYSCOMMAND, SC_MOVE | HTCAPTION
+	// The native owner handles capture and enters the Windows move loop.
+	// Posting keeps the local HTTP server responsive during the whole drag.
+	ok, _, err := postAppWindowMessage.Call(hwnd, nativeDrag, 0, 0)
 	if ok == 0 {
 		return err
 	}

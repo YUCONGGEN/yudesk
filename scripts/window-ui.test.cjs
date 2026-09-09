@@ -8,7 +8,10 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const http=require('node:http');
 const path=require('node:path');
-const {chromium}=require('playwright');
+// The bundled runtime may supply playwright-core with its matching browser.
+let playwright;
+try{playwright=require('playwright');}catch(error){if(error.code!=='MODULE_NOT_FOUND')throw error;playwright=require('playwright-core');}
+const {chromium}=playwright;
 
 const uiRoot=path.join(__dirname,'../internal/viewerapp/ui');
 const token='fixture token+&/中文';
@@ -29,8 +32,8 @@ function markup(surface){
   return html.replace('</body>','<script src="/assets/window-ui.js"></script></body>');
 }
 
-async function fixture(t,{surface='transition',pending=null,clock=false}={}){
-  const state={pending,getStatus:200,postStatus:200,postGate:null,posts:[],requests:[]};
+async function fixture(t,{surface='transition',pending=null,clock=false,platform='Linux x86_64',scale=1}={}){
+  const state={pending,getStatus:200,postStatus:200,postGate:null,posts:[],requests:[],dragPosts:[],dragStatus:200,dragGate:null,regionPosts:[],regionGate:null};
   const failures=[],nativeDialogs=[];
   const server=http.createServer((req,res)=>{
     (async()=>{
@@ -51,6 +54,17 @@ async function fixture(t,{surface='transition',pending=null,clock=false}={}){
       const body=text?(req.headers['content-type']?.includes('application/json')?JSON.parse(text):Object.fromEntries(new URLSearchParams(text))):null;
       const request={method:req.method,path:url.pathname,token:url.searchParams.get('access_token'),body,contentType:req.headers['content-type']};
       state.requests.push(request);
+      if(url.pathname==='/api/ui/drag-regions'&&req.method==='POST'){
+        state.regionPosts.push(request);
+        const gate=state.regionGate;state.regionGate=null;
+        if(gate)await gate;
+        return send(200,{ok:true});
+      }
+      if(url.pathname==='/api/ui/drag'&&req.method==='POST'){
+        state.dragPosts.push(request);
+        if(state.dragGate)await state.dragGate;
+        return send(state.dragStatus,state.dragStatus===200?{ok:true}:'模拟窗口拖动失败，请重试');
+      }
       if(url.pathname==='/api/local/approval'){
         if(req.method==='GET')return send(state.getStatus,state.getStatus===200?{pending:state.pending}:'approval unavailable');
         if(req.method==='POST'){
@@ -67,7 +81,26 @@ async function fixture(t,{surface='transition',pending=null,clock=false}={}){
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
   const origin='http://127.0.0.1:'+server.address().port;
-  const context=await browser.newContext({viewport:{width:1280,height:800}});
+  const context=await browser.newContext({viewport:{width:1280,height:800},deviceScaleFactor:scale});
+  if(platform!==null)await context.addInitScript(value=>Object.defineProperty(navigator,'platform',{get:()=>value,configurable:true}),platform);
+  await context.addInitScript(()=>{
+    window.__fixtureMouseEvents=[];
+    window.__fixtureLayoutEpoch=0;
+    window.__fixtureRegionEmissions=[];
+    const originalFetch=window.fetch;
+    window.fetch=function(input,options){
+      const url=new URL(typeof input==='string'?input:input.url,location.href);
+      const emission=url.pathname==='/api/ui/drag-regions'
+        ?{epoch:window.__fixtureLayoutEpoch,body:JSON.parse(options.body),settled:false}:null;
+      if(emission)window.__fixtureRegionEmissions.push(emission);
+      const promise=originalFetch.apply(this,arguments);
+      // Observe only; return the original promise and preserve every request.
+      if(emission)promise.then(()=>{emission.settled=true;},()=>{emission.settled=true;});
+      return promise;
+    };
+    document.addEventListener('mousedown',event=>window.__fixtureMouseEvents.push({trusted:event.isTrusted,button:event.button}),true);
+    document.addEventListener('contextmenu',event=>event.preventDefault());
+  });
   t.after(async()=>{
     await context.close();
     server.closeAllConnections();
@@ -84,6 +117,8 @@ async function fixture(t,{surface='transition',pending=null,clock=false}={}){
   if(clock)await page.clock.install({time:new Date()});
   await page.goto(origin);
   await page.waitForFunction(()=>typeof window.yudeskConfirm==='function'&&!!document.getElementById('incomingApproval'));
+  await page.waitForFunction(()=>[...document.styleSheets].some(sheet=>sheet.href?.includes('/assets/window-ui.css')));
+  if(platform!==null)assert.equal(await page.evaluate(()=>navigator.platform),platform);
   return {page,state,origin};
 }
 
@@ -97,6 +132,314 @@ async function showApproval(page){
   await page.locator('#incomingApproval').waitFor({state:'visible'});
   await page.waitForFunction(()=>/\d+ 秒后自动拒绝/.test(document.querySelector('#incomingApproval .yu-countdown').textContent));
 }
+
+async function blankDragPoint(page){
+  const point=await page.evaluate(()=>{
+    const region=document.querySelector('[data-window-drag]');
+    if(!region)return null;
+    const r=region.getBoundingClientRect();
+    for(const y of [r.y+r.height/2,r.y+4,r.bottom-4]){
+      for(let offset=0;offset<r.width/2-4;offset+=4){
+        for(const x of [r.x+r.width/2+offset,r.x+r.width/2-offset]){
+          if(document.elementFromPoint(x,y)===region)return {x,y};
+        }
+      }
+    }
+    return null;
+  });
+  assert.ok(point,'the actual header must expose blank space for dragging');
+  return point;
+}
+
+async function flushInput(page){
+  // Cross a renderer task and paint boundary before asserting that no fetch
+  // was scheduled. Positive requests also wait for their real HTTP response.
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+}
+
+async function trustedMouse(page,point,{button='left',move=false}={}){
+  const count=await page.evaluate(()=>window.__fixtureMouseEvents.length);
+  await page.mouse.move(point.x,point.y);
+  await page.mouse.down({button});
+  try{if(move)await page.mouse.move(point.x+25,point.y+4,{steps:4});}
+  finally{await page.mouse.up({button});}
+  const events=await page.evaluate(start=>window.__fixtureMouseEvents.slice(start),count);
+  assert.deepEqual(events,[{trusted:true,button:button==='right'?2:0}],'use real Playwright mouse input, not dispatchEvent');
+}
+
+function assertDragPosts(state,count){
+  assert.equal(state.dragPosts.length,count,'each accepted mouse-down must produce exactly one drag POST');
+  for(const request of state.dragPosts){
+    assert.equal(request.method,'POST');assert.equal(request.path,'/api/ui/drag');
+    assert.equal(request.token,token,'preserve the exact token including reserved and Unicode characters');
+    assert.equal(request.contentType,'application/json');assert.deepEqual(request.body,{});
+  }
+}
+
+async function regionUpdate(page,state,action,predicate=()=>true){
+  const start=state.regionPosts.length;
+  await action();
+  const deadline=Date.now()+5000;
+  while(Date.now()<deadline){
+    const update=state.regionPosts.slice(start).find(request=>predicate(request.body));
+    if(update)return update;
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.fail('expected native drag-region update; received '+JSON.stringify(state.regionPosts.slice(start)));
+}
+
+async function emittedRegion(page,state,epoch,started=performance.now()){
+  const deadline=started+1800;
+  while(performance.now()<deadline){
+    // Take the FIRST request constructed after this DOM mutation. Do not wait
+    // for geometry that passes: a newly computed stale rectangle must fail.
+    const emission=await page.evaluate(epoch=>window.__fixtureRegionEmissions.find(value=>value.epoch===epoch),epoch);
+    if(emission){
+      const request=state.regionPosts.find(value=>JSON.stringify(value.body)===JSON.stringify(emission.body));
+      if(request){assert.ok(performance.now()-started<2000,'fresh regions must recover within 2 seconds');return request;}
+    }
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.fail('no regions request constructed for DOM layout epoch '+epoch+' within 1800ms');
+}
+
+async function settleRegionEmissions(page){
+  const deadline=Date.now()+5000;
+  while(Date.now()<deadline){
+    if(await page.evaluate(()=>window.__fixtureRegionEmissions.length>0&&window.__fixtureRegionEmissions.every(value=>value.settled))){
+      await flushInput(page);return;
+    }
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.fail('previous regions request did not settle');
+}
+
+function assertRegions(request,{width=1280,height=800,scale=1,empty=false}={}){
+  assert.equal(request.method,'POST');assert.equal(request.path,'/api/ui/drag-regions');
+  assert.equal(request.token,token);assert.equal(request.contentType,'application/json');
+  const body=request.body;
+  assert.deepEqual(Object.keys(body).sort(),['height','rects','scale','width']);
+  assert.equal(body.width,width);assert.equal(body.height,height);assert.equal(body.scale,scale);
+  assert.ok(Array.isArray(body.rects)&&body.rects.length<=16);
+  if(empty)assert.deepEqual(body.rects,[]);else assert.ok(body.rects.length>0,'blank headers need at least one native hit region');
+  for(const rect of body.rects){
+    assert.deepEqual(Object.keys(rect).sort(),['height','width','x','y']);
+    assert.ok(Object.values(rect).every(Number.isFinite));
+    assert.ok(rect.x>=0&&rect.y>=0&&rect.width>0&&rect.height>0&&rect.x+rect.width<=width+.01&&rect.y+rect.height<=100);
+  }
+}
+
+async function assertRegionsAvoidControls(page,request){
+  const layout=await page.evaluate(()=>{
+    const box=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};};
+    const bars=[...document.querySelectorAll('[data-window-drag]')];
+    const controls=bars.flatMap(bar=>[...bar.querySelectorAll('button,a,input,label,select,textarea,form,[contenteditable],[role="button"],[role="link"]')])
+      .map(box).filter(r=>r.width>0&&r.height>0);
+    return {bars:bars.map(box),controls};
+  });
+  for(const rect of request.body.rects){
+    assert.ok(layout.bars.some(bar=>rect.x>=bar.x-.01&&rect.y>=bar.y-.01&&rect.x+rect.width<=bar.x+bar.width+.01&&rect.y+rect.height<=bar.y+bar.height+.01),'native regions must remain inside DOM drag surfaces');
+    for(const control of layout.controls){
+      const overlapX=Math.min(rect.x+rect.width,control.x+control.width)-Math.max(rect.x,control.x);
+      const overlapY=Math.min(rect.y+rect.height,control.y+control.height)-Math.max(rect.y,control.y);
+      assert.ok(overlapX<=.01||overlapY<=.01,'native hit rectangle overlaps a control: '+JSON.stringify({rect,control}));
+    }
+  }
+  // The native rectangles intentionally leave a small safety margin around
+  // controls. A blank pixel immediately beside a control need not be covered.
+  const usable=await page.evaluate(rects=>rects.some(r=>{
+    const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+    return hit?.closest('[data-window-drag]')&&!hit.closest('button,a,input,label,select,textarea,form,[contenteditable],[role="button"],[role="link"]');
+  }),request.body.rects);
+  assert.ok(usable,'native regions must contain a usable non-interactive header point');
+}
+
+async function completedDrag(page,state,point,count,move=false){
+  const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/ui/drag'&&r.request().method()==='POST');
+  await trustedMouse(page,point,{move});
+  await response;await flushInput(page);
+  assertDragPosts(state,count);
+}
+
+for(const surface of ['dashboard','session','transition']){
+  test(surface+': Windows blank-header clicks and repeated drags each POST once with the token',async t=>{
+    const {page,state}=await fixture(t,{surface,platform:'Win32'});
+    const point=await blankDragPoint(page);
+    if(surface==='transition'){
+      const bar=await page.locator('.yu-transition-controls').boundingBox();
+      assert.ok(bar&&bar.x===0&&bar.width===1280&&bar.y===0&&bar.height>=40,'transition bar must span the viewport');
+    }
+    for(let count=1;count<=4;count++)await completedDrag(page,state,point,count,count!==1);
+  });
+
+  test(surface+': Windows drag excludes controls, non-drag content, right button and synthetic events',async t=>{
+    const {page,state}=await fixture(t,{surface,platform:'Win32'});
+    // Mount representative controls inside the real header so exclusions cannot
+    // pass merely because the controls are outside a drag region.
+    const controls=[
+      '<button type="button"><span>Nested button</span></button>',
+      '<input value="fixture input">', '<a href="#fixture"><span>Nested link</span></a>',
+      '<label>Fixture label</label>', '<textarea>Fixture textarea</textarea>',
+      '<form><span>Form content</span></form>', '<div contenteditable="true">Editable</div>',
+      '<div role="button"><span>Role button</span></div>', '<div role="link"><span>Role link</span></div>'
+    ];
+    for(const html of controls){
+      const point=await page.evaluate(html=>{
+        document.getElementById('dragExclusionFixture')?.remove();
+        const region=document.querySelector('[data-window-drag]'),r=region.getBoundingClientRect();
+        const box=document.createElement('div');box.id='dragExclusionFixture';
+        box.style.cssText='position:fixed;z-index:100;left:'+(r.x+40)+'px;top:'+(r.y+4)+'px;background:white;min-width:120px';
+        box.innerHTML=html;region.append(box);
+        const target=box.querySelector('span')||box.firstElementChild;
+        const rect=target.getBoundingClientRect(),x=rect.x+rect.width/2,y=rect.y+rect.height/2;
+        if(!box.contains(document.elementFromPoint(x,y)))throw Error('excluded control is not hit-testable');
+        return {x,y};
+      },html);
+      await trustedMouse(page,point);await flushInput(page);assertDragPosts(state,0);
+    }
+    await page.evaluate(()=>document.getElementById('dragExclusionFixture').remove());
+    const outside=await page.evaluate(()=>{
+      const box=document.createElement('div');box.textContent='Non-drag fixture';
+      box.style.cssText='position:fixed;left:40px;top:300px;width:200px;height:40px;z-index:100;background:white';
+      document.body.append(box);return {x:80,y:320};
+    });
+    await trustedMouse(page,outside);await flushInput(page);assertDragPosts(state,0);
+    const point=await blankDragPoint(page);
+    await trustedMouse(page,point,{button:'right'});await flushInput(page);assertDragPosts(state,0);
+    await page.evaluate(()=>{
+      const region=document.querySelector('[data-window-drag]');
+      region.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,button:0}));
+      region.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,isPrimary:true}));
+    });
+    await flushInput(page);assertDragPosts(state,0);
+    await completedDrag(page,state,point,1);
+  });
+
+  test(surface+': Linux trusted header drags never POST to the Windows fallback',async t=>{
+    const {page,state}=await fixture(t,{surface,platform:'Linux x86_64'});
+    const point=await blankDragPoint(page);
+    for(let n=0;n<3;n++)await trustedMouse(page,point,{move:true});
+    await flushInput(page);assertDragPosts(state,0);assert.equal(state.regionPosts.length,0);
+  });
+
+  test(surface+': a pending Windows drag rejects duplicates and permits the next completed gesture',async t=>{
+    const {page,state}=await fixture(t,{surface,platform:'Win32'});
+    let release;state.dragGate=new Promise(resolve=>{release=resolve;});t.after(()=>release());
+    const point=await blankDragPoint(page);
+    const request=page.waitForRequest(r=>new URL(r.url()).pathname==='/api/ui/drag');
+    const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/ui/drag');
+    await trustedMouse(page,point);await request;
+    for(let n=0;n<3;n++)await trustedMouse(page,point,{move:true});
+    await flushInput(page);assertDragPosts(state,1);
+    state.dragGate=null;release();await response;await flushInput(page);
+    await completedDrag(page,state,point,2);
+  });
+
+  test(surface+': failed Windows drag displays the page notice and releases pending for retry',async t=>{
+    const {page,state}=await fixture(t,{surface,platform:'Win32'});
+    state.dragStatus=503;
+    const point=await blankDragPoint(page);
+    await completedDrag(page,state,point,1);
+    const notice=page.locator(surface==='session'?'#sessionNotice':'#notice');
+    await notice.waitFor({state:'visible'});
+    assert.equal(await notice.isVisible(),true);
+    assert.equal(await notice.textContent(),'模拟窗口拖动失败，请重试');
+    state.dragStatus=200;await completedDrag(page,state,point,2);
+  });
+
+  test(surface+': Windows native regions describe blank headers and never overlap controls',async t=>{
+    const {page,state}=await fixture(t,{surface,platform:'Win32',scale:1.5});
+    const request=await regionUpdate(page,state,()=>page.setViewportSize({width:1100,height:720}),body=>body.width===1100&&body.height===720&&body.rects.length>0);
+    assertRegions(request,{width:1100,height:720,scale:1.5});
+    await assertRegionsAvoidControls(page,request);
+    // Mutate after initialization: native hit areas must drop a newly inserted
+    // interactive island, including its complete bounding box.
+    await settleRegionEmissions(page);
+    const started=performance.now();
+    const epoch=await page.evaluate(()=>{
+      ++window.__fixtureLayoutEpoch;
+      const bar=document.querySelector('[data-window-drag]'),r=bar.getBoundingClientRect();
+      const input=document.createElement('input');input.id='dynamicRegionInput';
+      input.style.cssText='position:fixed;left:'+(r.x+r.width/2-50)+'px;top:'+(r.y+4)+'px;width:100px;height:25px;z-index:90';bar.append(input);
+      return window.__fixtureLayoutEpoch;
+    });
+    const updated=await emittedRegion(page,state,epoch,started);
+    assertRegions(updated,{width:1100,height:720,scale:1.5});
+    await assertRegionsAvoidControls(page,updated);
+    // Hold a pre-mutation response so publish's inFlight branch is exercised.
+    // The periodic lease may recover a skipped dirty update, but must do so
+    // within 2s and its FIRST post-mutation payload must already avoid input.
+    await settleRegionEmissions(page);
+    let release;state.regionGate=new Promise(resolve=>{release=resolve;});t.after(()=>release());
+    await regionUpdate(page,state,()=>page.evaluate(()=>dispatchEvent(new Event('resize'))));
+    const heldStarted=performance.now();
+    const heldEpoch=await page.evaluate(()=>{
+      ++window.__fixtureLayoutEpoch;
+      const bar=document.querySelector('[data-window-drag]'),r=bar.getBoundingClientRect();
+      document.getElementById('dynamicRegionInput').style.left=(r.x+80)+'px';
+      return window.__fixtureLayoutEpoch;
+    });
+    await flushInput(page);release();
+    const recovered=await emittedRegion(page,state,heldEpoch,heldStarted);
+    assertRegions(recovered,{width:1100,height:720,scale:1.5});
+    await assertRegionsAvoidControls(page,recovered);
+    t.diagnostic('in-flight region mutation recovered in '+Math.round(performance.now()-heldStarted)+'ms');
+  });
+
+  test(surface+': opening a dialog clears native regions and closing restores them',async t=>{
+    const {page,state}=await fixture(t,{surface,platform:'Win32'});
+    const cleared=await regionUpdate(page,state,()=>page.evaluate(()=>{void window.yudeskConfirm('拖动区域隔离测试');}),body=>body.rects.length===0);
+    assertRegions(cleared,{empty:true});
+    const restored=await regionUpdate(page,state,()=>page.locator('#confirmCancel').click(),body=>body.rects.length>0);
+    assertRegions(restored);await assertRegionsAvoidControls(page,restored);
+  });
+
+  test(surface+': real DOM fullscreen clears native regions and exiting restores them',async t=>{
+    const {page,state}=await fixture(t,{surface,platform:'Win32'});
+    // Attach to a genuine mouse activation; do not spoof fullscreenElement.
+    await page.evaluate(()=>{
+      const button=document.createElement('button');button.id='fixtureFullscreen';button.textContent='Fullscreen';
+      button.style.cssText='position:fixed;left:20px;top:250px;z-index:100';
+      button.onclick=()=>{void document.documentElement.requestFullscreen();};document.body.append(button);
+    });
+    const cleared=await regionUpdate(page,state,()=>page.locator('#fixtureFullscreen').click(),body=>body.rects.length===0);
+    assert.equal(await page.evaluate(()=>document.fullscreenElement===document.documentElement),true);
+    assertRegions(cleared,{width:cleared.body.width,height:cleared.body.height,empty:true});
+    const restored=await regionUpdate(page,state,()=>page.evaluate(()=>document.exitFullscreen()),body=>body.rects.length>0);
+    const size=page.viewportSize();assertRegions(restored,size);await assertRegionsAvoidControls(page,restored);
+  });
+}
+
+test('Windows native regions renew while idle and stop after pagehide clears them',async t=>{
+  const {page,state}=await fixture(t,{platform:'Win32',clock:true});
+  const renewed=await regionUpdate(page,state,()=>page.clock.runFor(1100),body=>body.rects.length>0);
+  assertRegions(renewed);
+  const cleared=await regionUpdate(page,state,()=>page.evaluate(()=>dispatchEvent(new PageTransitionEvent('pagehide'))),body=>body.rects.length===0);
+  assertRegions(cleared,{empty:true});
+  const count=state.regionPosts.length;
+  await page.clock.runFor(2100);assert.equal(state.regionPosts.length,count,'pagehide must stop lease renewal');
+});
+
+for(const platform of ['Linux x86_64','MacIntel']){
+  test(platform+': resize, DOM changes and lease ticks never publish Windows regions',async t=>{
+    const {page,state}=await fixture(t,{platform,clock:true});
+    await page.setViewportSize({width:1000,height:700});
+    await page.evaluate(()=>document.querySelector('[data-window-drag]').style.height='50px');
+    await page.clock.runFor(2100);
+    assert.deepEqual(state.regionPosts,[]);assertDragPosts(state,0);
+  });
+}
+
+test('Windows drag delegates to regions inserted after window-ui.js initialized',async t=>{
+  const {page,state}=await fixture(t,{platform:'Win32'});
+  await page.evaluate(()=>{
+    document.querySelector('[data-window-drag]').remove();
+    const region=document.createElement('header');region.dataset.windowDrag='';
+    region.style.cssText='position:fixed;inset:0 0 auto;height:60px;background:white';
+    document.body.append(region);
+  });
+  await completedDrag(page,state,await blankDragPoint(page),1);
+});
 
 for(const [surface,hideSelector] of [['dashboard','#hideApp'],['session','[data-window-action="hide"]'],['transition','[data-window-action="hide"]']]){
   test(surface+': hide, minimize and close are ordered and minimize stays local',async t=>{

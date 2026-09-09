@@ -22,7 +22,7 @@
   });
   // Connecting/return pages also need controls when the system caption is gone.
   if(!document.querySelector('[data-window-action="minimize"]')){
-    const bar=node('div','yu-transition-controls');
+    const bar=node('div','yu-transition-controls');bar.dataset.windowDrag='';bar.setAttribute('aria-label','窗口拖动区域');
     for(const [action,label] of [['hide','隐藏'],['minimize','−']]){const b=node('button','secondary',label);b.type='button';b.dataset.windowAction=action;b.title=action==='hide'?'隐藏':'最小化';bar.append(b);}
     const form=node('form');form.method='post';form.action=endpoint('/api/exit');const close=node('button','window-close','×');close.title='关闭应用';close.setAttribute('aria-label','关闭应用');form.append(close);bar.append(form);document.body.append(bar);
   }
@@ -51,16 +51,56 @@
       try{await command('/api/exit');}catch(error){showError(error.message);button.disabled=false;}
     });
   }
-  for(const region of document.querySelectorAll('[data-window-drag]')){
-    region.addEventListener('pointerdown',event=>{
-      if(event.button!==0||event.target.closest('button,a,input,label,select,form'))return;
+  let dragPending=false;
+  // Publish layout ahead of input. Windows owns transparent header hit areas,
+  // so even a very short drag begins in its GUI thread, not after a fetch.
+  if(/Win/.test(navigator.platform)){
+    let inFlight=false,scheduled=false,stoppedRegions=false;
+    const interactive='button,a,input,label,select,textarea,form,[contenteditable],[role="button"],[role="link"]';
+    function dragLayout(){
+      const rects=[];
+      if(!document.querySelector('dialog[open]')&&!document.fullscreenElement){
+        for(const bar of document.querySelectorAll('[data-window-drag]')){
+          const b=bar.getBoundingClientRect();
+          if(b.width<=0||b.height<=0||b.y<0||b.bottom>100)continue;
+          let spans=[[Math.max(0,b.left),Math.min(innerWidth,b.right)]];
+          for(const control of bar.querySelectorAll(interactive)){
+            const c=control.getBoundingClientRect();
+            if(c.width<=0||c.height<=0||c.bottom<=b.top||c.top>=b.bottom)continue;
+            spans=spans.flatMap(([l,r])=>c.right<=l||c.left>=r?[[l,r]]:[[l,Math.max(l,c.left-2)],[Math.min(r,c.right+2),r]].filter(([a,z])=>z>a));
+          }
+          for(const [l,r] of spans){if(r-l>=4&&rects.length<16)rects.push({x:l,y:b.y,width:r-l,height:b.height});}
+        }
+      }
+      return {width:innerWidth,height:innerHeight,scale:devicePixelRatio,rects};
+    }
+    async function publish(){
+      scheduled=false;if(stoppedRegions||inFlight)return;
+      inFlight=true;
+      try{await fetch(endpoint('/api/ui/drag-regions'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(dragLayout()),signal:AbortSignal.timeout(1500)});}catch(_){}
+      finally{inFlight=false;}
+    }
+    const schedule=()=>{if(!scheduled){scheduled=true;requestAnimationFrame(publish);}};
+    new ResizeObserver(schedule).observe(document.documentElement);
+    const changes=new MutationObserver(schedule);changes.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class','style','hidden','open']});
+    window.addEventListener('resize',schedule);document.addEventListener('fullscreenchange',schedule);
+    window.addEventListener('pagehide',()=>{stoppedRegions=true;changes.disconnect();fetch(endpoint('/api/ui/drag-regions'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({width:innerWidth,height:innerHeight,scale:devicePixelRatio,rects:[]}),keepalive:true}).catch(()=>{});});
+    setInterval(publish,1000);schedule();
+  }
+  document.addEventListener('mousedown',event=>{
+      if(!event.isTrusted||event.button!==0||!(event.target instanceof Element))return;
+      if(!event.target.closest('[data-window-drag]')||event.target.closest('button,a,input,label,select,textarea,form,[contenteditable],[role="button"],[role="link"]'))return;
       // Windows drags its owned host through this API. macOS/Linux packaged
       // WebViews install their own trusted-pointer native drag bridge.
-      if(!/Win/.test(navigator.platform))return;
+      if(!/Win/.test(navigator.platform)||dragPending)return;
       event.preventDefault();
-      command('/api/ui/drag').catch(()=>{});
-    });
-  }
+      // Native dragging can interrupt a WebView pointer sequence. Listen for
+      // each real mouse-down independently; the owner thread cancels capture.
+      dragPending=true;
+      fetch(endpoint('/api/ui/drag'),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(2000)})
+        .then(async r=>{if(!r.ok)throw Error((await r.text()).trim()||'窗口拖动失败');})
+        .catch(error=>showError(error.message)).finally(()=>{dragPending=false;});
+  });
 
   const incoming=dialog('incomingApproval','远程连接请求');
   const countdown=node('p','yu-countdown'),safety=node('p','yu-security-note','请通过电话等方式核实对方身份。仅同意本次连接，不会保存免密许可。');

@@ -1,6 +1,26 @@
 # 当前部署状态（2026-09-09）
 
-## 当前：跨平台安装与响应更新 `installed-20260909.1`
+## 当前：桌面拖动修复 `drag-20260909.1`
+
+官网桌面 **2.0.0** 新安装包已上线，显示 **2026-09-09 12:44（北京时间）**。Windows x64、Linux x64 revision 5、macOS Intel / Apple Silicon revision 5 已更新；Android 保持原 **preview.5** 字节不变。本轮修复本地窗口拖动，不宣称降低了物理网络 RTT。
+
+- Windows 主界面、远程页、过渡页各完成两次真实鼠标拖动，六次位移均正确；原生按下与焦点/子窗口通知处理，控件区域不拖动。Linux 两套 X11 环境真实连续拖动通过；macOS 同步事件桥、双架构构建、离屏检查、包结构及 ad-hoc strict/deep 验签通过，但没有真机拖动验收。
+- 全量 Go 测试/vet、Windows vet、核心 race、42 项窗口/弹窗测试、23 项输入/帧/文件/音频/在线测试及最终 Windows EXE 统一端联调通过。一次并行高负载窗口测试出现浏览器清理等待超时，后续独立测试与连续三轮通过；异常和验证边界完整保留在 [本轮记录](WINDOW_DRAG_20260909.md)。
+- 首次部署遇到启动监听尚未就绪，按预案自动回滚；部署脚本现增加有时限的健康就绪等待。重新部署成功，当前 PID **67439**。账号/设备/授权码数量保持 **0 / 11 / 9**，数据库检查通过，配置 SHA-256 未变。成功部署备份 `/Users/yu/bin/yudesk/backups/drag-20260909.1-retry1`；首次回滚备份亦保留，未替换数据库或删除设备。
+- 公网健康检查、未登录后台保护、五个下载文件和许可校验、旧 Unix 下载重定向及页面版本/日期验收通过。网站仍为 `http://www.yucg.cn:8235/`，TCP TLS 固定证书与 UDP 8233 STUN 检查通过。页面截图资源和脚本检查通过。
+- 本轮私有 GitHub Release：[v2.0.0-drag-fix-20260909](https://github.com/YUCONGGEN/yudesk/releases/tag/v2.0.0-drag-fix-20260909)，源代码及七个附件的实际发布状态以链接为准，旧 Release 不覆盖。
+
+| 产物 | SHA-256 |
+| --- | --- |
+| Windows x64 EXE | `d89f5420a43ffd0570e7381d520a9e7684597a0657be5d888ee6006e57d3e791` |
+| Linux x64 DEB | `90afe272339557ae4a4c5cf58f097426ba7ce951d41f17cdbad2708b2b1df0f3` |
+| macOS Intel PKG | `b265650937bc66eb196bc0d617864df0f603046ead812b1bfcc191c7ea9359aa` |
+| macOS Apple Silicon PKG | `883798128564784d3ed25a7b3c2b575d0b99f874d1b84307aca45ccc5cef6b80` |
+| Android preview.5 APK（不变） | `2caac0f0b2e1e3d2c60978610f6f379b568629af91ac889bba0676f5554ca79d` |
+
+macOS 安装包仍未 Developer ID 签名/公证；Linux Wayland、不同缩放的多屏、触控和长期高负载需进一步真机验收。请完全退出旧 YuDesk 后重新安装，原身份/授权/设备列表保留；仅重开旧文件不会升级。HTTP 下载请通过可信 GitHub 渠道核对校验值。完整细节见 [Windows/共享修复](WINDOW_DRAG_20260909.md)、[Unix 验证](UNIX_DRAG_20260909.md)。
+
+## 历史：跨平台安装与响应更新 `installed-20260909.1`（已替换）
 
 桌面 **2.0.0** 与 Android **2.0.0-preview.5 / 2000005** 已一起部署。官网发布日期为 **2026-09-09 06:59（北京时间）**，服务端 PID `19796`，网站仍为 `http://www.yucg.cn:8235/`，TCP/UDP 8233 保持不变。
 

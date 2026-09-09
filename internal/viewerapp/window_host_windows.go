@@ -16,18 +16,20 @@ import (
 )
 
 const (
-	windowCaption       = 0x00c00000
-	windowResize        = 0x00040000
-	windowChild         = 0x40000000
-	windowPopup         = 0x80000000
-	windowFrameChanged  = 0x0020
-	windowNoActivate    = 0x0010
-	windowNoZOrder      = 0x0004
-	windowAsyncPosition = 0x4000
-	nativeShow          = 0x8003
-	nativeMinimize      = 0x8004
-	nativeDispose       = 0x8005
-	nativeHide          = 0x8006
+	windowCaption            = 0x00c00000
+	windowResize             = 0x00040000
+	windowChild              = 0x40000000
+	windowPopup              = 0x80000000
+	windowFrameChanged       = 0x0020
+	windowNoActivate         = 0x0010
+	windowNoZOrder           = 0x0004
+	windowAsyncPosition      = 0x4000
+	nativeShow               = 0x8003
+	nativeMinimize           = 0x8004
+	nativeDispose            = 0x8005
+	nativeHide               = 0x8006
+	nativeDrag               = 0x8007
+	nativeDragRegionsChanged = 0x8008
 )
 
 var nativeGetRect = windowUser32.NewProc("GetWindowRect")
@@ -56,17 +58,20 @@ type nativePoint struct{ X, Y int32 }
 // viewport (including YuDesk's own toolbar) remains visible, without fullscreen,
 // fixed pixel cropping, injected browser code, or subclassing another process.
 type nativeAppWindow struct {
-	hwnd         atomic.Uintptr
-	threadID     atomic.Uint32
-	closing      atomic.Bool
-	done         chan struct{}
-	browser      uintptr
-	browserPID   uint32
-	browserStyle uintptr
-	disposed     bool // host message thread only
-	onClose      func()
-	ready        chan error
-	deadline     time.Time
+	hwnd           atomic.Uintptr
+	threadID       atomic.Uint32
+	closing        atomic.Bool
+	done           chan struct{}
+	browser        uintptr
+	browserPID     uint32
+	browserStyle   uintptr
+	disposed       bool // host message thread only
+	onClose        func()
+	ready          chan error
+	deadline       time.Time
+	dragRegions    atomic.Pointer[windowDragRegions]
+	dragChildren   []uintptr          // host GUI thread only
+	lastDragLayout *windowDragRegions // geometry only; lease is read separately
 }
 
 var nativeWindows sync.Map
@@ -103,6 +108,10 @@ var nativeWindowProc = syscall.NewCallback(func(hwnd uintptr, msg uint32, wp, lp
 				nativeSetFocus.Call(n.browser)
 			}
 			return 0
+		case 0x0210: // WM_PARENTNOTIFY: native input even if Chromium raised its child
+			if wp&0xffff == 0x0201 {
+				n.dragFromClient(nativePoint{int32(int16(lp & 0xffff)), int32(int16((lp >> 16) & 0xffff))})
+			}
 		case 0x0005, 0x0113: // WM_SIZE, WM_TIMER: also catches renderer replacement/navigation
 			if n.closing.Load() {
 				n.dispose()
@@ -116,6 +125,7 @@ var nativeWindowProc = syscall.NewCallback(func(hwnd uintptr, msg uint32, wp, lp
 				n.show()
 				ready <- nil
 			}
+			n.layoutDragRegions()
 			return 0
 		case nativeShow:
 			_ = n.layout()
@@ -126,6 +136,14 @@ var nativeWindowProc = syscall.NewCallback(func(hwnd uintptr, msg uint32, wp, lp
 			return 0
 		case nativeHide:
 			nativeShowWindow.Call(hwnd, 0) // SW_HIDE: preserve renderer and UI state
+			return 0
+		case nativeDrag:
+			// Release/cancel capture on the GUI thread sharing input with the
+			// embedded browser, not on the HTTP goroutine's unrelated thread.
+			n.dragWindow()
+			return 0
+		case nativeDragRegionsChanged:
+			n.layoutDragRegions()
 			return 0
 		case 0x02e0: // WM_DPICHANGED: retain the suggested bounds on the new monitor
 			var r nativeRect

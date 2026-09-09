@@ -19,6 +19,10 @@ func startBrowserProcess(executable string, args []string) (uint32, chan struct{
 
 type nativeAppWindow struct{}
 
+func (b *appWindow) SetDragRegions(*windowDragRegions) error {
+	return errors.New("native drag regions are managed by the platform shell")
+}
+
 func (b *appWindow) showNativeWindow() error             { return nil }
 func (b *appWindow) closeNativeWindow() error            { return nil }
 func (b *appWindow) hideNativeWindow() (bool, error)     { return false, nil }
