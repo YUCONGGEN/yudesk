@@ -181,13 +181,13 @@ func assertNativeContent(t *testing.T, b *appWindow) {
 	})
 	index := int32(-16)
 	style, _, _ := getAppWindowStyle.Call(b.nativeHandle(), uintptr(index))
-	if style&windowCaption != 0 || style&windowResize == 0 {
-		t.Fatalf("host style %#x must be captionless and resizable", style)
+	if style&windowCaption != 0 || style&windowResize != 0 || style&windowMaximizeBox != 0 || style&windowMinimizeBox == 0 {
+		t.Fatalf("host style %#x must be captionless and fixed-size, with minimization only", style)
 	}
 	var outer nativeRect
 	nativeGetRect.Call(b.nativeHandle(), uintptr(unsafe.Pointer(&outer)))
-	if origin.Y-outer.Top != origin.X-outer.Left {
-		t.Fatalf("native title area remains: window=%+v client origin=%+v", outer, origin)
+	if origin.X != outer.Left || origin.Y != outer.Top || client.Right != outer.Right-outer.Left || client.Bottom != outer.Bottom-outer.Top {
+		t.Fatalf("native frame or edge remains: window=%+v client=%+v origin=%+v", outer, client, origin)
 	}
 	if parent, _, _ := nativeGetParent.Call(b.native.browser); parent != b.nativeHandle() {
 		t.Fatal("browser is no longer clipped by its owned host")
@@ -247,26 +247,24 @@ func TestNativeFramelessTransitions(t *testing.T) {
 		waitNative(t, "host did not restore", func() bool { v, _, _ := nativeIsIconic.Call(initial); return v == 0 })
 		assertNativeContent(t, b)
 	}
-	for _, size := range [][2]uintptr{{1000, 700}, {640, 480}} {
-		setAppWindowPos.Call(initial, 0, 0, 0, size[0], size[1], 0x0016|windowAsyncPosition)
-		waitNative(t, "host resize did not complete", func() bool {
-			var r nativeRect
-			nativeGetRect.Call(initial, uintptr(unsafe.Pointer(&r)))
-			return uintptr(r.Right-r.Left) == size[0] && uintptr(r.Bottom-r.Top) == size[1]
-		})
-		assertNativeContent(t, b)
+	var fixed nativeRect
+	nativeGetRect.Call(initial, uintptr(unsafe.Pointer(&fixed)))
+	var limits nativeMinMaxInfo
+	windowUser32.NewProc("SendMessageW").Call(initial, 0x0024, 0, uintptr(unsafe.Pointer(&limits)))
+	width, height := fixed.Right-fixed.Left, fixed.Bottom-fixed.Top
+	if limits.MinTrackSize != (nativePoint{width, height}) || limits.MaxTrackSize != (nativePoint{width, height}) {
+		t.Fatalf("interactive size must remain %dx%d, limits=%+v", width, height, limits)
 	}
 	postAppWindowMessage.Call(initial, 0x0112, 0xf030, 0) // SC_MAXIMIZE
-	waitNative(t, "host did not maximize", func() bool { v, _, _ := windowUser32.NewProc("IsZoomed").Call(initial); return v != 0 })
-	assertNativeContent(t, b)
-	if err := b.Show(); err != nil {
-		t.Fatal(err)
+	time.Sleep(150 * time.Millisecond)
+	if v, _, _ := windowUser32.NewProc("IsZoomed").Call(initial); v != 0 {
+		t.Fatal("fixed host accepted maximize")
 	}
-	if v, _, _ := windowUser32.NewProc("IsZoomed").Call(initial); v == 0 {
-		t.Fatal("Show reset maximized size")
+	var afterMaximize nativeRect
+	nativeGetRect.Call(initial, uintptr(unsafe.Pointer(&afterMaximize)))
+	if afterMaximize != fixed {
+		t.Fatalf("maximize changed fixed bounds: before=%+v after=%+v", fixed, afterMaximize)
 	}
-	postAppWindowMessage.Call(initial, 0x0112, 0xf120, 0) // SC_RESTORE
-	waitNative(t, "host did not leave maximized state", func() bool { v, _, _ := windowUser32.NewProc("IsZoomed").Call(initial); return v == 0 })
 	assertNativeContent(t, b)
 	// Emulate Chromium recomputing its frame after a display/theme transition.
 	index := int32(-16)

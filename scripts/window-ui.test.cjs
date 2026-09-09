@@ -441,7 +441,7 @@ test('Windows drag delegates to regions inserted after window-ui.js initialized'
   await completedDrag(page,state,await blankDragPoint(page),1);
 });
 
-for(const [surface,hideSelector] of [['dashboard','#hideApp'],['session','[data-window-action="hide"]'],['transition','[data-window-action="hide"]']]){
+for(const [surface,hideSelector] of [['dashboard','#hideApp'],['transition','[data-window-action="hide"]']]){
   test(surface+': hide, minimize and close are ordered and minimize stays local',async t=>{
     const {page,state}=await fixture(t,{surface});
     const selectors=[hideSelector,'[data-window-action="minimize"]','[aria-label="关闭应用"]'];
@@ -466,6 +466,19 @@ for(const [surface,hideSelector] of [['dashboard','#hideApp'],['session','[data-
     assert.equal(await page.locator('#appConfirm').isVisible(),false);
   });
 }
+
+test('session starts with settings collapsed and exposes only its minimize window action',async t=>{
+  const {page,state}=await fixture(t,{surface:'session'});
+  assert.equal(await page.locator('#settings').getAttribute('aria-expanded'),'false');
+  assert.equal(await page.locator('#sessionPanel').isVisible(),false);
+  assert.equal(await page.locator('[data-window-action="hide"]').count(),0);
+  assert.equal(await page.locator('[aria-label="关闭应用"]').count(),0);
+  assert.equal(await page.locator('[data-window-action="minimize"]').count(),1);
+  const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/ui/minimize');
+  await page.locator('[data-window-action="minimize"]').click();await response;
+  await page.waitForFunction(()=>!document.querySelector('[data-window-action="minimize"]').disabled);
+  assert.deepEqual(state.requests.filter(r=>r.method==='POST').map(({path,body,token})=>({path,body,token})),[{path:'/api/ui/minimize',body:{},token}]);
+});
 
 test('dashboard accepts a device code without a PIN but rejects a partial PIN',async t=>{
   const {page}=await fixture(t,{surface:'dashboard'});

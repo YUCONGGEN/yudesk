@@ -1,6 +1,29 @@
 # 当前部署状态（2026-09-09）
 
-## 当前：桌面拖动修复 `drag-20260909.1`
+## 当前：固定无边框窗口 `fixed-window-20260909.1`
+
+官网桌面 **2.0.0** 新安装包已上线，显示 **2026-09-09 21:07（北京时间）**。Windows x64、Linux x64 revision 6、macOS Intel / Apple Silicon revision 6 已更新；Android 保持 **preview.5** 字节不变，因为 Android Activity 没有桌面系统边框和固定桌面窗口尺寸。iOS 仍按要求暂停。
+
+- Windows、Linux、macOS 桌面主窗口固定为 **860 × 600 逻辑像素**，禁用拖拽缩放和最大化，保留窗口移动、最小化及远程会话整屏显示。Windows 内容区与原生窗口外框四边坐标一致，实测没有系统标题栏、黑边或额外边框；最大化系统命令和外部改尺寸请求均被拒绝。Linux X11 窗口管理器改尺寸请求实测仍保持 860 × 600，整屏退出恢复固定尺寸；macOS 双架构包使用相同固定内容尺寸和无边框样式。
+- 左上角 YuDesk 标识恢复为可点击入口，点击会回到“远程控制”主页。远程会话的设置默认收起，移除了“隐藏”和“×”，仅保留“设置 / 整屏显示 / 结束控制 / 最小化”；结束控制仍回主界面。主界面原有隐藏、最小化和退出语义不变。
+- Windows 原生专用窗口检查通过：边缘零差值、固定尺寸、拒绝最大化、导航、最小化/恢复、隐藏/显示十轮；统一端真实 Windows GUI 联调通过。Linux Ubuntu 22.04 + X11/WebKit 完成真实改尺寸拒绝、拖动、整屏三轮及生命周期测试。macOS Intel/Apple Silicon 编译、arm64 自检、安装包展开、架构和 ad-hoc strict/deep 验签通过；没有 Mac 图形真机手动验收。
+- 全量 `go test -short ./...`、42 项窗口/弹窗回归及统一端两轮联调通过。修正一项测试自身对异步返回顺序的错误假设，生产输入逻辑未因此改变。四周无黑边采用原生客户区铺满并由 Windows 几何测试验证，不依赖截图裁切。
+- 部署后服务 PID **57419**。账号/设备/授权码数量保持 **0 / 11 / 9**，数据库 `quick_check`、下载清单和配置 SHA-256 均通过；配置哈希仍为 `c2ba4b3f89c17519e05a5b9cb778c71d7a3aa1f587d42347c0ef966e5ecda24c`。旧程序、下载和一致性数据库快照保存在 `/Users/yu/bin/yudesk/backups/fixed-window-20260909.1`。
+- 公网五个安装包与许可文件全部重新下载并比对 SHA-256；首页版本/北京时间日期、旧 Unix 地址重定向、未登录后台 401 和健康检查通过。TCP 8233 TLS 1.3 固定证书检查通过，UDP 8233 三次 STUN 往返约 **53.85 / 33.73 / 43.00 ms**；这些数值不是两端画面延迟。
+- 私有 GitHub Release 目标：[v2.0.0-fixed-window-20260909](https://github.com/YUCONGGEN/yudesk/releases/tag/v2.0.0-fixed-window-20260909)。实际源码提交和七个附件状态以该链接为准，旧 Release 不覆盖。
+
+| 产物 | SHA-256 |
+| --- | --- |
+| Windows x64 EXE | `0254290a64e0d6bf865ff0a2e72d0750f2d980e4705feb28ce76bfe928dc3983` |
+| Linux x64 DEB | `d5c9ece643eed99a738dd86c970dc7222e5b248e7cee9bc9b69f63e89913910b` |
+| macOS Intel PKG | `754d721c958a8d50378eab32c8f5d5b0eaec2afbff6f1cddf7bedb9c4770e6e5` |
+| macOS Apple Silicon PKG | `b07947b8411d1a35d994d992a50d6791cfee0ee69d6d064eff134f4da2b60627` |
+| Android preview.5 APK（不变） | `2caac0f0b2e1e3d2c60978610f6f379b568629af91ac889bba0676f5554ca79d` |
+| macOS 服务端 | `3948638cc9a7f2da9629008a22a72e51060697c5bc0575e47571737c61542119` |
+
+macOS 安装包仍未 Developer ID 签名/公证；Linux Wayland、不同缩放多屏及 Mac 图形真机需要继续验收。请完全退出旧 YuDesk 后下载安装新包，旧 EXE/应用不会自行更新。
+
+## 历史：桌面拖动修复 `drag-20260909.1`（已替换）
 
 官网桌面 **2.0.0** 新安装包已上线，显示 **2026-09-09 12:44（北京时间）**。Windows x64、Linux x64 revision 5、macOS Intel / Apple Silicon revision 5 已更新；Android 保持原 **preview.5** 字节不变。本轮修复本地窗口拖动，不宣称降低了物理网络 RTT。
 

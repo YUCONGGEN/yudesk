@@ -160,9 +160,10 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         web.navigationDelegate = self; web.uiDelegate = self
         web.allowsBackForwardNavigationGestures = false
         let win = ShellWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 600),
-                              styleMask: [.borderless, .resizable, .miniaturizable], backing: .buffered, defer: false)
+                              styleMask: [.borderless, .miniaturizable], backing: .buffered, defer: false)
         win.title = "YuDesk"; win.delegate = self; win.isReleasedWhenClosed = false
-        win.minSize = NSSize(width: 720, height: 480)
+        win.contentMinSize = NSSize(width: 860, height: 600)
+        win.contentMaxSize = NSSize(width: 860, height: 600)
         win.hasShadow = true; win.backgroundColor = .windowBackgroundColor
         win.contentView = web; win.center()
         self.window = win; self.web = web

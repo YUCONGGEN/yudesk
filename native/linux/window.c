@@ -92,6 +92,17 @@ static void show_window(Shell *s) {
     gtk_window_set_skip_taskbar_hint(GTK_WINDOW(s->window), FALSE);
     gtk_window_deiconify(GTK_WINDOW(s->window)); gtk_window_present(GTK_WINDOW(s->window));
 }
+static void fixed_geometry(Shell *s, gboolean enabled) {
+    if (!s->window) return;
+    if (!enabled) {
+        gtk_window_set_geometry_hints(GTK_WINDOW(s->window), NULL, NULL, 0);
+        return;
+    }
+    GdkGeometry fixed = {0};
+    fixed.min_width = fixed.max_width = 860;
+    fixed.min_height = fixed.max_height = 600;
+    gtk_window_set_geometry_hints(GTK_WINDOW(s->window), NULL, &fixed, GDK_HINT_MIN_SIZE | GDK_HINT_MAX_SIZE);
+}
 static gboolean deleted(GtkWidget *widget, GdkEvent *event, gpointer data) {
     (void)widget; (void)event;
     Shell *s = data;
@@ -102,16 +113,6 @@ static gboolean press(GtkWidget *widget, GdkEventButton *event, gpointer data) {
     (void)widget;
     Shell *s = data;
     if (event->button == 1 && event->type == GDK_BUTTON_PRESS) {
-        gint width = gtk_widget_get_allocated_width(widget), height = gtk_widget_get_allocated_height(widget);
-        gboolean left = event->x < 5, right = event->x >= width - 5;
-        gboolean top = event->y < 5, bottom = event->y >= height - 5;
-        if (left || right || top || bottom) {
-            GdkWindowEdge edge = top ? (left ? GDK_WINDOW_EDGE_NORTH_WEST : right ? GDK_WINDOW_EDGE_NORTH_EAST : GDK_WINDOW_EDGE_NORTH)
-                : bottom ? (left ? GDK_WINDOW_EDGE_SOUTH_WEST : right ? GDK_WINDOW_EDGE_SOUTH_EAST : GDK_WINDOW_EDGE_SOUTH)
-                : left ? GDK_WINDOW_EDGE_WEST : GDK_WINDOW_EDGE_EAST;
-            gtk_window_begin_resize_drag(GTK_WINDOW(s->window), edge, 1, (gint)event->x_root, (gint)event->y_root, event->time);
-            return TRUE;
-        }
         s->pressed = TRUE; s->press_x = event->x_root; s->press_y = event->y_root;
         s->press_time = event->time; s->press_monotonic = g_get_monotonic_time();
         s->action_time = s->press_monotonic;
@@ -136,6 +137,10 @@ static gboolean window_state(GtkWidget *widget, GdkEventWindowState *event, gpoi
     Shell *s = data;
     if (event->changed_mask & GDK_WINDOW_STATE_FULLSCREEN) {
         s->fullscreen = (event->new_window_state & GDK_WINDOW_STATE_FULLSCREEN) != 0;
+        if (!s->fullscreen) {
+            fixed_geometry(s, TRUE);
+            gtk_window_resize(GTK_WINDOW(s->window), 860, 600);
+        }
         fullscreen_label(s);
     }
     return FALSE;
@@ -161,7 +166,7 @@ static void drag_message(WebKitUserContentManager *manager, WebKitJavascriptResu
         s->action_time = 0; // A native input can authorize at most one action.
         if (exit && !s->fullscreen) return;
         s->fullscreen = !exit && !s->fullscreen;
-        if (s->fullscreen) gtk_window_fullscreen(GTK_WINDOW(s->window));
+        if (s->fullscreen) { fixed_geometry(s, FALSE); gtk_window_fullscreen(GTK_WINDOW(s->window)); }
         else gtk_window_unfullscreen(GTK_WINDOW(s->window));
         fullscreen_label(s);
         return;
@@ -365,8 +370,10 @@ static gboolean open_window(Shell *s, const char *url) {
     gtk_window_set_wmclass(GTK_WINDOW(s->window), "yudesk", "YuDesk");
     gtk_window_set_icon_name(GTK_WINDOW(s->window), "yudesk");
     gtk_window_set_default_size(GTK_WINDOW(s->window), 860, 600);
-    gtk_widget_set_size_request(s->window, 720, 480);
-    gtk_window_set_resizable(GTK_WINDOW(s->window), TRUE);
+    gtk_widget_set_size_request(s->window, 860, 600);
+    // Keep minimization/window-manager integration while fixing both resize
+    // limits to the designed shell size. Edge resize gestures are not exposed.
+    fixed_geometry(s, TRUE);
     gtk_window_set_decorated(GTK_WINDOW(s->window), FALSE);
     gtk_window_set_position(GTK_WINDOW(s->window), GTK_WIN_POS_CENTER);
     gtk_container_add(GTK_CONTAINER(s->window), GTK_WIDGET(s->web));

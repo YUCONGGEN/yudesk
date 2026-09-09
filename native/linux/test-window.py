@@ -98,6 +98,12 @@ def run(test_binary, production_binary, output):
         p.send('open',url); p.event('ready')
         state=p.state(); assert state['visible'] and not state['decorated'],state
         assert state['width']==860 and state['height']==600,state
+        windows=subprocess.check_output(['xdotool','search','--onlyvisible','--pid',str(p.process.pid)],text=True).splitlines()
+        assert len(windows)==1,'fixed-size test targets only the fixture native window'
+        subprocess.run(['xdotool','windowsize',windows[0],'1000','700'],check=True)
+        time.sleep(.35)
+        state=p.state(); assert state['width']==860 and state['height']==600,state
+        print('PASS fixed 860x600 undecorated shell rejects window-manager resize',flush=True)
         value=None
         for _ in range(30):
             value=p.evaluate('window.featureResult')
@@ -147,7 +153,10 @@ def run(test_binary, production_binary, output):
             p.send('hide'); assert not p.state()['visible']
             p.send('show'); assert p.state()['visible']
         assert p.evaluate('window.fixtureRun')==marker,'hide recreated page'
-        p.send('minimize'); time.sleep(.3); assert p.state()['iconified']
+        p.send('minimize')
+        deadline=time.monotonic()+2
+        while time.monotonic()<deadline and not p.state()['iconified']: time.sleep(.1)
+        assert p.state()['iconified']
         p.send('show'); time.sleep(.3); assert not p.state()['iconified']
         print('PASS 860x600 frameless, hide/show preserves page, minimize/restore',flush=True)
         before=p.state()

@@ -52,8 +52,8 @@ func TestRejectedKeyDoesNotEndSessionOrPoisonMouse(t *testing.T) {
 	write(protocol.Message{Kind: "event", Method: "input", Params: []byte(`{"events":[{"type":"key_down","key":"Unmapped"}]}`)})
 	write(protocol.Message{Kind: "event", Method: "input", Params: []byte(`{"events":[{"type":"move","x":42,"y":30}]}`)})
 	write(protocol.Message{Kind: "request", Method: "ping", ID: "alive"})
-	seenError, seenRecovery := false, false
-	for {
+	seenError, seenRecovery, seenAlive := false, false, false
+	for !seenError || !seenRecovery || !seenAlive {
 		m, err := c.ReadMessage()
 		if err != nil {
 			t.Fatal("input error killed session", err)
@@ -65,7 +65,7 @@ func TestRejectedKeyDoesNotEndSessionOrPoisonMouse(t *testing.T) {
 			seenRecovery = true
 		}
 		if m.ID == "alive" {
-			break
+			seenAlive = true
 		}
 	}
 	if !seenError || !seenRecovery {

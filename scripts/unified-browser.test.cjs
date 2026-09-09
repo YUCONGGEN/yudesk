@@ -33,6 +33,12 @@ const {chromium}=require('playwright');
       assert.equal(minimized,1);
       await page.unroute(minimizeMatch);
     };
+    const checkSessionWindowActions=async page=>{
+      assert.equal(await page.locator('[data-window-action="hide"]').count(),0);
+      assert.equal(await page.locator('[aria-label="关闭应用"]').count(),0);
+      assert.equal(await page.locator('[data-window-action="minimize"]').count(),1);
+      assert.ok(await page.locator('[data-window-action="minimize"]').isVisible());
+    };
     for(const page of [left,right]){page.on('pageerror',e=>errors.push(e.message));page.on('dialog',dialog=>{dialogs.push({type:dialog.type(),message:dialog.message()});void dialog.dismiss().catch(()=>{});});await page.route(u=>u.pathname.startsWith('/api/input'),route=>route.fulfill({json:{ok:true}}));}
     await left.goto(leftURL);await right.goto(rightURL);
     for(const page of [left,right])await page.waitForFunction(()=>/^\d{3} \d{3} \d{3}$/.test(document.getElementById('localCode').textContent));
@@ -44,6 +50,12 @@ const {chromium}=require('playwright');
     await noPageScroll(left);
     await checkFooter(left);
     await checkWindowActions(left,'#hideApp');
+    const homeBrand=left.locator('#homeBrand');
+    assert.equal(await homeBrand.getAttribute('aria-label'),'返回远程控制首页');
+    await left.locator('nav [data-tab="settings"]').click();
+    await homeBrand.click();
+    assert.equal(await left.locator('#pane-remote').isVisible(),true);
+    assert.equal(await left.locator('#pageTitle').textContent(),'远程控制');
     assert.equal(await left.locator('#targetPIN').getAttribute('required'),null);
     const rotate=async page=>{
       const old=await page.locator('#localPIN').textContent();
@@ -161,7 +173,13 @@ const {chromium}=require('playwright');
     try{await left.waitForFunction(()=>document.getElementById('screen')?.dataset.ready==='1');}catch(error){throw Error('session failed: '+await left.locator('#notice').textContent().catch(()=> 'no session')+': '+error.message);}
     await left.screenshot({path:path.resolve('.smoke/unified-session.png')});
     await checkFooter(left);
-    await checkWindowActions(left,'[data-window-action="hide"]');
+    await checkSessionWindowActions(left);
+    assert.equal(await left.locator('#settings').getAttribute('aria-expanded'),'false');
+    assert.equal(await left.locator('#sessionPanel').isVisible(),false,'session settings must start collapsed');
+    await left.locator('#settings').click();
+    assert.equal(await left.locator('#sessionPanel').isVisible(),true);
+    await left.locator('#settings').click();
+    assert.equal(await left.locator('#sessionPanel').isVisible(),false);
     await rotate(right);
     assert.equal(await left.locator('#screen').getAttribute('data-ready'),'1');
     assert.equal(await left.locator('#disconnectForm').count(),1);
@@ -218,6 +236,6 @@ const {chromium}=require('playwright');
     await checkFooter(left);
     assert.deepEqual(errors,[]);
     assert.deepEqual(dialogs,[],'no browser alert/confirm/prompt is allowed');
-    console.log(JSON.stringify({dashboard:'compact, responsive, collapsed activation passed',identity:'9-digit unique alias and 6-digit PIN passed',devices:'add/search/status/reconnect passed',session:'pinned resolution, real desktop, return to unified dashboard passed',pause:'withdraw and restore receiving passed',window:'hide/minimize/close order and mocked minimize passed',consent:'custom service confirmation and 60-second PIN-less local approval passed; no browser dialogs'}));
+    console.log(JSON.stringify({dashboard:'compact, responsive, clickable home brand and collapsed activation passed',identity:'9-digit unique alias and 6-digit PIN passed',devices:'add/search/status/reconnect passed',session:'settings collapsed by default; hide/close removed; pinned resolution, real desktop and return passed',pause:'withdraw and restore receiving passed',window:'dashboard hide/minimize/close and session minimize-only controls passed',consent:'custom service confirmation and 60-second PIN-less local approval passed; no browser dialogs'}));
   }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

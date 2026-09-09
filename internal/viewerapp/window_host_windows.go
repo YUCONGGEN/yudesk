@@ -18,6 +18,8 @@ import (
 const (
 	windowCaption            = 0x00c00000
 	windowResize             = 0x00040000
+	windowMinimizeBox        = 0x00020000
+	windowMaximizeBox        = 0x00010000
 	windowChild              = 0x40000000
 	windowPopup              = 0x80000000
 	windowFrameChanged       = 0x0020
@@ -45,15 +47,14 @@ var nativeIsWindow = windowUser32.NewProc("IsWindow")
 var nativeEnumChildren = windowUser32.NewProc("EnumChildWindows")
 var nativeGetDPIContext = windowUser32.NewProc("GetWindowDpiAwarenessContext")
 var nativeSetDPIContext = windowUser32.NewProc("SetThreadDpiAwarenessContext")
-var nativeMonitorFromWindow = windowUser32.NewProc("MonitorFromWindow")
-var nativeGetMonitorInfo = windowUser32.NewProc("GetMonitorInfoW")
 var nativePostThreadMessage = windowUser32.NewProc("PostThreadMessageW")
 
 type nativeRect struct{ Left, Top, Right, Bottom int32 }
 type nativePoint struct{ X, Y int32 }
+type nativeMinMaxInfo struct{ Reserved, MaxSize, MaxPosition, MinTrackSize, MaxTrackSize nativePoint }
 
 // Chromium's --app caption is also drawn INSIDE its Win32 client area. Changing
-// WS_CAPTION alone cannot remove it. A resizable, captionless window owned by Go
+// WS_CAPTION alone cannot remove it. A fixed-size, captionless window owned by Go
 // clips the embedded browser at the actual web renderer bounds. The whole web
 // viewport (including YuDesk's own toolbar) remains visible, without fullscreen,
 // fixed pixel cropping, injected browser code, or subclassing another process.
@@ -61,6 +62,8 @@ type nativeAppWindow struct {
 	hwnd           atomic.Uintptr
 	threadID       atomic.Uint32
 	closing        atomic.Bool
+	fixedWidth     atomic.Int32
+	fixedHeight    atomic.Int32
 	done           chan struct{}
 	browser        uintptr
 	browserPID     uint32
@@ -83,21 +86,20 @@ var nativeWindowProc = syscall.NewCallback(func(hwnd uintptr, msg uint32, wp, lp
 	if value, ok := nativeWindows.Load(hwnd); ok {
 		n := value.(*nativeAppWindow)
 		switch msg {
-		case 0x0024: // WM_GETMINMAXINFO: maximize to the work area, keeping taskbar.
-			var monitor struct {
-				Size         uint32
-				Bounds, Work nativeRect
-				Flags        uint32
+		case 0x0112: // WM_SYSCOMMAND: fixed shell cannot be resized or maximized.
+			switch wp & 0xfff0 {
+			case 0xf000, 0xf030: // SC_SIZE, SC_MAXIMIZE
+				return 0
 			}
-			monitor.Size = uint32(unsafe.Sizeof(monitor))
-			hmon, _, _ := nativeMonitorFromWindow.Call(hwnd, 2)
-			if ok, _, _ := nativeGetMonitorInfo.Call(hmon, uintptr(unsafe.Pointer(&monitor))); ok != 0 {
-				var info struct{ Reserved, MaxSize, MaxPosition, MinTrackSize, MaxTrackSize nativePoint }
+		case 0x0024: // WM_GETMINMAXINFO: lock interactive tracking to the shell size.
+			width, height := n.fixedWidth.Load(), n.fixedHeight.Load()
+			if width > 0 && height > 0 {
+				var info nativeMinMaxInfo
 				// LPARAM belongs to USER32, not Go. Copy through the checked OS
 				// boundary instead of manufacturing a Go pointer from an integer.
 				if windows.ReadProcessMemory(windows.CurrentProcess(), lp, (*byte)(unsafe.Pointer(&info)), unsafe.Sizeof(info), nil) == nil {
-					info.MaxPosition = nativePoint{monitor.Work.Left - monitor.Bounds.Left, monitor.Work.Top - monitor.Bounds.Top}
-					info.MaxSize = nativePoint{monitor.Work.Right - monitor.Work.Left, monitor.Work.Bottom - monitor.Work.Top}
+					info.MinTrackSize = nativePoint{width, height}
+					info.MaxTrackSize = nativePoint{width, height}
 					if windows.WriteProcessMemory(windows.CurrentProcess(), lp, (*byte)(unsafe.Pointer(&info)), unsafe.Sizeof(info), nil) == nil {
 						return 0
 					}
@@ -148,6 +150,8 @@ var nativeWindowProc = syscall.NewCallback(func(hwnd uintptr, msg uint32, wp, lp
 		case 0x02e0: // WM_DPICHANGED: retain the suggested bounds on the new monitor
 			var r nativeRect
 			if windows.ReadProcessMemory(windows.CurrentProcess(), lp, (*byte)(unsafe.Pointer(&r)), unsafe.Sizeof(r), nil) == nil {
+				n.fixedWidth.Store(r.Right - r.Left)
+				n.fixedHeight.Store(r.Bottom - r.Top)
 				setAppWindowPos.Call(hwnd, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), windowNoZOrder|windowNoActivate)
 				_ = n.layout()
 				return 0
@@ -275,9 +279,11 @@ func (n *nativeAppWindow) run() {
 		n.complete(err)
 		return
 	}
+	n.fixedWidth.Store(rect.Right - rect.Left)
+	n.fixedHeight.Store(rect.Bottom - rect.Top)
 	// No WS_CAPTION or WS_SYSMENU: there is no native title/button area. Keep
-	// WS_THICKFRAME and min/max capabilities for resize, snap and taskbar restore.
-	style := uintptr(windowPopup | windowResize | 0x02000000 | 0x00030000)
+	// only minimization; the application owns its fixed layout and fullscreen UI.
+	style := uintptr(windowPopup | windowMinimizeBox | 0x02000000)
 	title := syscall.StringToUTF16Ptr("YuDesk")
 	hwnd, _, err := trayCreate.Call(0x00040000, uintptr(unsafe.Pointer(nativeClassName)), uintptr(unsafe.Pointer(title)), style,
 		uintptr(rect.Left), uintptr(rect.Top), uintptr(rect.Right-rect.Left), uintptr(rect.Bottom-rect.Top), 0, 0, instance, 0)
