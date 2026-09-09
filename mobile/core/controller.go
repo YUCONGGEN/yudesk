@@ -37,6 +37,7 @@ type Session struct {
 	rtt             int64
 	transport       string
 	transportReason string
+	meeting         bool
 	closed          bool
 }
 
@@ -50,6 +51,20 @@ func (e *Engine) Connect(deviceCode, pin string, control bool) (*Session, error)
 	if pin != "" && (len(pin) != 6 || strings.Trim(pin, "0123456789") != "") {
 		return nil, errors.New("PIN 应为 6 位数字，也可以留空请求同意")
 	}
+	return e.connect(code, pin, control, false)
+}
+
+// JoinMeeting resolves a temporary meeting number and always opens a view-only
+// session. The host does not receive a confirmation prompt.
+func (e *Engine) JoinMeeting(meetingCode string) (*Session, error) {
+	code := strings.ReplaceAll(strings.TrimSpace(meetingCode), " ", "")
+	if !relay.IsMeetingCode(code) {
+		return nil, errors.New("会议号应为 9 位数字")
+	}
+	return e.connect(code, code, false, true)
+}
+
+func (e *Engine) connect(code, pin string, control, meeting bool) (*Session, error) {
 	e.mu.Lock()
 	if !e.permittedLocked() {
 		e.mu.Unlock()
@@ -77,21 +92,31 @@ func (e *Engine) Connect(deviceCode, pin string, control bool) (*Session, error)
 			cancel()
 		}
 	}()
-	r, err := relay.ResolveDevice(ctx, relayAddress, relayOptions, code)
-	if err != nil {
-		return nil, err
+	targetID := ""
+	if meeting {
+		info, err := relay.ResolveMeeting(ctx, relayAddress, relayOptions, code)
+		if err != nil {
+			return nil, err
+		}
+		targetID = info.ID
+	} else {
+		resolved, err := relay.ResolveDevice(ctx, relayAddress, relayOptions, code)
+		if err != nil {
+			return nil, err
+		}
+		targetID = resolved.ID
 	}
-	if r.ID == e.identity.ID {
+	if targetID == e.identity.ID {
 		return nil, errors.New("不能连接本机")
 	}
-	raw, err := relay.DialWithContext(ctx, relayAddress, relayOptions, relay.Hello{Role: "viewer", ID: r.ID})
+	raw, err := relay.DialWithContext(ctx, relayAddress, relayOptions, relay.Hello{Role: "viewer", ID: targetID})
 	if err != nil {
 		return nil, err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	defer stop()
 	_ = raw.SetDeadline(time.Now().Add(10 * time.Second))
-	secured, err := secureconn.Connect(raw, r.ID)
+	secured, err := secureconn.Connect(raw, targetID)
 	if err != nil {
 		raw.Close()
 		return nil, err
@@ -101,11 +126,10 @@ func (e *Engine) Connect(deviceCode, pin string, control bool) (*Session, error)
 	if e.peerOptions != nil {
 		options = *e.peerOptions
 	}
-	s, err := openSessionWithOptions(ctx, secured, pin, control, options)
+	s, err := openSessionWithMode(ctx, secured, pin, control, meeting, options)
 	if err != nil {
 		return nil, err
 	}
-	context.AfterFunc(s.ctx, cancel)
 	e.mu.Lock()
 	if !e.permittedLocked() || ctx.Err() != nil {
 		e.mu.Unlock()
@@ -114,6 +138,14 @@ func (e *Engine) Connect(deviceCode, pin string, control bool) (*Session, error)
 	}
 	e.controller = s
 	e.mu.Unlock()
+	context.AfterFunc(s.ctx, func() {
+		cancel()
+		e.mu.Lock()
+		if e.controller == s {
+			e.controller = nil
+		}
+		e.mu.Unlock()
+	})
 	ok = true
 	return s, nil
 }
@@ -130,18 +162,25 @@ func openSession(parent context.Context, conn net.Conn, pin string, control bool
 }
 
 func openSessionWithOptions(parent context.Context, conn net.Conn, pin string, control bool, pathOptions peerpath.Options) (*Session, error) {
+	return openSessionWithMode(parent, conn, pin, control, false, pathOptions)
+}
+
+func openSessionWithMode(parent context.Context, conn net.Conn, pin string, control, meeting bool, pathOptions peerpath.Options) (*Session, error) {
 	ctx, cancel := context.WithCancel(parent)
+	if meeting {
+		control = false
+	}
 	mode := "view"
 	if control {
 		mode = "control"
 	}
-	pc, auth, route, err := peerpath.Authenticate(ctx, conn, map[string]any{"pin": pin, "mode": mode, "audio": false, "audioOnDemand": true, "interleaveV1": true}, pathOptions)
+	pc, auth, route, err := peerpath.Authenticate(ctx, conn, map[string]any{"pin": pin, "mode": mode, "meeting": meeting, "audio": false, "audioOnDemand": !meeting, "interleaveV1": true}, pathOptions)
 	if err != nil {
 		cancel()
 		_ = conn.Close()
 		return nil, err
 	}
-	s := &Session{ctx: ctx, cancel: cancel, conn: pc, pending: map[string]chan readResult{}, out: newLatestMoveQueue[protocol.Message](), acks: map[int64]string{}, changed: make(chan struct{}), message: "正在连接…", transport: route.Mode, transportReason: route.Reason}
+	s := &Session{ctx: ctx, cancel: cancel, conn: pc, pending: map[string]chan readResult{}, out: newLatestMoveQueue[protocol.Message](), acks: map[int64]string{}, changed: make(chan struct{}), message: "正在连接…", transport: route.Mode, transportReason: route.Reason, meeting: meeting}
 	go s.writer()
 	go s.reader()
 	go func() { <-ctx.Done(); _ = pc.Close() }()
@@ -166,7 +205,11 @@ func openSessionWithOptions(parent context.Context, conn net.Conn, pin string, c
 		return nil, err
 	}
 	s.mu.Lock()
-	s.message = "已连接"
+	if meeting {
+		s.message = "已加入会议，仅观看"
+	} else {
+		s.message = "已连接"
+	}
 	if control && !allowed {
 		s.message = "已连接，仅观看：对方未授权远程操作"
 	}
@@ -193,7 +236,7 @@ func (s *Session) Close() { s.fail("远程连接已结束") }
 func (s *Session) StatusJSON() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	b, _ := json.Marshal(map[string]any{"closed": s.closed, "message": s.message, "control": s.control, "platform": s.platform, "rttMs": s.rtt, "ready": s.frame != nil, "transport": s.transport, "transportReason": s.transportReason})
+	b, _ := json.Marshal(map[string]any{"closed": s.closed, "message": s.message, "control": s.control, "platform": s.platform, "rttMs": s.rtt, "ready": s.frame != nil, "transport": s.transport, "transportReason": s.transportReason, "meeting": s.meeting})
 	return string(b)
 }
 

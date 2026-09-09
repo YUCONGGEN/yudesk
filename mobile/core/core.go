@@ -18,7 +18,7 @@ import (
 	"github.com/yudesk/yudesk/internal/relay"
 )
 
-const Version = "2.0.0-preview.5"
+const Version = "2.0.0-preview.6"
 const relayAddress = "www.yucg.cn:8233"
 const fingerprint = "20FC953E48B6BEED7FB3A5F73BF177CC4E2557CF274C409FF4F0179E5FA0F836"
 
@@ -35,35 +35,44 @@ type status struct {
 	Sharing       bool      `json:"sharing"`
 	Accessibility bool      `json:"accessibility"`
 	Connected     bool      `json:"connected"`
+	Meeting       bool      `json:"meeting"`
+	MeetingCode   string    `json:"meetingCode,omitempty"`
+	MeetingUntil  time.Time `json:"meetingUntil,omitempty"`
 	Message       string    `json:"message"`
 }
 
 // Engine has one management loop and, while sharing is explicitly enabled,
 // one sequential agent connection. At most one incoming and outgoing session.
 type Engine struct {
-	mu              sync.Mutex
-	ctx             context.Context
-	cancel          context.CancelFunc
-	identity        identity.Identity
-	dir, name       string
-	state           status
-	agentCancel     context.CancelFunc
-	agentGeneration uint64
-	incomingSession uint64
-	controller      *Session
-	connecting      bool
-	connectCancel   context.CancelFunc
-	approvals       *approval.Broker
-	frame           *Frame
-	frameSequence   int64
-	frameWake       chan struct{}
-	input           *latestMoveQueue[string]
-	inputErrors     chan string
-	canInput        bool
-	streaming       bool
-	failures        []time.Time
-	changed         chan struct{}
-	peerOptions     *peerpath.Options // test-only isolated ICE endpoints; nil uses defaults
+	mu                   sync.Mutex
+	meetingMu            sync.Mutex
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	identity             identity.Identity
+	dir, name            string
+	state                status
+	agentCancel          context.CancelFunc
+	agentGeneration      uint64
+	incomingSession      uint64
+	meetingSession       bool
+	meetingGeneration    uint64
+	meetingRequestCancel context.CancelFunc
+	controller           *Session
+	connecting           bool
+	connectCancel        context.CancelFunc
+	approvals            *approval.Broker
+	frame                *Frame
+	frameSequence        int64
+	frameWake            chan struct{}
+	input                *latestMoveQueue[string]
+	inputErrors          chan string
+	canInput             bool
+	streaming            bool
+	failures             []time.Time
+	changed              chan struct{}
+	peerOptions          *peerpath.Options                                // test-only isolated ICE endpoints; nil uses defaults
+	meetingOpen          func(context.Context) (relay.MeetingInfo, error) // test-only relay seam
+	meetingClose         func(context.Context) error                      // test-only relay seam
 }
 
 // NewEngine must receive Android's private files directory, never shared storage.
@@ -119,14 +128,19 @@ func (e *Engine) RotatePIN() error {
 // mediaProjection foreground service. False immediately cancels every receiver.
 func (e *Engine) SetSharing(enabled bool) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.state.Sharing = enabled && e.state.Running
+	closedMeeting := false
 	if !e.state.Sharing {
+		closedMeeting = e.clearMeetingLocked(0, false)
 		e.stopAgentLocked()
 		e.frame = nil
 	}
 	e.reconcileLocked()
 	e.notifyLocked()
+	e.mu.Unlock()
+	if closedMeeting {
+		e.queueMeetingDirectoryClose()
+	}
 }
 func (e *Engine) SetAccessibility(enabled bool) {
 	e.mu.Lock()
@@ -156,6 +170,7 @@ func (e *Engine) stopAgentLocked() {
 	e.agentGeneration++
 	e.incomingSession++
 	e.state.Connected = false
+	e.meetingSession = false
 	e.streaming = false
 	e.canInput = false
 	e.approvals.Cancel()
@@ -188,14 +203,21 @@ func (e *Engine) stop(reason string) {
 	e.state.Online = false
 	e.state.Sharing = false
 	e.state.Message = reason
+	closedMeeting := e.clearMeetingLocked(0, false)
 	e.stopAgentLocked()
 	if e.connectCancel != nil {
 		e.connectCancel()
+	}
+	if e.meetingRequestCancel != nil {
+		e.meetingRequestCancel()
 	}
 	s := e.controller
 	e.notifyLocked()
 	e.mu.Unlock()
 	e.cancel()
+	if closedMeeting {
+		e.queueMeetingDirectoryClose()
+	}
 	if s != nil {
 		s.Close()
 	}
@@ -207,8 +229,8 @@ func (e *Engine) management() {
 	for e.ctx.Err() == nil {
 		err := relay.WatchDeviceWithPIN(e.ctx, relayAddress, relayOptions, relay.Hello{ID: e.identity.ID, Name: e.name, PIN: e.pin(), PublicKey: e.identity.PrivateKey.Public().(ed25519.PublicKey)}, e.identity.PrivateKey, e.pin, func(m relay.ControlMessage) {
 			e.mu.Lock()
-			defer e.mu.Unlock()
 			if !e.state.Running {
+				e.mu.Unlock()
 				return
 			}
 			backoff = time.Second
@@ -219,10 +241,12 @@ func (e *Engine) management() {
 				e.state.DeviceCode = m.DeviceCode
 			}
 			e.state.PINSynced = m.PIN == e.identity.PIN
+			closedMeeting := false
 			if m.Active {
 				e.state.Message = "管理通道已验证"
 			} else {
 				e.state.Message = "等待管理员激活设备"
+				closedMeeting = e.clearMeetingLocked(0, false)
 				if e.controller != nil {
 					e.controller.Close()
 				}
@@ -232,6 +256,10 @@ func (e *Engine) management() {
 			}
 			e.reconcileLocked()
 			e.notifyLocked()
+			e.mu.Unlock()
+			if closedMeeting {
+				e.queueMeetingDirectoryClose()
+			}
 		})
 		if e.ctx.Err() != nil {
 			return
@@ -243,6 +271,7 @@ func (e *Engine) management() {
 		e.mu.Lock()
 		e.state.Online = false
 		e.state.Message = "网络中断，接收已暂停"
+		e.clearMeetingLocked(0, false)
 		e.stopAgentLocked()
 		s := e.controller
 		if e.connectCancel != nil {

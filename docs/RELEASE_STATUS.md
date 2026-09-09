@@ -1,6 +1,26 @@
-# 当前部署状态（2026-09-09）
+# 当前部署状态（2026-09-10）
 
-## 当前客户端与服务：临时会议 `meeting-20260909.1`
+## 当前 Android 客户端：会议与横屏全屏 `android-meeting-20260910.3`
+
+Android **2.0.0-preview.6 / 2000006** 已于 **2026-09-10 06:31（北京时间）**部署到官网；Windows、Linux 和 macOS 安装包字节保持不变。iOS 与原生鸿蒙仍暂停。
+
+- Android 主界面新增原生紧凑会议区域：主持人先通过 MediaProjection 系统授权共享本机屏幕，再取得单独的 9 位临时会议号；参会者输入会议号直接加入，无需主持人二次确认。会议协议强制只观看，不开放触控、文字、剪贴板或文件命令，也不写入普通最近设备记录。Android 当前不支持系统声音，界面明确提示且不提供无效开关。
+- 普通远程控制和会议观看均自动进入沉浸式横屏全屏，仍可从顶部方向按钮切到竖屏；结束、离会或手机返回键会释放输入并恢复进入会话前的主界面方向。主持端共享不强制改变主持手机方向，旋转由 MediaProjection 尺寸回调继续适配。
+- 临时会议号创建/结束使用设备 Ed25519 私钥签名，Relay 只在内存保存短期映射；号码还会在端到端加密通道内再次校验。停止共享、主持人结束、最长两小时到期、设备离线或授权失效都会先撤销本机会议凭据并断开参会者。P2P 优先和 TLS 中转回退保持不变。
+- Android Go 核心三轮 `-race`、`go vet`、根模块全量 short 测试、四 ABI gomobile、Java 单元测试、SDK 35 编译、lint、APK v2 签名、16KB ZIP 对齐及四个 `libgojni.so` 的 `0x4000` LOAD 对齐均通过。APK 签名证书 SHA-256 仍为 `c8e35f5904ad92ab55a651f940d531c1193042dcfc2ac1a98b7dadf0c3994a6a`，可覆盖 preview.5。当前没有连接 USB 真机，不能把自动化结果表述为所有厂商的 MediaProjection、横屏手势、后台策略或真实公网会议验收。
+- 部署后服务 PID **34568**，服务端 SHA-256 为 `090c83aad509a2e367f37064a8fe5a16e5879c53d6adf6b59040d03bee9a5a79`；账号/授权设备/授权码数量保持 **0 / 54 / 9**，数据库 `quick_check` 为 `ok`。部署前没有活动会话，桌面下载哈希未变；最终 APK 原子替换未重启服务，可恢复备份位于 `/Users/yu/bin/yudesk/backups/android-meeting-20260910.3`，前两阶段备份也保留。
+- 官网发布日期显示 **2026-09-10 06:31（北京时间）**，公网重新下载 APK 后与本地 SHA-256 完全一致。官网 Android 项已更新为“控制 / 会议 / 授权共享 · 预览测试”。
+
+| 当前产物 | SHA-256 |
+| --- | --- |
+| Android preview.6 APK | `9d8521d4ffca62a0b4c7f147ed3dac0b6c9d35e3e9886574095afb4e275c95af` |
+| Windows x64 EXE（不变） | `7f306731b030056c67afcc33c5f5d1c40b8e29e7490df914aece4f97e402cd23` |
+| Linux x64 DEB（不变） | `45d16fdb7c03558499edc5551ed97495cba762d72e93380ed866f99af211025a` |
+| macOS Intel PKG（不变） | `ea808d538a1a8538bd3594f790e2c3a3983a870e7f24418382cbb7a4d05b3a33` |
+| macOS Apple Silicon PKG（不变） | `397dab466cf9a8dc63e4fdb9d2c83eeef057eec33fb83c7f15b6daa57d5c56e3` |
+| macOS 服务端 | `090c83aad509a2e367f37064a8fe5a16e5879c53d6adf6b59040d03bee9a5a79` |
+
+## 上一个桌面批次：临时会议 `meeting-20260909.1`
 
 桌面 **2.0.0** 会议版本已于 **2026-09-09 23:52（北京时间）**部署。Windows x64、Linux x64 revision 7、macOS Intel / Apple Silicon revision 7 均已更新；Android 继续使用 **2.0.0-preview.5** 原 APK，iOS 与原生鸿蒙仍暂停。
 
@@ -20,7 +40,7 @@
 | Android preview.5 APK（不变） | `2caac0f0b2e1e3d2c60978610f6f379b568629af91ac889bba0676f5554ca79d` |
 | macOS 服务端 | `c816acd030c2cb1fc0e6668bb5d5eff4dfda3688a7b4822bc5b5f40b4e55ea49` |
 
-当前会议范围是“一位主持人共享屏幕 + 一位参与者观看”，不是完整多人音视频会议：尚无摄像头、麦克风、成员列表、聊天、录制、主持权转移或 Android 会议入口。macOS 包仍未 Developer ID 签名/公证，Linux Wayland 与 Mac 图形真机需继续验收。更新前请完全退出旧 YuDesk，再下载安装新包。
+该批次的 Android APK 当时尚无会议入口，已由上方 preview.6 取代。当前会议范围仍是“一位主持人共享屏幕 + 一位参与者观看”，不是完整多人音视频会议：尚无摄像头、麦克风、成员列表、聊天、录制、主持权转移或多人屏幕共享。macOS 包仍未 Developer ID 签名/公证，Linux Wayland、Mac 图形真机与 Android 真机需继续验收。
 
 ## 当前服务：官网实时状态 `homepage-stats-20260909.2`
 

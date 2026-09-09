@@ -101,6 +101,28 @@ func (e *Engine) checkPIN(pin string) bool {
 		e.failures = append(e.failures, now)
 		return false
 	}
+	e.failures = nil
+	return true
+}
+
+func (e *Engine) checkMeeting(code string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	now := time.Now()
+	kept := e.failures[:0]
+	for _, at := range e.failures {
+		if now.Sub(at) < time.Minute {
+			kept = append(kept, at)
+		}
+	}
+	e.failures = kept
+	if len(kept) >= 5 || !e.meetingAllowedLocked(code) {
+		if len(kept) < 5 {
+			e.failures = append(e.failures, now)
+		}
+		return false
+	}
+	e.failures = nil
 	return true
 }
 
@@ -123,6 +145,7 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 	var auth struct {
 		PIN          string `json:"pin"`
 		Mode         string `json:"mode"`
+		Meeting      bool   `json:"meeting"`
 		InterleaveV1 bool   `json:"interleaveV1"`
 		P2PV1        bool   `json:"p2pV1"`
 	}
@@ -132,7 +155,16 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 	}
 	_ = raw.SetDeadline(time.Time{})
 	incoming := readMessages(ctx, c)
-	if auth.PIN == "" {
+	if auth.Meeting {
+		if auth.Mode != "view" {
+			_ = write(ctx, c, protocol.Failure(first.ID, "会议仅支持观看模式"))
+			return
+		}
+		if !e.checkMeeting(auth.PIN) {
+			_ = write(ctx, c, protocol.Failure(first.ID, "会议号无效或已过期"))
+			return
+		}
+	} else if auth.PIN == "" {
 		approvalCtx, stopApproval := context.WithCancel(ctx)
 		defer stopApproval()
 		decision := make(chan error, 1)
@@ -157,13 +189,15 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 		return
 	}
 	e.mu.Lock()
-	allowed := e.permittedLocked() && e.state.Sharing
-	control := auth.Mode == "control" && e.state.Accessibility
+	meetingAllowed := !auth.Meeting || e.meetingAllowedLocked(auth.PIN)
+	allowed := e.permittedLocked() && e.state.Sharing && meetingAllowed
+	control := !auth.Meeting && auth.Mode == "control" && e.state.Accessibility
 	var epoch uint64
 	if allowed {
 		e.incomingSession++
 		epoch = e.incomingSession
 		e.state.Connected = true
+		e.meetingSession = auth.Meeting
 		e.canInput = control
 		e.frame = nil
 	}
@@ -176,6 +210,7 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 		e.mu.Lock()
 		if e.incomingSession == epoch {
 			e.state.Connected = false
+			e.meetingSession = false
 			e.canInput = false
 			e.streaming = false
 			e.frame = nil
@@ -276,7 +311,7 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 		}
 		m := r.message
 		e.mu.Lock()
-		permitted := ctx.Err() == nil && e.incomingSession == epoch && e.permittedLocked() && e.state.Sharing
+		permitted := ctx.Err() == nil && e.incomingSession == epoch && e.permittedLocked() && e.state.Sharing && (!auth.Meeting || e.meetingAllowedLocked(auth.PIN))
 		e.mu.Unlock()
 		if !permitted {
 			return

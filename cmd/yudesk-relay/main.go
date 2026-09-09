@@ -1745,7 +1745,7 @@ var downloadLayout = []downloadPlatform{
 	{Name: "Linux", Detail: "Debian 12+ / Ubuntu 22.04+ · x64", Links: componentLinks("linux-amd64", ".deb")},
 	{Name: "macOS Intel", Detail: "macOS 13+ · Intel · 未公证", Links: componentLinks("darwin-amd64", ".pkg")},
 	{Name: "macOS Apple Silicon", Detail: "macOS 13+ · Apple Silicon · 未公证", Links: componentLinks("darwin-arm64", ".pkg")},
-	{Name: "Android 预览版", Detail: "Android 8+ · 需真机验收", Links: []downloadLink{{Name: "YuDesk Android", Description: "控制 / 授权共享屏幕 · 预览测试", Path: "android/yudesk.apk"}}},
+	{Name: "Android 预览版", Detail: "Android 8+ · 需真机验收", Links: []downloadLink{{Name: "YuDesk Android", Description: "控制 / 会议 / 授权共享 · 预览测试", Path: "android/yudesk.apk"}}},
 }
 
 func componentLinks(platform, suffix string) []downloadLink {

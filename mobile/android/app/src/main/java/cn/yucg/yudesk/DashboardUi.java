@@ -21,9 +21,11 @@ import android.graphics.drawable.RippleDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.os.Build;
 import android.os.PersistableBundle;
+import android.text.Editable;
 import android.text.InputFilter;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.text.method.PasswordTransformationMethod;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -58,6 +60,9 @@ final class DashboardUi {
         void connect();
         void startSharing();
         void stopSharing();
+        void startMeeting();
+        void endMeeting();
+        void joinMeeting();
         void accessibilitySettings();
         void rotatePin(Runnable finished);
         void clearHistory();
@@ -65,19 +70,19 @@ final class DashboardUi {
     }
 
     final ScrollView root;
-    final EditText code, pin;
+    final EditText code, pin, meetingCode;
     // Keep the activity's existing connect() contract; the visible selector uses native radio buttons.
     final CheckBox viewOnly;
-    final Button connect;
+    final Button connect, joinMeeting;
     final LinearLayout history;
     final TextView identity, state;
     private final Activity activity;
     private final Actions actions;
-    private final TextView localPin, status, pinNote, sharingStatus, touchStatus;
-    private final ImageButton revealPin, rotatePin, copyCode, copyPin, revealInput;
-    private final Button share, accessibility;
+    private final TextView localPin, status, pinNote, sharingStatus, touchStatus, meetingNumber, meetingStatus, meetingNote;
+    private final ImageButton revealPin, rotatePin, copyCode, copyPin, revealInput, copyMeeting;
+    private final Button share, accessibility, meetingAction;
     private String deviceCode = "", secret = "";
-    private boolean pinVisible, inputVisible, sharing, rotating, historyExpanded;
+    private boolean pinVisible, inputVisible, sharing, meetingActive, rotating, historyExpanded, connectionPending;
     private JSONArray recent = new JSONArray();
     private JSONObject lastState = new JSONObject();
     private Dialog details;
@@ -248,6 +253,64 @@ final class DashboardUi {
         connectionNote.setPadding(0, dp(8), 0, 0);
         target.addView(connectionNote);
 
+        LinearLayout meetingCard = card(page, Color.WHITE, 0xffdce6f5);
+        LinearLayout meetingHeading = row();
+        meetingHeading.addView(decorativeIcon(Icon.MONITOR, BLUE), square(20));
+        TextView meetingTitle = heading("会议", 17);
+        LinearLayout.LayoutParams meetingTitleParams = new LinearLayout.LayoutParams(0, -2, 1);
+        meetingTitleParams.setMarginStart(dp(8));
+        meetingHeading.addView(meetingTitle, meetingTitleParams);
+        meetingStatus = label("未开始", 11, MUTED);
+        meetingStatus.setTypeface(MEDIUM);
+        meetingHeading.addView(meetingStatus);
+        meetingCard.addView(meetingHeading);
+        space(meetingCard, 10);
+        TextView hostLabel = label("主持人共享本机屏幕", 12, MUTED);
+        meetingCard.addView(hostLabel);
+        LinearLayout hostRow = row();
+        meetingNumber = label("发起后生成 9 位会议号", 18, INK);
+        meetingNumber.setTypeface(Typeface.MONOSPACE);
+        meetingNumber.setSingleLine(true);
+        meetingNumber.setTextDirection(View.TEXT_DIRECTION_LTR);
+        meetingNumber.setAutoSizeTextTypeUniformWithConfiguration(11, 18, 1, TypedValue.COMPLEX_UNIT_SP);
+        hostRow.addView(meetingNumber, new LinearLayout.LayoutParams(0, dp(48), 1));
+        copyMeeting = iconButton(Icon.COPY, "复制会议号", this::copyMeetingCode);
+        hostRow.addView(copyMeeting, square(48));
+        meetingAction = button(activity, "发起会议", false, () -> {
+            if (meetingActive) actions.endMeeting(); else actions.startMeeting();
+        });
+        hostRow.addView(meetingAction, new LinearLayout.LayoutParams(-2, -2));
+        meetingCard.addView(hostRow);
+        divider(meetingCard, LINE);
+        space(meetingCard, 10);
+        TextView joinLabel = label("加入会议 · 无需主持人确认", 12, MUTED);
+        meetingCard.addView(joinLabel);
+        space(meetingCard, 6);
+        LinearLayout joinRow = row();
+        meetingCode = input("输入 9 位会议号", 9, false);
+        meetingCode.setId(View.generateViewId());
+        meetingCode.setBackground(fieldBackground(activity));
+        meetingCode.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+        LinearLayout.LayoutParams meetingCodeParams = new LinearLayout.LayoutParams(0, -2, 1);
+        meetingCodeParams.setMarginEnd(dp(8));
+        joinRow.addView(meetingCode, meetingCodeParams);
+        joinMeeting = button(activity, "加入", true, actions::joinMeeting);
+        joinRow.addView(joinMeeting, new LinearLayout.LayoutParams(dp(94), -2));
+        meetingCard.addView(joinRow);
+        meetingNote = label("参会端仅观看；Android 暂不支持系统声音。", 11, MUTED);
+        meetingNote.setPadding(0, dp(8), 0, 0);
+        meetingCard.addView(meetingNote);
+        meetingCode.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence value, int start, int before, int count) { updateMeetingJoin(); }
+            @Override public void afterTextChanged(Editable value) { }
+        });
+        meetingCode.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId != EditorInfo.IME_ACTION_DONE) return false;
+            if (joinMeeting.isEnabled()) joinMeeting.performClick();
+            return true;
+        });
+
         LinearLayout receive = card(page, Color.WHITE, LINE);
         receive.addView(heading("让对方连接此设备", 13));
         space(receive, 5);
@@ -326,6 +389,8 @@ final class DashboardUi {
         boolean connected = value.optBoolean("connected");
         boolean nextSharing = value.optBoolean("sharing");
         boolean touch = value.optBoolean("accessibility");
+        String nextMeetingCode = value.optString("meetingCode");
+        boolean nextMeeting = value.optBoolean("meeting") && nextMeetingCode.matches("[1-9][0-9]{8}");
         setText(identity, deviceCode.isEmpty() ? "正在登记…" : groupCode(deviceCode));
         identity.setContentDescription(deviceCode.isEmpty() ? "正在登记设备码" : "本机设备码 " + groupCode(deviceCode));
         enable(copyCode, deviceCode.matches("[1-9][0-9]{8}") && secret.matches("[0-9]{6}") && !rotating);
@@ -359,7 +424,34 @@ final class DashboardUi {
         setText(touchStatus, touch ? "已开启 · 可在系统撤销" : "仅观看无需开启");
         setText(accessibility, touch ? "管理" : "去开启");
         accessibility.setContentDescription(touch ? "管理远程触控无障碍权限" : "了解并开启远程触控无障碍权限");
+        if (meetingActive != nextMeeting || meetingAction.getTag() == null) {
+            meetingActive = nextMeeting;
+            meetingAction.setTag(nextMeeting);
+            setText(meetingAction, nextMeeting ? "结束会议" : "发起会议");
+            meetingAction.setTextColor(nextMeeting ? RED : BLUE);
+            meetingAction.setBackground(ripple(activity, nextMeeting ? 0xfffff0f0 : PALE_BLUE, 10, Color.TRANSPARENT));
+        }
+        setText(meetingNumber, nextMeeting ? groupCode(nextMeetingCode) : "发起后生成 9 位会议号");
+        meetingNumber.setContentDescription(nextMeeting ? "当前会议号 " + groupCode(nextMeetingCode) : "当前没有会议");
+        setText(meetingStatus, nextMeeting ? (connected ? "参会中" : "等待加入") : "未开始");
+        meetingStatus.setTextColor(nextMeeting ? GREEN : MUTED);
+        enable(meetingAction, !connectionPending && running && online && active && (!connected || nextMeeting));
+        enable(copyMeeting, nextMeeting);
+        setText(meetingNote, SystemClock.elapsedRealtime() < copiedUntil && copiedMessage.startsWith("会议号") ? copiedMessage : "参会端仅观看；Android 暂不支持系统声音。");
+        meetingNote.setTextColor(SystemClock.elapsedRealtime() < copiedUntil && copiedMessage.startsWith("会议号") ? BLUE : MUTED);
+        updateMeetingJoin();
         if (detailState != null && details != null && details.isShowing()) setText(detailState, detailedState());
+    }
+
+    void setConnectionPending(boolean pending) {
+        connectionPending = pending;
+        enable(connect, !pending);
+        updateMeetingJoin();
+    }
+
+    private void updateMeetingJoin() {
+        boolean available = lastState.optBoolean("running", true) && lastState.optBoolean("online") && lastState.optBoolean("active");
+        enable(joinMeeting, !connectionPending && available && meetingCode.getText().toString().replace(" ", "").matches("[1-9][0-9]{8}"));
     }
 
     void renderHistory(JSONArray devices) {
@@ -457,6 +549,24 @@ final class DashboardUi {
         copiedUntil=SystemClock.elapsedRealtime()+2500;pinNote.setText(copiedMessage);pinNote.setTextColor(BLUE);pinNote.announceForAccessibility(copiedMessage);
     }
 
+    private void copyMeetingCode() {
+        String value = lastState.optString("meetingCode");
+        if (!value.matches("[1-9][0-9]{8}")) return;
+        ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+        ClipData clip = ClipData.newPlainText("YuDesk 临时会议号", value);
+        if (Build.VERSION.SDK_INT >= 33) {
+            PersistableBundle extras = new PersistableBundle();
+            extras.putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true);
+            clip.getDescription().setExtras(extras);
+        }
+        clipboard.setPrimaryClip(clip);
+        copiedMessage = "会议号已复制，2 小时内有效";
+        copiedUntil = SystemClock.elapsedRealtime() + 2500;
+        setText(meetingNote, copiedMessage);
+        meetingNote.setTextColor(BLUE);
+        meetingNote.announceForAccessibility(copiedMessage);
+    }
+
     private String detailedState() {
         String message = lastState.optString("message", "正在读取设备状态…");
         if (lastState.optBoolean("online") && !lastState.optBoolean("active")) message += "\n设备未激活，请联系网站管理员。";
@@ -486,7 +596,7 @@ final class DashboardUi {
             actions.accessibilitySettings();
         });
         body.addView(permissions, new LinearLayout.LayoutParams(-1, -2));
-        detail(body, "当前支持", "屏幕共享、点击与拖动、常用按键、中文文本输入。");
+        detail(body, "当前支持", "屏幕共享、9 位临时会议、横屏全屏观看、点击与拖动、常用按键、中文文本输入。");
         detail(body, "暂不支持", "系统声音、麦克风、摄像头、文件传输和剪贴板同步。受保护的画面可能无法共享。");
         detail(body, "关于 YuDesk", version() + " · Android 预览版\n设计者 郁从根 · 17739798184");
         box.addView(scroll, new LinearLayout.LayoutParams(-1, -2));
