@@ -18,7 +18,7 @@ import (
 	"github.com/yudesk/yudesk/internal/relay"
 )
 
-const Version = "2.0.0-preview.7"
+const Version = "2.0.0-preview.8"
 const relayAddress = "www.yucg.cn:8233"
 const fingerprint = "20FC953E48B6BEED7FB3A5F73BF177CC4E2557CF274C409FF4F0179E5FA0F836"
 

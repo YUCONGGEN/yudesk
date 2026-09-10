@@ -99,7 +99,6 @@ public final class MainActivity extends Activity {
         if(remote!=null){remote.stop();remote=null;}
         remoteToolbar=null;
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        if(Build.VERSION.SDK_INT>=30)Api30.showSystemBars(getWindow());
         getWindow().setNavigationBarColor(0xfff4f7fb);getWindow().setStatusBarColor(0xfff4f7fb);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         setRequestedOrientation(dashboardOrientation);
@@ -117,7 +116,7 @@ public final class MainActivity extends Activity {
         });
         code=dashboardUi.code;pin=dashboardUi.pin;viewOnly=dashboardUi.viewOnly;connect=dashboardUi.connect;
         identity=dashboardUi.identity;state=dashboardUi.state;history=dashboardUi.history;
-        content(dashboardUi.root);dashboardUi.update(app.state());dashboardUi.setConnectionPending(connecting||meetingStarting||pendingMeetingStart);renderHistory();
+        content(dashboardUi.root);if(Build.VERSION.SDK_INT>=30)Api30.showSystemBars(getWindow());dashboardUi.update(app.state());dashboardUi.setConnectionPending(connecting||meetingStarting||pendingMeetingStart);renderHistory();
     }
     private void beginCapture() {
         if(app.sharing){showError("正在共享","如需重新授权，请先停止共享。无需重复开启。");return;}
@@ -174,7 +173,7 @@ public final class MainActivity extends Activity {
         remoteToolbar.orientation(getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE);remoteToolbar.update(status);
         root.addView(remoteToolbar.top,new LinearLayout.LayoutParams(-1,dp(44)));
         root.addView(remote,new LinearLayout.LayoutParams(-1,0,1));root.addView(remoteToolbar.bottom,new LinearLayout.LayoutParams(-1,dp(48)));
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);getWindow().setNavigationBarColor(0xff0c1420);getWindow().setStatusBarColor(0xff0c1420);immersiveRemote();content(root);remote.start();
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);getWindow().setNavigationBarColor(0xff0c1420);getWindow().setStatusBarColor(0xff0c1420);content(root);immersiveRemote();remote.start();
     }
     private void immersiveRemote(){
         if(Build.VERSION.SDK_INT>=30)Api30.hideSystemBars(getWindow());
@@ -192,15 +191,15 @@ public final class MainActivity extends Activity {
         String reason=failure.getMessage();if(reason==null||reason.trim().isEmpty())reason=failure.getClass().getSimpleName();
         TextView detail=text("启动组件加载失败，应用没有在后台运行。\n\n"+reason+"\n\n请点“重试”；若仍失败，请先卸载旧 YuDesk，再安装官网最新版。",13,MUTED);detail.setLineSpacing(dp(3),1);detail.setTextIsSelectable(true);detail.setPadding(0,dp(10),0,dp(14));card.addView(detail);
         LinearLayout actions=row();addButton(actions,button("退出",this::exit));addButton(actions,button("重试",()->{app.closeEngine();recreate();}));card.addView(actions);
-        background.addView(card,new LinearLayout.LayoutParams(-1,-2));content(background);
+        background.addView(card,new LinearLayout.LayoutParams(-1,-2));content(background);if(Build.VERSION.SDK_INT>=30)Api30.showSystemBars(getWindow());
     }
 
     // Keep references to newer framework classes out of MainActivity's verified
     // method bodies. Some OEM Android 8/9 runtimes resolve guarded classes early.
     @android.annotation.TargetApi(30)
     private static final class Api30 {
-        static void showSystemBars(Window window){window.setDecorFitsSystemWindows(true);android.view.WindowInsetsController bars=window.getInsetsController();if(bars!=null)bars.show(android.view.WindowInsets.Type.systemBars());}
-        static void hideSystemBars(Window window){window.setDecorFitsSystemWindows(false);android.view.WindowInsetsController bars=window.getInsetsController();if(bars!=null){bars.hide(android.view.WindowInsets.Type.systemBars());bars.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);}}
+        static void showSystemBars(Window window){window.getDecorView();window.setDecorFitsSystemWindows(true);android.view.WindowInsetsController bars=window.getInsetsController();if(bars!=null)bars.show(android.view.WindowInsets.Type.systemBars());}
+        static void hideSystemBars(Window window){window.getDecorView();window.setDecorFitsSystemWindows(false);android.view.WindowInsetsController bars=window.getInsetsController();if(bars!=null){bars.hide(android.view.WindowInsets.Type.systemBars());bars.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);}}
     }
 
     @android.annotation.TargetApi(34)
