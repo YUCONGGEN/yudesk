@@ -21,6 +21,7 @@ import (
 type Hello struct {
 	Role      string `json:"role"`
 	ID        string `json:"id"`
+	Room      string `json:"room,omitempty"`
 	Name      string `json:"name,omitempty"`
 	PIN       string `json:"pin,omitempty"`
 	Action    string `json:"action,omitempty"`

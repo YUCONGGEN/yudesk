@@ -5,10 +5,10 @@ const {chromium}=require('playwright');
 (async()=>{
   const [leftURL,rightURL,remoteCode,remotePIN]=process.argv.slice(2);
   for(const value of [leftURL,rightURL])assert.equal(new URL(value).hostname,'127.0.0.1');
-  const browser=await chromium.launch({executablePath:process.env.YUDESK_TEST_BROWSER,headless:true});
+  const browser=await chromium.launch({executablePath:process.env.YUDESK_TEST_BROWSER,headless:true,args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--autoplay-policy=no-user-gesture-required']});
   const errors=[],dialogs=[];
   try{
-    const context=await browser.newContext({viewport:{width:860,height:562}});
+    const context=await browser.newContext({viewport:{width:860,height:562},permissions:['camera','microphone'],acceptDownloads:true});
     const left=await context.newPage(),right=await context.newPage();
     const noPageScroll=async page=>{assert.deepEqual(await page.evaluate(()=>{window.scrollTo(100,100);return [window.scrollX,window.scrollY,document.documentElement.scrollWidth<=innerWidth,document.documentElement.scrollHeight<=innerHeight];}),[0,0,true,true]);};
     const checkFooter=async page=>{
@@ -152,30 +152,60 @@ const {chromium}=require('playwright');
     assert.ok(await left.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     assert.ok((await left.locator('#connectButton').boundingBox()).height<=46);
     await left.screenshot({path:path.resolve('.smoke/unified-dashboard.png')});
-    // A signed host publishes a distinct, short-lived 9-digit meeting number.
-    // Joining is immediate but the protocol must keep it view-only.
+    // A signed host creates a real multi-party room and enters it immediately.
     await right.locator('nav [data-tab="meeting"]').click();
+    await right.locator('#meetingHostName').fill('主持人');
     await right.locator('#startMeeting').click();
-    await right.waitForFunction(()=>/^\d{3} \d{3} \d{3}$/.test(document.getElementById('meetingCode').textContent));
-    const meetingInvite=(await right.locator('#meetingCode').textContent()).replace(/\D/g,'');
+    await right.locator('#conferenceRoom').waitFor({state:'visible',timeout:20000});
+    await right.waitForFunction(()=>document.getElementById('conferenceMemberCount').textContent==='1 人');
+    const meetingInvite=(await right.locator('#conferenceCode').textContent()).replace(/\D/g,'');
     assert.equal(meetingInvite.length,9);
     assert.notEqual(meetingInvite,remoteCode,'meeting number must remain distinct from the permanent device code');
-    assert.equal(await right.locator('#meetingDot').isVisible(),true);
-    await noPageScroll(right);
+    assert.equal(await right.locator('#meetingDot').evaluate(element=>element.hidden),false);
     await right.screenshot({path:path.resolve('.smoke/unified-meeting-host.png')});
     await left.locator('nav [data-tab="meeting"]').click();
+    await left.locator('#meetingJoinName').fill('参会者');
     await left.locator('#meetingInvite').fill(meetingInvite);
-    await left.locator('#joinMeeting').click({noWaitAfter:true});
-    await left.waitForFunction(()=>document.getElementById('screen')?.dataset.ready==='1');
+    // Joining with both media sources disabled must still establish the
+    // WebRTC session; a small data channel gives max-bundle a valid section.
+    await left.locator('#meetingJoinMic').uncheck();
+    await left.locator('#joinMeeting').click();
+    await left.locator('#conferenceRoom').waitFor({state:'visible',timeout:20000});
+    await Promise.all([left.waitForFunction(()=>document.getElementById('conferenceMemberCount').textContent==='2 人'),right.waitForFunction(()=>document.getElementById('conferenceMemberCount').textContent==='2 人')]);
+    await Promise.all([left.waitForFunction(()=>document.querySelectorAll('.conference-tile').length===2),right.waitForFunction(()=>document.querySelectorAll('.conference-tile').length===2)]);
+    await left.locator('#conferenceMic').click();
+    await Promise.all([left.waitForFunction(()=>document.querySelector('.conference-tile:not(.local) video')?.srcObject?.getAudioTracks().some(track=>track.readyState==='live')),right.waitForFunction(()=>document.querySelector('.conference-tile:not(.local) video')?.srcObject?.getAudioTracks().some(track=>track.readyState==='live'))]);
     assert.equal(await right.locator('#incomingApproval').isVisible(),false,'meeting number must join without host confirmation');
-    assert.equal(await left.locator('body').getAttribute('data-control'),'false');
-    assert.match(await left.locator('#status').textContent(),/仅观看/);
-    await left.locator('form[action^="/api/disconnect"] button').click();
-    await left.locator('#confirmDisconnect').click();
-    await left.waitForFunction(()=>document.getElementById('localCode')?.textContent.match(/^\d{3} \d{3} \d{3}$/));
-    await right.locator('#endMeeting').click();
+    assert.equal(await right.locator('#conferenceShare').isVisible(),true,'host must be allowed to share its screen');
+    assert.equal(await left.locator('#conferenceShare').isVisible(),false,'ordinary participants must not publish screen share');
+    await right.locator('#conferenceCamera').click();
+    await Promise.all([right.waitForFunction(()=>document.querySelector('.conference-tile.local video')?.srcObject?.getVideoTracks().some(track=>track.readyState==='live'&&track.enabled)),left.waitForFunction(()=>document.querySelector('.conference-tile:not(.local) video')?.srcObject?.getVideoTracks().some(track=>track.readyState==='live'))]);
+    await right.locator('#conferenceMemberButton').click();
+    await right.locator('.conference-member button').click();
     await right.locator('#confirmAccept').click();
-    await right.waitForFunction(()=>document.getElementById('meetingActive').hidden===true);
+    await Promise.all([
+      left.waitForFunction(()=>document.getElementById('conferenceLeave').textContent.includes('结束会议')&&!document.getElementById('conferenceShare').hidden),
+      right.waitForFunction(()=>document.getElementById('conferenceLeave').textContent.includes('离开会议')&&document.getElementById('conferenceShare').hidden),
+    ]);
+    assert.equal(await left.locator('#conferenceShare').isVisible(),true,'transferred host must receive host controls');
+    assert.equal(await right.locator('#conferenceShare').isVisible(),false,'old host must lose host controls');
+    await left.evaluate(()=>{navigator.mediaDevices.getDisplayMedia=()=>navigator.mediaDevices.getUserMedia({video:true});});
+    await left.locator('#conferenceShare').click();
+    await right.waitForFunction(()=>[...document.querySelectorAll('.conference-tile-state')].some(element=>element.textContent.includes('共享')));
+    await left.locator('#conferenceShare').click();
+    await right.waitForFunction(()=>![...document.querySelectorAll('.conference-tile-state')].some(element=>element.textContent.includes('共享')));
+    await left.locator('#conferenceRecord').click();
+    await Promise.all([left.locator('#conferenceRecording').waitFor({state:'visible'}),right.locator('#conferenceRecording').waitFor({state:'visible'})]);
+    await new Promise(resolve=>setTimeout(resolve,1200));
+    const recordingDownload=left.waitForEvent('download',{timeout:10000});
+    await left.locator('#conferenceRecord').click();
+    assert.match((await recordingDownload).suggestedFilename(),/^YuDesk-会议-\d{9}-.*\.webm$/);
+    await right.locator('#conferenceRecording').waitFor({state:'hidden'});
+    await left.screenshot({path:path.resolve('.smoke/unified-conference.png')});
+    await left.locator('#conferenceLeave').click();
+    await left.locator('#confirmAccept').click();
+    await Promise.all([left.locator('#conferenceRoom').waitFor({state:'hidden'}),right.locator('#conferenceRoom').waitFor({state:'hidden'})]);
+    await right.waitForFunction(()=>document.getElementById('meetingActive').hidden===true,{}, {timeout:12000});
     assert.equal(await right.locator('#meetingDot').isVisible(),false);
     // Pause must withdraw the waiting data connection, not just change a switch.
     await right.locator('nav [data-tab="remote"]').click();
@@ -190,6 +220,7 @@ const {chromium}=require('playwright');
     // Keep permission off: this fixture must not create a directory in the user's home.
     assert.equal(await right.locator('#filePermission').isChecked(),false);
     await right.locator('nav [data-tab="remote"]').click();
+    await left.locator('nav [data-tab="remote"]').click();
     await left.locator('#targetCode').fill(remoteCode);await left.locator('#targetPIN').fill(remotePIN);await left.locator('#connectButton').click();
     try{await left.waitForFunction(()=>document.getElementById('screen')?.dataset.ready==='1');}catch(error){throw Error('session failed: '+await left.locator('#notice').textContent().catch(()=> 'no session')+': '+error.message);}
     await left.screenshot({path:path.resolve('.smoke/unified-session.png')});
@@ -257,6 +288,6 @@ const {chromium}=require('playwright');
     await checkFooter(left);
     assert.deepEqual(errors,[]);
     assert.deepEqual(dialogs,[],'no browser alert/confirm/prompt is allowed');
-    console.log(JSON.stringify({dashboard:'compact, responsive, clickable home brand and collapsed activation passed',identity:'9-digit unique alias and 6-digit PIN passed',meeting:'temporary 9-digit number, immediate join, screen share, view-only and expiry controls passed',devices:'add/search/status/reconnect passed',session:'settings collapsed by default; hide/close removed; pinned resolution, real desktop and return passed',pause:'withdraw and restore receiving passed',window:'dashboard hide/minimize/close and session minimize-only controls passed',consent:'direct installed-mode elevation and 60-second PIN-less remote approval passed; destructive removal remains confirmed; no browser dialogs'}));
+    console.log(JSON.stringify({dashboard:'compact, responsive, clickable home brand and collapsed activation passed',identity:'9-digit unique alias and 6-digit PIN passed',meeting:'multi-party immediate join, names, WebRTC media mesh, host transfer and host-only controls passed',devices:'add/search/status/reconnect passed',session:'settings collapsed by default; hide/close removed; pinned resolution, real desktop and return passed',pause:'withdraw and restore receiving passed',window:'dashboard hide/minimize/close and session minimize-only controls passed',consent:'direct installed-mode elevation and 60-second PIN-less remote approval passed; destructive removal remains confirmed; no browser dialogs'}));
   }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

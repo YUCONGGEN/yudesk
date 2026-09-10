@@ -236,6 +236,18 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     }
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? { nil }
+    @available(macOS 12.0, *)
+    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        guard self.origin?.permits(webView.url) == true,
+              self.origin?.permits(frame.request.url) == true else {
+            decisionHandler(.deny); return
+        }
+        // WebKit still displays and persists the operating-system decision.
+        // This delegate only permits that prompt on YuDesk's private loopback page.
+        decisionHandler(.prompt)
+    }
     // App dialogs use HTML <dialog>. Never fall back to unstyled JS browser alerts.
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {

@@ -18,7 +18,7 @@ import (
 	"github.com/yudesk/yudesk/internal/relay"
 )
 
-const Version = "2.0.0-preview.8"
+const Version = "2.0.0-preview.9"
 const relayAddress = "www.yucg.cn:8233"
 const fingerprint = "20FC953E48B6BEED7FB3A5F73BF177CC4E2557CF274C409FF4F0179E5FA0F836"
 
@@ -46,6 +46,7 @@ type status struct {
 type Engine struct {
 	mu                   sync.Mutex
 	meetingMu            sync.Mutex
+	conferenceMu         sync.Mutex
 	ctx                  context.Context
 	cancel               context.CancelFunc
 	identity             identity.Identity
@@ -57,6 +58,7 @@ type Engine struct {
 	meetingSession       bool
 	meetingGeneration    uint64
 	meetingRequestCancel context.CancelFunc
+	conference           *Conference
 	controller           *Session
 	connecting           bool
 	connectCancel        context.CancelFunc
@@ -125,22 +127,18 @@ func (e *Engine) RotatePIN() error {
 }
 
 // SetSharing is called only after MediaProjection system approval and a running
-// mediaProjection foreground service. False immediately cancels every receiver.
+// mediaProjection foreground service. False immediately cancels remote-desktop
+// receivers, but does not end an independent multi-party conference.
 func (e *Engine) SetSharing(enabled bool) {
 	e.mu.Lock()
 	e.state.Sharing = enabled && e.state.Running
-	closedMeeting := false
 	if !e.state.Sharing {
-		closedMeeting = e.clearMeetingLocked(0, false)
 		e.stopAgentLocked()
 		e.frame = nil
 	}
 	e.reconcileLocked()
 	e.notifyLocked()
 	e.mu.Unlock()
-	if closedMeeting {
-		e.queueMeetingDirectoryClose()
-	}
 }
 func (e *Engine) SetAccessibility(enabled bool) {
 	e.mu.Lock()
@@ -212,6 +210,8 @@ func (e *Engine) stop(reason string) {
 		e.meetingRequestCancel()
 	}
 	s := e.controller
+	conference := e.conference
+	e.conference = nil
 	e.notifyLocked()
 	e.mu.Unlock()
 	e.cancel()
@@ -220,6 +220,9 @@ func (e *Engine) stop(reason string) {
 	}
 	if s != nil {
 		s.Close()
+	}
+	if conference != nil {
+		conference.Close()
 	}
 }
 func (e *Engine) Close() { e.stop("应用已停止") }
@@ -242,6 +245,7 @@ func (e *Engine) management() {
 			}
 			e.state.PINSynced = m.PIN == e.identity.PIN
 			closedMeeting := false
+			var conference *Conference
 			if m.Active {
 				e.state.Message = "管理通道已验证"
 			} else {
@@ -253,12 +257,17 @@ func (e *Engine) management() {
 				if e.connectCancel != nil {
 					e.connectCancel()
 				}
+				conference = e.conference
+				e.conference = nil
 			}
 			e.reconcileLocked()
 			e.notifyLocked()
 			e.mu.Unlock()
 			if closedMeeting {
 				e.queueMeetingDirectoryClose()
+			}
+			if conference != nil {
+				conference.Close()
 			}
 		})
 		if e.ctx.Err() != nil {
@@ -274,6 +283,8 @@ func (e *Engine) management() {
 		e.clearMeetingLocked(0, false)
 		e.stopAgentLocked()
 		s := e.controller
+		conference := e.conference
+		e.conference = nil
 		if e.connectCancel != nil {
 			e.connectCancel()
 		}
@@ -281,6 +292,9 @@ func (e *Engine) management() {
 		e.mu.Unlock()
 		if s != nil {
 			s.Close()
+		}
+		if conference != nil {
+			conference.Close()
 		}
 		if !pause(e.ctx, backoff) {
 			return

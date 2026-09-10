@@ -64,6 +64,7 @@ type broker struct {
 	lookups        map[string]lookupWindow
 	meetings       map[string]meetingRoom
 	meetingDevices map[string]string
+	conferenceSeq  uint64
 }
 
 type adminFlash struct {
@@ -236,7 +237,7 @@ func (b *broker) handle(c net.Conn) {
 		return
 	}
 	var h relay.Hello
-	if json.Unmarshal([]byte(parts[1]), &h) != nil || h.ID == "" || (h.Role != "agent" && h.Role != "viewer" && h.Role != "control" && h.Role != "resolve" && h.Role != "meeting" && h.Role != "meeting-resolve") {
+	if json.Unmarshal([]byte(parts[1]), &h) != nil || h.ID == "" || (h.Role != "agent" && h.Role != "viewer" && h.Role != "control" && h.Role != "resolve" && h.Role != "meeting" && h.Role != "meeting-resolve" && h.Role != "conference") {
 		return
 	}
 	h.ID = strings.ToUpper(h.ID)
@@ -250,6 +251,11 @@ func (b *broker) handle(c net.Conn) {
 	}
 	if h.Role == "meeting" {
 		b.handleMeeting(c, r, h)
+		return
+	}
+	if h.Role == "conference" {
+		paired = true // the long-lived conference handler owns this connection
+		b.handleConference(c, r, h)
 		return
 	}
 	if h.Role == "control" {
@@ -1781,6 +1787,7 @@ func (b *broker) homepageStats() homepageStats {
 	b.Lock()
 	defer b.Unlock()
 	online := make(map[string]struct{}, len(b.controls)+len(b.devices)+len(b.active))
+	conferenceParticipants, conferenceSessions := 0, 0
 	for deviceID, control := range b.controls {
 		if control != nil && !control.stopping {
 			online[deviceID] = struct{}{}
@@ -1794,7 +1801,17 @@ func (b *broker) homepageStats() homepageStats {
 	for deviceID := range b.active {
 		online[deviceID] = struct{}{}
 	}
-	return homepageStats{OnlineDevices: len(online), ConnectedDevices: len(b.active) * 2, ActiveSessions: len(b.active)}
+	for _, meeting := range b.meetings {
+		if meeting.conference == nil || len(meeting.conference.participants) == 0 {
+			continue
+		}
+		conferenceSessions++
+		for _, participant := range meeting.conference.participants {
+			conferenceParticipants++
+			online[participant.deviceID] = struct{}{}
+		}
+	}
+	return homepageStats{OnlineDevices: len(online), ConnectedDevices: len(b.active)*2 + conferenceParticipants, ActiveSessions: len(b.active) + conferenceSessions}
 }
 
 func serveDownloadHome(w http.ResponseWriter, root string, snapshots ...homepageStats) {

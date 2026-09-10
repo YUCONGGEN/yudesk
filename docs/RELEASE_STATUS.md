@@ -1,4 +1,26 @@
-# 当前部署状态（2026-09-10）
+# 当前部署状态（2026-09-11）
+
+## 当前多人音视频会议：`multiparty-conference-20260911.1`
+
+桌面 **2.0.0** 与 Android **2.0.0-preview.10 / 2000010** 已于 **2026-09-11 01:17（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包全部重建并发布；iOS 与原生鸿蒙继续暂停。
+
+- 原单观看者会议升级为最多 8 人的 WebRTC 音视频会议：姓名、9 位会议号直接入会、麦克风、摄像头、成员列表、主持人共享屏幕、转交主持人、本地录制和横屏全屏均已实现。会议采用原创浅色界面，视觉语言参考 `E:\welink`，不包含其品牌或资源。
+- 服务器只转发经设备签名认证的房间状态、SDP 和 ICE；摄像头、麦克风、屏幕媒体走 WebRTC/DTLS-SRTP P2P，不经过 Relay。当前没有 TURN/SFU，严格 NAT 可能导致部分媒体连接失败；mesh 上限 8 人，不适合大规模会议。
+- 修复 TLS 合并 `OK`/`welcome` 时丢首条消息、无媒体入会产生无 BUNDLE SDP、成员离开后迟到 ICE 误断开其他成员三项真实联调故障，并加入对应 Go/浏览器回归测试。
+- 全量 Go short/vet、Android 核心三轮 race/vet、23 项协议测试、42 项窗口/弹窗测试和最终 Windows 原生双客户端会议联调通过。Android 四 ABI、Java 单测、lint、v2 签名和 16 KiB 对齐通过；API 26 模拟器冷启动和 Windows/Android 公网入会通过。macOS 双架构由真实 Mac 工具链构建并完成包结构、权限说明和 ad-hoc strict/deep 验签；Linux 由 Ubuntu 22.04 环境构建。
+- 部署后服务 PID **5679**，`/healthz`、SQLite `quick_check`、管理员未登录 401、主页版本/北京时间日期及公开在线/连接统计通过。发布目录 `/Users/yu/bin/yudesk/releases/multiparty-conference-20260911.1`，可恢复备份 `/Users/yu/bin/yudesk/backups/multiparty-conference-20260911.1`。
+- 五个平台公网文件均完整下载并与本地 SHA-256 一致；Android 1 MiB Range 请求返回 `206` 和正确 `Content-Range`。macOS 仍未 Developer ID 签名/公证；Android 尚未覆盖所有厂商物理真机。
+
+| 当前产物 | SHA-256 |
+| --- | --- |
+| Windows x64 EXE | `b33ea6aad663da008d63ce024f6c358928c0214fd77afca0c716608b797aeae5` |
+| Linux x64 DEB | `55866fc7baa0371a6bf4c456c3c8f0bf0ef0ccd193eee4376da0f8f0ff32b2d2` |
+| macOS Intel PKG | `48207a9e254858f0f420a05fba5c4b4930807f4695e6b8a75f258f1053f8f172` |
+| macOS Apple Silicon PKG | `02a9f42d5390ee4e6c0b01eb5c4acd2ff4a39c0a488b4f3516b3dbf9c100772d` |
+| Android preview.10 APK | `8b428136dd7b6f4418f9a243110e0d7e39428a837ab823ffa03bb2f7fb3ad1a0` |
+| macOS 服务端 | `aebe449377b61d5aac8067fd927dfa13e340b0fffb73a46aa9e54e2cc806cea3` |
+
+完整会议范围和限制见 [多人会议说明](CONFERENCE_20260911.md)。
 
 ## 当前 Android 与 Windows 热修复：`android-startup-20260910.2`
 

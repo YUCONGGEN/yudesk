@@ -27,6 +27,9 @@ var dashboardHTML string
 //go:embed ui/dashboard.css
 var dashboardCSS string
 
+//go:embed ui/conference.css
+var conferenceCSS string
+
 //go:embed ui/dashboard.js
 var dashboardJS string
 
@@ -115,11 +118,14 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		serveViewerExitPage(w, "YuDesk 已停止："+s.Status)
 		return true
 	}
-	if path == "/assets/dashboard.css" || path == "/assets/dashboard.js" {
+	if path == "/assets/dashboard.css" || path == "/assets/conference.css" || path == "/assets/dashboard.js" {
 		w.Header().Set("Cache-Control", "no-store")
 		if path == "/assets/dashboard.css" {
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
 			_, _ = w.Write([]byte(dashboardCSS))
+		} else if path == "/assets/conference.css" {
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+			_, _ = w.Write([]byte(conferenceCSS))
 		} else {
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 			_, _ = w.Write([]byte(dashboardJS))
@@ -138,6 +144,10 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 	if path == "/api/local/status" && r.Method == http.MethodGet {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(d.device.Status())
+		return true
+	}
+	if path == "/api/local/conference" && r.Method == http.MethodGet {
+		d.serveConference(w, r)
 		return true
 	}
 	if path == "/api/local/meeting/resolve" && r.Method == http.MethodGet {

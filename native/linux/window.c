@@ -254,9 +254,15 @@ static gboolean script_dialog(WebKitWebView *web, WebKitScriptDialog *dialog, gp
     return TRUE;
 }
 static gboolean permission(WebKitWebView *web, WebKitPermissionRequest *request, gpointer data) {
-    (void)web; (void)data;
-    // Rendering remote media needs no camera/microphone, location or notifications.
-    // Clipboard remains WebKit's user-gesture API; do not auto-grant new devices.
+    Shell *s = data;
+    // The page can ask only after the user explicitly enables microphone or
+    // camera. Keep every other WebKit permission denied, and never grant media
+    // to a navigation outside this process-owned loopback origin.
+    if (permitted(s, webkit_web_view_get_uri(web)) &&
+        WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(request)) {
+        webkit_permission_request_allow(request);
+        return TRUE;
+    }
     webkit_permission_request_deny(request); return TRUE;
 }
 static void transfer_status(Shell *s, const char *state) {

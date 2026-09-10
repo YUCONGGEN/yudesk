@@ -9,9 +9,8 @@ import (
 	"github.com/yudesk/yudesk/internal/relay"
 )
 
-// StartMeeting creates a short-lived, signed relay-directory entry. Android
-// screen capture must already be active because only MediaProjection can grant
-// that permission and Go must never bypass the system consent UI.
+// StartMeeting creates a short-lived, signed relay-directory entry. Camera,
+// microphone and optional screen capture are selected after the host enters.
 func (e *Engine) StartMeeting() (string, error) {
 	e.meetingMu.Lock()
 	defer e.meetingMu.Unlock()
@@ -25,10 +24,6 @@ func (e *Engine) StartMeeting() (string, error) {
 	if !e.permittedLocked() {
 		e.mu.Unlock()
 		return "", errors.New("管理通道未连接或设备未激活")
-	}
-	if !e.state.Sharing {
-		e.mu.Unlock()
-		return "", errors.New("请先授权共享屏幕")
 	}
 	if e.state.Connected || e.controller != nil {
 		e.mu.Unlock()
@@ -64,7 +59,7 @@ func (e *Engine) StartMeeting() (string, error) {
 	}
 
 	e.mu.Lock()
-	if ctx.Err() != nil || !e.permittedLocked() || !e.state.Sharing || e.state.Connected || e.controller != nil {
+	if ctx.Err() != nil || !e.permittedLocked() || e.state.Connected || e.controller != nil {
 		e.mu.Unlock()
 		_ = e.closeMeetingDirectory()
 		return "", errors.New("设备状态已改变，请稍后重新发起会议")

@@ -29,13 +29,13 @@ func TestFooterPresentAndOfflineAssets(t *testing.T) {
 	}
 }
 
-func TestDashboardContainsTemporaryMeetingFlow(t *testing.T) {
+func TestDashboardContainsMultipartyMeetingFlow(t *testing.T) {
 	var output bytes.Buffer
 	if err := dashboardPage.Execute(&output, map[string]any{"Token": "test-token", "Version": "2.0.0"}); err != nil {
 		t.Fatal(err)
 	}
-	page := output.String() + dashboardJS + dashboardCSS
-	for _, expected := range []string{"data-tab=\"meeting\"", "快速会议", "9 位会议号", "/api/local/meeting/start", "/api/local/meeting/end", "/api/local/meeting/resolve", `name="meeting"`, "输入正确会议号即可直接加入", "meeting-grid"} {
+	page := output.String() + dashboardJS + dashboardCSS + conferenceCSS
+	for _, expected := range []string{"data-tab=\"meeting\"", "快速会议", "9 位会议号", "请输入姓名", "自己立即进入", "/api/local/meeting/start", "/api/local/meeting/end", "/api/local/meeting/resolve", "/api/local/conference", "RTCPeerConnection", "getUserMedia", "getDisplayMedia", "MediaRecorder", "设为主持人", "conference-grid"} {
 		if !strings.Contains(page, expected) {
 			t.Errorf("meeting dashboard does not contain %q", expected)
 		}

@@ -22,6 +22,8 @@
   <key>NSLocalNetworkUsageDescription</key>
   <string>YuDesk connects to devices you choose for attended remote desktop sessions.</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>YuDesk uses audio only when you enable it for a remote session.</string>
+  <string>YuDesk uses your microphone only when you enable it in a meeting or remote session.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>YuDesk uses your camera only when you enable video in a meeting.</string>
 </dict>
 </plist>

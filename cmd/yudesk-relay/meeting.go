@@ -16,8 +16,9 @@ import (
 )
 
 type meetingRoom struct {
-	deviceID string
-	expires  time.Time
+	deviceID   string
+	expires    time.Time
+	conference *conferenceRoom
 }
 
 func (b *broker) handleMeeting(c net.Conn, reader *bufio.Reader, hello relay.Hello) {
@@ -143,6 +144,7 @@ func (b *broker) handleMeetingResolve(c net.Conn, code string) {
 func (b *broker) cleanupMeetingsLocked(now time.Time) {
 	for code, room := range b.meetings {
 		if !room.expires.After(now) {
+			b.closeConferenceLocked(room.conference, "会议已到期")
 			delete(b.meetings, code)
 			if b.meetingDevices[room.deviceID] == code {
 				delete(b.meetingDevices, room.deviceID)
@@ -153,6 +155,9 @@ func (b *broker) cleanupMeetingsLocked(now time.Time) {
 
 func (b *broker) removeMeetingLocked(deviceID string) {
 	if code := b.meetingDevices[deviceID]; code != "" {
+		if room, ok := b.meetings[code]; ok {
+			b.closeConferenceLocked(room.conference, "主持人已结束会议")
+		}
 		delete(b.meetingDevices, deviceID)
 		delete(b.meetings, code)
 	}

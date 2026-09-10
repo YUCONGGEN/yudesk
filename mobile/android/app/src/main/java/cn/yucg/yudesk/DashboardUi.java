@@ -70,9 +70,9 @@ final class DashboardUi {
     }
 
     final ScrollView root;
-    final EditText code, pin, meetingCode;
+    final EditText code, pin, meetingCode, meetingName;
     // Keep the activity's existing connect() contract; the visible selector uses native radio buttons.
-    final CheckBox viewOnly;
+    final CheckBox viewOnly, meetingMic, meetingCamera;
     final Button connect, joinMeeting;
     final LinearLayout history;
     final TextView identity, state;
@@ -265,7 +265,28 @@ final class DashboardUi {
         meetingHeading.addView(meetingStatus);
         meetingCard.addView(meetingHeading);
         space(meetingCard, 10);
-        TextView hostLabel = label("主持人共享本机屏幕", 12, MUTED);
+        TextView nameLabel = label("你的姓名", 12, MUTED);
+        meetingCard.addView(nameLabel);
+        space(meetingCard, 6);
+        meetingName = nameInput("输入参会姓名");
+        meetingName.setText(activity.getPreferences(Activity.MODE_PRIVATE).getString("meeting_name", ""));
+        meetingName.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+        meetingCard.addView(meetingName, new LinearLayout.LayoutParams(-1, -2));
+        space(meetingCard, 8);
+        LinearLayout mediaRow = row();
+        meetingMic = new CheckBox(activity);
+        meetingMic.setText("入会开启麦克风");
+        meetingMic.setTextSize(12);
+        meetingMic.setTextColor(INK);
+        meetingMic.setChecked(true);
+        meetingCamera = new CheckBox(activity);
+        meetingCamera.setText("入会开启视频");
+        meetingCamera.setTextSize(12);
+        meetingCamera.setTextColor(INK);
+        mediaRow.addView(meetingMic, new LinearLayout.LayoutParams(0, dp(44), 1));
+        mediaRow.addView(meetingCamera, new LinearLayout.LayoutParams(0, dp(44), 1));
+        meetingCard.addView(mediaRow);
+        TextView hostLabel = label("发起后自己也会进入会议，主持人可共享屏幕", 11, MUTED);
         meetingCard.addView(hostLabel);
         LinearLayout hostRow = row();
         meetingNumber = label("发起后生成 9 位会议号", 18, INK);
@@ -297,12 +318,20 @@ final class DashboardUi {
         joinMeeting = button(activity, "加入", true, actions::joinMeeting);
         joinRow.addView(joinMeeting, new LinearLayout.LayoutParams(dp(94), -2));
         meetingCard.addView(joinRow);
-        meetingNote = label("参会端仅观看；Android 暂不支持系统声音。", 11, MUTED);
+        meetingNote = label("支持语音、视频、共享屏幕和主持人转让", 11, MUTED);
         meetingNote.setPadding(0, dp(8), 0, 0);
         meetingCard.addView(meetingNote);
         meetingCode.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
             @Override public void onTextChanged(CharSequence value, int start, int before, int count) { updateMeetingJoin(); }
+            @Override public void afterTextChanged(Editable value) { }
+        });
+        meetingName.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence value, int start, int before, int count) {
+                activity.getPreferences(Activity.MODE_PRIVATE).edit().putString("meeting_name", value.toString().trim()).apply();
+                updateMeetingJoin();
+            }
             @Override public void afterTextChanged(Editable value) { }
         });
         meetingCode.setOnEditorActionListener((view, actionId, event) -> {
@@ -437,7 +466,7 @@ final class DashboardUi {
         meetingStatus.setTextColor(nextMeeting ? GREEN : MUTED);
         enable(meetingAction, !connectionPending && running && online && active && (!connected || nextMeeting));
         enable(copyMeeting, nextMeeting);
-        setText(meetingNote, SystemClock.elapsedRealtime() < copiedUntil && copiedMessage.startsWith("会议号") ? copiedMessage : "参会端仅观看；Android 暂不支持系统声音。");
+        setText(meetingNote, SystemClock.elapsedRealtime() < copiedUntil && copiedMessage.startsWith("会议号") ? copiedMessage : "支持语音、视频、共享屏幕和主持人转让");
         meetingNote.setTextColor(SystemClock.elapsedRealtime() < copiedUntil && copiedMessage.startsWith("会议号") ? BLUE : MUTED);
         updateMeetingJoin();
         if (detailState != null && details != null && details.isShowing()) setText(detailState, detailedState());
@@ -451,7 +480,12 @@ final class DashboardUi {
 
     private void updateMeetingJoin() {
         boolean available = lastState.optBoolean("running", true) && lastState.optBoolean("online") && lastState.optBoolean("active");
-        enable(joinMeeting, !connectionPending && available && meetingCode.getText().toString().replace(" ", "").matches("[1-9][0-9]{8}"));
+        enable(joinMeeting, !connectionPending && available && validMeetingName() && meetingCode.getText().toString().replace(" ", "").matches("[1-9][0-9]{8}"));
+    }
+
+    private boolean validMeetingName() {
+        String value = meetingName.getText().toString().trim();
+        return !value.isEmpty() && value.codePointCount(0, value.length()) <= 32;
     }
 
     void renderHistory(JSONArray devices) {
@@ -596,8 +630,8 @@ final class DashboardUi {
             actions.accessibilitySettings();
         });
         body.addView(permissions, new LinearLayout.LayoutParams(-1, -2));
-        detail(body, "当前支持", "屏幕共享、9 位临时会议、横屏全屏观看、点击与拖动、常用按键、中文文本输入。");
-        detail(body, "暂不支持", "系统声音、麦克风、摄像头、文件传输和剪贴板同步。受保护的画面可能无法共享。");
+        detail(body, "当前支持", "多人语音和视频会议、9 位会议号、主持人转让与共享屏幕、本地录屏、横屏全屏远控、点击与拖动、常用按键、中文文本输入。");
+        detail(body, "系统限制", "Android 会议录制保存会议画面；受系统和应用版权保护的内部声音或画面可能无法录制或共享。");
         detail(body, "关于 YuDesk", version() + " · Android 预览版\n设计者 郁从根 · 17739798184");
         box.addView(scroll, new LinearLayout.LayoutParams(-1, -2));
         dialog.setContentView(box);
@@ -662,6 +696,22 @@ final class DashboardUi {
         field.setPadding(dp(13), dp(12), dp(13), dp(12));
         field.setMinimumHeight(dp(48));
         field.setSelectAllOnFocus(false);
+        field.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+        return field;
+    }
+
+    private EditText nameInput(String hint) {
+        EditText field = new EditText(activity);
+        field.setSingleLine(true);
+        field.setTextSize(15);
+        field.setTextColor(INK);
+        field.setHintTextColor(MUTED);
+        field.setHint(hint);
+        field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        field.setFilters(new InputFilter[]{new InputFilter.LengthFilter(32)});
+        field.setBackground(fieldBackground(activity));
+        field.setPadding(dp(13), dp(12), dp(13), dp(12));
+        field.setMinimumHeight(dp(48));
         field.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         return field;
     }

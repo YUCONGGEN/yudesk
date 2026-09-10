@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -321,6 +323,19 @@ func (d *Device) EndMeeting() {
 	if wasOpen {
 		d.closeMeetingDirectory()
 	}
+}
+
+// DialConference opens only the small TLS-protected WebRTC signaling tunnel.
+// Media remains peer-to-peer; the private identity key never leaves Device.
+func (d *Device) DialConference(ctx context.Context, code, name string, host bool) (net.Conn, error) {
+	code, name = strings.TrimSpace(code), strings.TrimSpace(name)
+	if host {
+		status := d.Status()
+		if !status.Meeting || status.MeetingCode != code || !status.MeetingUntil.After(time.Now()) {
+			return nil, errors.New("本机没有有效的主持会议")
+		}
+	}
+	return relay.DialConference(ctx, d.relayAddr, d.transport, d.a.id, d.a.privateKey, code, name, host)
 }
 
 func (d *Device) expireMeeting(generation uint64) {

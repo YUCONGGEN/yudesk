@@ -143,7 +143,7 @@ func TestMeetingStartCanBeCanceled(t *testing.T) {
 	}
 }
 
-func TestStoppingScreenShareInvalidatesMeeting(t *testing.T) {
+func TestStoppingScreenShareKeepsConferenceRoom(t *testing.T) {
 	e := testEngine(t)
 	closed := make(chan struct{}, 1)
 	e.meetingOpen = func(context.Context) (relay.MeetingInfo, error) {
@@ -154,13 +154,21 @@ func TestStoppingScreenShareInvalidatesMeeting(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.SetSharing(false)
+	var state status
+	if err := json.Unmarshal([]byte(e.StatusJSON()), &state); err != nil || !state.Meeting || state.Sharing {
+		t.Fatalf("screen sharing stop ended independent meeting: %+v err=%v", state, err)
+	}
+	select {
+	case <-closed:
+		t.Fatal("screen sharing stop closed conference directory")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := e.EndMeeting(); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-closed:
 	case <-time.After(time.Second):
-		t.Fatal("meeting directory was not closed with screen sharing")
-	}
-	var state status
-	if err := json.Unmarshal([]byte(e.StatusJSON()), &state); err != nil || state.Meeting || state.Sharing {
-		t.Fatalf("screen sharing stop left meeting active: %+v err=%v", state, err)
+		t.Fatal("explicit meeting end did not close directory")
 	}
 }

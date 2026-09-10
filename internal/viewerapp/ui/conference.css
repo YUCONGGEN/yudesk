@@ -1,0 +1,62 @@
+/* Meeting surfaces follow the light, compact visual language used by WeLink. */
+#pane-meeting .section-heading{margin-bottom:18px}
+#pane-meeting .meeting-grid{gap:16px}
+#pane-meeting .meeting-card{border-color:#e5eaf1;border-radius:12px;background:#fff;box-shadow:0 2px 12px rgba(33,49,74,.045)}
+#pane-meeting .meeting-card:hover{border-color:#cddff5;box-shadow:0 7px 22px rgba(28,79,145,.07)}
+#pane-meeting .meeting-icon{background:#e6f3ff;color:#087ff2}
+#pane-meeting .secondary-icon{background:#f0f3f7;color:#66788e}
+#pane-meeting .meeting-input input{border-color:#dfe5ed;background:#fbfcfe}
+#pane-meeting .meeting-input input:focus{border-color:#4a9df0;background:#fff}
+#pane-meeting .meeting-security{border:1px solid #e4eefb;background:#f5f9ff}
+.conference-room{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden;border:1px solid #e4e9ef;border-radius:10px;background:#f5f6f7;color:#22262b;box-shadow:0 8px 30px rgba(27,48,78,.10)}
+.conference-room[hidden]{display:none}
+.conference-head{height:58px;flex:0 0 58px;display:flex;align-items:center;gap:18px;padding:0 20px;border-bottom:1px solid #e8ebef;background:#fff}
+.conference-head>div{display:flex;align-items:center;gap:11px;min-width:0}
+.conference-head strong{color:#22262b;font-size:15px;font-weight:650;white-space:nowrap}
+.conference-code{min-height:27px;padding:3px 8px;border-radius:6px;background:transparent;color:#7d8998;font-size:11px;letter-spacing:.9px}
+.conference-code:hover{background:#f0f6fd;color:#087ff2}
+.conference-code svg,.conference-head-button svg{width:14px;height:14px}
+.conference-connection{margin-left:auto;color:#8d97a5;font-size:11px}
+.conference-recording{color:#e45d64;font-size:11px}
+.conference-head-button{min-height:29px;padding:4px 10px;border:1px solid #dce3eb;border-radius:6px;background:#fff;color:#607083;font-size:11px}
+.conference-head-button:hover{border-color:#bcd7f4;background:#edf6ff;color:#087ff2}
+.conference-stage{flex:1;min-height:0;display:flex;background:#f5f6f7}
+.conference-grid{flex:1;min-width:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));grid-auto-rows:minmax(150px,1fr);gap:12px;padding:14px;overflow:auto;background:#f5f6f7}
+.conference-tile{position:relative;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid #e1e7ee;border-radius:10px;background:#fff;box-shadow:0 1px 4px rgba(36,52,74,.045)}
+.conference-tile video{width:100%;height:100%;display:block;object-fit:cover;background:#fff}
+.conference-tile.local video:not(.screen){transform:scaleX(-1)}
+.conference-tile video.screen{object-fit:contain;background:#eef1f5}
+.conference-avatar{position:absolute;inset:0;display:grid;place-items:center;background:radial-gradient(circle at 50% 43%,#f7fbff,#edf4fb 64%);color:#0786ef;font-size:36px;font-weight:650}
+.conference-tile.has-video .conference-avatar{display:none}
+.conference-tile-name{position:absolute;left:10px;bottom:10px;max-width:calc(100% - 20px);padding:5px 9px;overflow:hidden;border:1px solid rgba(229,234,240,.9);border-radius:6px;background:rgba(255,255,255,.93);color:#2b3440;font-size:11px;text-overflow:ellipsis;white-space:nowrap;backdrop-filter:blur(8px)}
+.conference-tile-state{position:absolute;top:9px;right:9px;display:flex;gap:5px}
+.conference-tile-state span{display:grid;place-items:center;min-width:22px;height:22px;padding:0 7px;border:1px solid #e3e8ee;border-radius:11px;background:rgba(255,255,255,.92);color:#8994a2;font-size:9px;backdrop-filter:blur(7px)}
+.conference-tile-state .active{border-color:#cdebdc;background:rgba(239,251,245,.94);color:#299b68}
+.conference-members{width:240px;flex:0 0 240px;overflow:auto;border-left:1px solid #e8ebef;background:#fff}
+.conference-members-head{height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid #e8edf2;color:#2b333e;font-size:13px}
+.conference-members-head span{color:#8995a3;font-size:10px}
+.conference-member{display:grid;grid-template-columns:30px minmax(0,1fr) auto;align-items:center;gap:9px;min-height:56px;padding:8px 13px;border-bottom:1px solid #edf0f3}
+.conference-member-avatar{width:30px;height:30px;display:grid;place-items:center;border-radius:50%;background:#e3f3ff;color:#008bf0;font-size:11px;font-weight:650}
+.conference-member strong{display:block;overflow:hidden;color:#2b333e;font-size:11px;font-weight:550;text-overflow:ellipsis;white-space:nowrap}
+.conference-member small{display:block;margin-top:3px;color:#8c97a4;font-size:9px}
+.conference-member button{min-height:25px;padding:3px 7px;border-radius:6px;background:#edf6ff;color:#087ff2;font-size:9px}
+.conference-toolbar{height:78px;flex:0 0 78px;display:flex;align-items:center;justify-content:center;gap:10px;padding:7px 18px;border-top:1px solid #e8ebef;background:#fff}
+.conference-toolbar button{width:74px;min-height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;border:0;border-radius:8px;background:transparent;color:#657382}
+.conference-toolbar button:hover{background:#edf6ff;color:#087ff2}
+.conference-toolbar button[aria-pressed="true"]{background:transparent;color:#087ff2}
+.conference-toolbar button[aria-pressed="false"] svg{color:#e75e64}
+.conference-toolbar button svg{width:23px;height:23px}
+.conference-toolbar button small{color:inherit;font-size:10px}
+.conference-toolbar .conference-danger{width:92px;margin-left:12px;border:1px solid #f0d0d2;background:#fff6f6;color:#d85259}
+.conference-toolbar .conference-danger:hover{border-color:#e6aeb2;background:#fff0f0;color:#c94048}
+.conference-toolbar .conference-danger svg{color:inherit}
+.conference-live{grid-template-columns:1fr;grid-template-rows:1fr}
+.conference-live>.sidebar,.conference-live .topbar,.conference-live>.app-footer{display:none}
+.conference-live main,.conference-live .content,.conference-live #pane-meeting{width:100%;height:100%;max-width:none;padding:0;margin:0}
+.conference-live #meetingLobby{display:none}
+.conference-live .conference-room{border:0;border-radius:0;box-shadow:none}
+.conference-fullscreen .conference-head{display:none}
+.conference-fullscreen .conference-toolbar{height:72px;flex-basis:72px}
+.conference-live .notice{top:68px;bottom:auto;z-index:30;pointer-events:none;border:1px solid #d8e7fa;background:rgba(247,251,255,.96);color:#44617f}
+@media(max-width:680px){#pane-meeting .meeting-grid{gap:9px}.conference-grid{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));padding:9px;gap:8px}.conference-members{width:188px;flex-basis:188px}.conference-toolbar{gap:3px;padding-right:8px;padding-left:8px}.conference-toolbar button{width:62px}}
+@media(max-width:500px){#pane-meeting .meeting-grid{grid-template-columns:1fr 1fr}#pane-meeting .meeting-card{padding:10px}#pane-meeting .meeting-card-head p{display:none}#pane-meeting .meeting-media-options{flex-direction:column;align-items:flex-start;gap:3px}.conference-stage{position:relative}.conference-members{position:absolute;z-index:4;top:0;right:0;bottom:0;width:195px}.conference-head{gap:7px;padding:0 10px}.conference-connection{display:none}.conference-toolbar{justify-content:space-around;gap:0}.conference-toolbar button{width:54px}.conference-toolbar .conference-danger{width:70px;margin-left:2px}}
