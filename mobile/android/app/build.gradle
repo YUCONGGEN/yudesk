@@ -20,8 +20,8 @@ android {
         applicationId 'cn.yucg.yudesk.preview'
         minSdk 26
         targetSdk 35
-        versionCode 2000006
-        versionName '2.0.0-preview.6'
+        versionCode 2000007
+        versionName '2.0.0-preview.7'
         testInstrumentationRunner 'android.test.InstrumentationTestRunner'
     }
     compileOptions {
@@ -33,7 +33,10 @@ android {
         release { minifyEnabled false }
     }
     lint { abortOnError true; checkReleaseBuilds true }
-    packaging { jniLibs { useLegacyPackaging = false } }
+    // A universal APK carries four gomobile ABIs. Compress the native entries
+    // for reliable direct HTTP downloads; Android extracts them before load.
+    // The ELF LOAD segments remain 16 KiB aligned for newer devices.
+    packaging { jniLibs { useLegacyPackaging = true } }
     sourceSets.main.assets.srcDir thirdPartyAssets
 }
 tasks.named('preBuild') { dependsOn 'copyThirdPartyNotices' }

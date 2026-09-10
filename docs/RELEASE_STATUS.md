@@ -1,6 +1,25 @@
 # 当前部署状态（2026-09-10）
 
-## 当前 Android 客户端：会议与横屏全屏 `android-meeting-20260910.3`
+## 当前 Android 客户端：启动与下载修复 `android-startup-20260910.1`
+
+Android **2.0.0-preview.7 / 2000007** 已于 **2026-09-10 12:31（北京时间）**部署到官网；Windows、Linux 和 macOS 安装包字节保持不变。iOS 与原生鸿蒙仍暂停。
+
+- 官网旧 44,711,068 字节 APK 在受限公网链路中复现过中途截断，残包被 Android 安装器报告为清单解析失败。四 ABI 通用 APK 现使用安装时提取的压缩原生库，降为 **19,240,228 字节**，比上一版减少约 57%；四 ABI 和各 ELF 的 16 KiB LOAD 对齐不变。
+- 下载服务继续为已验证安装包单独提供 10 分钟写入窗口，并增加强 ETag、`Accept-Ranges: bytes`、`no-transform`，去除可能阻碍 Android 下载器保存断点的 `no-store`。公网以 650 KB/s 限速完整下载通过，字节数和 SHA-256 与本地产物一致；1 MiB Range 请求返回 `206` 与正确 `Content-Range`。
+- Android 11/14 新框架类已隔离到版本专用调用类；原生库加载或首屏初始化的 `Error` 会留在统一样式故障页，提供重试/退出，不再表现为静默退出。Android 8 / API 26 x86_64 软件模拟器完成覆盖安装、冷启动、进程存活和 Go 核心上线，显示“已就绪”，没有 YuDesk 崩溃日志。
+- Go 核心三轮 race、`go vet`、29 项 Java 单测、lint、四 ABI gomobile、APK v2 签名与 16KB 校验通过；根模块全量 short 测试及 Relay race 测试通过。模拟器不等于所有品牌真机验收，仍需用户手机的具体安装提示或 logcat 排除旧签名冲突和厂商策略。
+- 服务端 PID **98308**，SHA-256 为 `0d36144672e67549d715d82f66e98d2c1fcb7db5d942396c57b9777369c7f619`；数据库 `quick_check`、六项下载清单和 `/healthz` 均通过，部署时无活动会话。可恢复备份位于 `/Users/yu/bin/yudesk/backups/android-startup-20260910.1`。
+
+| 当前产物 | SHA-256 |
+| --- | --- |
+| Android preview.7 APK | `8b91875ff3109e7cc96cb58f6162bd2d77d842b494ed52a30c57c23c5d3c4fc0` |
+| Windows x64 EXE（不变） | `7f306731b030056c67afcc33c5f5d1c40b8e29e7490df914aece4f97e402cd23` |
+| Linux x64 DEB（不变） | `45d16fdb7c03558499edc5551ed97495cba762d72e93380ed866f99af211025a` |
+| macOS Intel PKG（不变） | `ea808d538a1a8538bd3594f790e2c3a3983a870e7f24418382cbb7a4d05b3a33` |
+| macOS Apple Silicon PKG（不变） | `397dab466cf9a8dc63e4fdb9d2c83eeef057eec33fb83c7f15b6daa57d5c56e3` |
+| macOS 服务端 | `0d36144672e67549d715d82f66e98d2c1fcb7db5d942396c57b9777369c7f619` |
+
+## 上一个 Android 客户端：会议与横屏全屏 `android-meeting-20260910.3`
 
 Android **2.0.0-preview.6 / 2000006** 已于 **2026-09-10 06:31（北京时间）**部署到官网；Windows、Linux 和 macOS 安装包字节保持不变。iOS 与原生鸿蒙仍暂停。
 

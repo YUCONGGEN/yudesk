@@ -12,7 +12,6 @@ import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.media.projection.MediaProjectionConfig;
 import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -23,11 +22,10 @@ import android.provider.Settings;
 import android.text.InputFilter;
 import android.text.InputType;
 import android.text.method.PasswordTransformationMethod;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
-import android.view.WindowInsets;
-import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.*;
 import cn.yucg.bridge.core.Engine;
@@ -41,6 +39,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
+    private static final String TAG = "YuDeskStartup";
     private static final int BLUE = 0xff1677ff, INK = 0xff17253b, MUTED = 0xff75839a;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -71,9 +70,16 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);app = (YuDeskApp)getApplication();
-        try { app.engine(); } catch (Exception ex) { showError("启动失败",ex.getMessage());return; }
-        if(saved!=null){dashboardOrientation=saved.getInt("dashboardOrientation",ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);remoteModeSaved=saved.containsKey("mouseMode");savedMouseMode=saved.getBoolean("mouseMode");}
-        if(app.session!=null)showRemote();else dashboard();
+        try {
+            app.engine();
+            if(saved!=null){dashboardOrientation=saved.getInt("dashboardOrientation",ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);remoteModeSaved=saved.containsKey("mouseMode");savedMouseMode=saved.getBoolean("mouseMode");}
+            if(app.session!=null)showRemote();else dashboard();
+        } catch (Throwable failure) {
+            // Linkage errors (unsupported/missing native libraries) are Errors, not
+            // Exceptions. Keep the Activity visible so a bad ABI or OEM runtime
+            // cannot look like the application silently exited.
+            showStartupFailure(failure);
+        }
     }
     private int dp(int value) { return Math.round(value*getResources().getDisplayMetrics().density); }
     private GradientDrawable surface(int color,int radius) { GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));return d; }
@@ -93,7 +99,7 @@ public final class MainActivity extends Activity {
         if(remote!=null){remote.stop();remote=null;}
         remoteToolbar=null;
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        if(Build.VERSION.SDK_INT>=30){getWindow().setDecorFitsSystemWindows(true);WindowInsetsController bars=getWindow().getInsetsController();if(bars!=null)bars.show(WindowInsets.Type.systemBars());}
+        if(Build.VERSION.SDK_INT>=30)Api30.showSystemBars(getWindow());
         getWindow().setNavigationBarColor(0xfff4f7fb);getWindow().setStatusBarColor(0xfff4f7fb);
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         setRequestedOrientation(dashboardOrientation);
@@ -120,7 +126,7 @@ public final class MainActivity extends Activity {
     }
     private void requestProjection() {
         MediaProjectionManager m=(MediaProjectionManager)getSystemService(MEDIA_PROJECTION_SERVICE);
-        Intent request=Build.VERSION.SDK_INT>=34?m.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay()):m.createScreenCaptureIntent();
+        Intent request=Build.VERSION.SDK_INT>=34?Api34.createScreenCaptureIntent(m):m.createScreenCaptureIntent();
         startActivityForResult(request,40);
     }
     @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){super.onRequestPermissionsResult(request,permissions,results);if(request==33){if(results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED)requestProjection();else{pendingMeetingStart=false;if(dashboardUi!=null)dashboardUi.setConnectionPending(false);showError("需要共享通知","请允许通知后再共享，便于及时看到连接请求并随时停止共享。");}}}
@@ -171,8 +177,35 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);getWindow().setNavigationBarColor(0xff0c1420);getWindow().setStatusBarColor(0xff0c1420);immersiveRemote();content(root);remote.start();
     }
     private void immersiveRemote(){
-        if(Build.VERSION.SDK_INT>=30){getWindow().setDecorFitsSystemWindows(false);WindowInsetsController bars=getWindow().getInsetsController();if(bars!=null){bars.hide(WindowInsets.Type.systemBars());bars.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);}}
+        if(Build.VERSION.SDK_INT>=30)Api30.hideSystemBars(getWindow());
         else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+    }
+
+    private void showStartupFailure(Throwable failure) {
+        Log.e(TAG,"Android startup failed",failure);
+        dashboardUi=null;remote=null;remoteToolbar=null;
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        getWindow().setStatusBarColor(0xfff4f7fb);getWindow().setNavigationBarColor(0xfff4f7fb);
+        LinearLayout background=column();background.setGravity(Gravity.CENTER);background.setPadding(dp(24),dp(24),dp(24),dp(24));background.setBackgroundColor(0xfff4f7fb);
+        LinearLayout card=column();card.setPadding(dp(22),dp(20),dp(22),dp(20));card.setBackground(surface(Color.WHITE,20));
+        TextView title=text("YuDesk 暂时无法启动",20,INK);title.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));card.addView(title);
+        String reason=failure.getMessage();if(reason==null||reason.trim().isEmpty())reason=failure.getClass().getSimpleName();
+        TextView detail=text("启动组件加载失败，应用没有在后台运行。\n\n"+reason+"\n\n请点“重试”；若仍失败，请先卸载旧 YuDesk，再安装官网最新版。",13,MUTED);detail.setLineSpacing(dp(3),1);detail.setTextIsSelectable(true);detail.setPadding(0,dp(10),0,dp(14));card.addView(detail);
+        LinearLayout actions=row();addButton(actions,button("退出",this::exit));addButton(actions,button("重试",()->{app.closeEngine();recreate();}));card.addView(actions);
+        background.addView(card,new LinearLayout.LayoutParams(-1,-2));content(background);
+    }
+
+    // Keep references to newer framework classes out of MainActivity's verified
+    // method bodies. Some OEM Android 8/9 runtimes resolve guarded classes early.
+    @android.annotation.TargetApi(30)
+    private static final class Api30 {
+        static void showSystemBars(Window window){window.setDecorFitsSystemWindows(true);android.view.WindowInsetsController bars=window.getInsetsController();if(bars!=null)bars.show(android.view.WindowInsets.Type.systemBars());}
+        static void hideSystemBars(Window window){window.setDecorFitsSystemWindows(false);android.view.WindowInsetsController bars=window.getInsetsController();if(bars!=null){bars.hide(android.view.WindowInsets.Type.systemBars());bars.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);}}
+    }
+
+    @android.annotation.TargetApi(34)
+    private static final class Api34 {
+        static Intent createScreenCaptureIntent(MediaProjectionManager manager){return manager.createScreenCaptureIntent(android.media.projection.MediaProjectionConfig.createConfigForDefaultDisplay());}
     }
     private void rotateRemote(){if(remote==null)return;remote.cancelInput();boolean landscape=getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE;setRequestedOrientation(landscape?ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT:ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);}
     @Override public void onConfigurationChanged(Configuration configuration){super.onConfigurationChanged(configuration);if(remote!=null){remote.cancelInput();remoteToolbar.orientation(configuration.orientation==Configuration.ORIENTATION_LANDSCAPE);immersiveRemote();}}

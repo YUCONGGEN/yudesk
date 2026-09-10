@@ -1886,8 +1886,12 @@ func serveDownload(w http.ResponseWriter, r *http.Request, root string) {
 	if strings.HasSuffix(relative, ".apk") {
 		w.Header().Set("Content-Type", "application/vnd.android.package-archive")
 	}
-	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
-	w.Header().Set("Pragma", "no-cache")
+	// Browsers and Android download managers may resume an interrupted package
+	// with Range/If-Range. no-store prevents that on some clients. The strong
+	// validator changes whenever the published file's size or mtime changes.
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("ETag", fmt.Sprintf("\"%x-%x\"", info.ModTime().UnixNano(), info.Size()))
+	w.Header().Set("Cache-Control", "private, no-cache, no-transform, must-revalidate")
 	http.ServeFile(w, r, path)
 }
 

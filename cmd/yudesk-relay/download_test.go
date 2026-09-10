@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,6 +59,12 @@ func TestDownloadSurvivesShortAPIWriteTimeout(t *testing.T) {
 		response.Body.Close()
 		if err != nil || response.StatusCode != status || !bytes.Equal(body, want) {
 			t.Fatalf("partial=%v status=%d bytes=%d err=%v", partial, response.StatusCode, len(body), err)
+		}
+		if response.Header.Get("Accept-Ranges") != "bytes" || response.Header.Get("ETag") == "" {
+			t.Fatalf("partial=%v missing resume validators: %v", partial, response.Header)
+		}
+		if got := response.Header.Get("Cache-Control"); got == "" || strings.Contains(got, "no-store") || !strings.Contains(got, "no-transform") {
+			t.Fatalf("partial=%v unsafe download cache policy %q", partial, got)
 		}
 	}
 }

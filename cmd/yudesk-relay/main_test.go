@@ -297,8 +297,8 @@ func TestDownloadHomeAndAllowList(t *testing.T) {
 	if !strings.Contains(download.Header().Get("Content-Disposition"), "YuDesk-2.0.0-windows-amd64.exe") {
 		t.Fatal("download filename missing semantic version")
 	}
-	if !strings.Contains(download.Header().Get("Cache-Control"), "no-store") {
-		t.Fatalf("download is cacheable: %q", download.Header().Get("Cache-Control"))
+	if cache := download.Header().Get("Cache-Control"); strings.Contains(cache, "no-store") || !strings.Contains(cache, "no-transform") || download.Header().Get("ETag") == "" {
+		t.Fatalf("download cannot resume safely: cache=%q etag=%q", cache, download.Header().Get("ETag"))
 	}
 	checksums := httptest.NewRecorder()
 	serveNamedDownloadFile(checksums, httptest.NewRequest(http.MethodGet, "/SHA256SUMS.txt", nil), root, "SHA256SUMS.txt", "text/plain")
