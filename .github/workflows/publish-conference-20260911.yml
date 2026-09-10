@@ -1,0 +1,71 @@
+name: publish-conference-20260911
+
+on:
+  push:
+    tags:
+      - 'v2.0.0-conference-20260911'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download and verify deployed packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release
+          curl --fail --location --retry 4 --silent --show-error \
+            http://www.yucg.cn:8235/download/windows-amd64/yudesk.exe \
+            --output release/YuDesk-2.0.0-windows-amd64.exe
+          curl --fail --location --retry 4 --silent --show-error \
+            http://www.yucg.cn:8235/download/linux-amd64/yudesk.deb \
+            --output release/YuDesk-2.0.0-linux-amd64.deb
+          curl --fail --location --retry 4 --silent --show-error \
+            http://www.yucg.cn:8235/download/darwin-amd64/yudesk.pkg \
+            --output release/YuDesk-2.0.0-darwin-amd64.pkg
+          curl --fail --location --retry 4 --silent --show-error \
+            http://www.yucg.cn:8235/download/darwin-arm64/yudesk.pkg \
+            --output release/YuDesk-2.0.0-darwin-arm64.pkg
+          curl --fail --location --retry 4 --silent --show-error \
+            http://www.yucg.cn:8235/download/android/yudesk.apk \
+            --output release/YuDesk-2.0.0-android-preview.10.apk
+          curl --fail --location --retry 4 --silent --show-error \
+            http://www.yucg.cn:8235/THIRD_PARTY_NOTICES.txt \
+            --output release/THIRD_PARTY_NOTICES.txt
+          cp docs/RELEASE_SHA256_20260911.txt release/SHA256SUMS.txt
+          cd release
+          sha256sum --check SHA256SUMS.txt
+
+      - name: Create GitHub Release and publish verification tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title 'YuDesk 2.0.0 多人音视频会议' \
+            --notes-file docs/RELEASE_NOTES_20260911.md \
+            --verify-tag
+          test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" = '7'
+          for name in \
+            SHA256SUMS.txt \
+            THIRD_PARTY_NOTICES.txt \
+            YuDesk-2.0.0-android-preview.10.apk \
+            YuDesk-2.0.0-darwin-amd64.pkg \
+            YuDesk-2.0.0-darwin-arm64.pkg \
+            YuDesk-2.0.0-linux-amd64.deb \
+            YuDesk-2.0.0-windows-amd64.exe
+          do
+            gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --json assets --jq '.assets[].name' | grep --fixed-strings --line-regexp "$name"
+          done
+          proof_tag="$GITHUB_REF_NAME-published"
+          git tag "$proof_tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$proof_tag"
