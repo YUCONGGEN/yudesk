@@ -9,6 +9,7 @@ Android **2.0.0-preview.7 / 2000007** 已于 **2026-09-10 12:31（北京时间�
 - Android 11/14 新框架类已隔离到版本专用调用类；原生库加载或首屏初始化的 `Error` 会留在统一样式故障页，提供重试/退出，不再表现为静默退出。Android 8 / API 26 x86_64 软件模拟器完成覆盖安装、冷启动、进程存活和 Go 核心上线，显示“已就绪”，没有 YuDesk 崩溃日志。
 - Go 核心三轮 race、`go vet`、29 项 Java 单测、lint、四 ABI gomobile、APK v2 签名与 16KB 校验通过；根模块全量 short 测试及 Relay race 测试通过。模拟器不等于所有品牌真机验收，仍需用户手机的具体安装提示或 logcat 排除旧签名冲突和厂商策略。
 - 服务端 PID **98308**，SHA-256 为 `0d36144672e67549d715d82f66e98d2c1fcb7db5d942396c57b9777369c7f619`；数据库 `quick_check`、六项下载清单和 `/healthz` 均通过，部署时无活动会话。可恢复备份位于 `/Users/yu/bin/yudesk/backups/android-startup-20260910.1`。
+- 私有 GitHub Release：[v2.0.0-android-preview.7](https://github.com/YUCONGGEN/yudesk/releases/tag/v2.0.0-android-preview.7)，标签指向本轮修复提交，附件包含 APK、SHA256 清单和第三方许可。
 
 | 当前产物 | SHA-256 |
 | --- | --- |
