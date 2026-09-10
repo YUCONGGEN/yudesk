@@ -15,5 +15,5 @@
 
 已知边界：会议为 P2P mesh，没有 TURN/SFU；严格 NAT 可能导致部分媒体无法直连，8 人高清视频也受设备和上行带宽限制。Android 录制不含会议/系统音频。macOS 包尚未 Developer ID 签名或公证，Android 尚未覆盖所有厂商物理真机。
 
-部署批次：`multiparty-conference-20260911.1`  
+部署批次：`multiparty-conference-20260911.1`
 官网：http://www.yucg.cn:8235/
