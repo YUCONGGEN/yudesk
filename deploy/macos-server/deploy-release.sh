@@ -19,9 +19,17 @@ test ! -L "$root/bin/yudesk-relay"
 test "$(cat "$root/run/yudesk-relay.pid")" = "$expected_pid"
 kill -0 "$expected_pid"
 archive="$root/staging/$name.tgz"
+config_next="$root/staging/$name-server.conf"
+start_next="$root/staging/$name-start.sh"
 release="$root/releases/$name"
 backup="$root/backups/$name"
 test -f "$archive" && test ! -L "$archive"
+test -f "$config_next" && test ! -L "$config_next"
+test -f "$start_next" && test ! -L "$start_next"
+zsh -n "$start_next"
+grep -q '^TURN_PORT=' "$config_next"
+grep -q '^TURN_RELAY_MIN_PORT=' "$config_next"
+grep -q '^TURN_RELAY_MAX_PORT=' "$config_next"
 test ! -e "$release" && test ! -e "$backup"
 test "$(shasum -a 256 "$archive" | awk '{print $1}')" = "$archive_hash"
 files='windows-amd64/yudesk.exe linux-amd64/yudesk linux-amd64/yudesk.deb darwin-amd64/yudesk darwin-amd64/yudesk.pkg darwin-arm64/yudesk darwin-arm64/yudesk.pkg android/yudesk.apk SHA256SUMS.txt release.json THIRD_PARTY_NOTICES.txt'
@@ -39,6 +47,7 @@ test -z "$(find "$release" -type l -print)"
 (cd "$release" && shasum -a 256 -c RELEASE-SHA256SUMS.txt)
 cp -p "$root/bin/yudesk-relay" "$backup/yudesk-relay"
 cp -p "$root/server.conf" "$backup/server.conf"
+cp -p "$root/start.sh" "$backup/start.sh"
 cp -Rp "$root/downloads" "$backup/downloads"
 for file in $files; do
   test -f "$release/downloads/$file"
@@ -53,6 +62,11 @@ finish() {
   if [ "$result" != 0 ] && [ "$stopped" = 1 ] && [ "$committed" = 0 ]; then
     set +e
     "$root/stop.sh"
+    cp -p "$backup/server.conf" "$root/server.conf.rollback"
+    mv "$root/server.conf.rollback" "$root/server.conf"
+    cp -p "$backup/start.sh" "$root/start.sh.rollback"
+    chmod 700 "$root/start.sh.rollback"
+    mv "$root/start.sh.rollback" "$root/start.sh"
     cp -p "$backup/yudesk-relay" "$root/bin/yudesk-relay.rollback"
     mv "$root/bin/yudesk-relay.rollback" "$root/bin/yudesk-relay"
     for file in $files; do
@@ -78,6 +92,12 @@ test "$(/usr/bin/sqlite3 "$backup/yudesk.db" 'PRAGMA quick_check;')" = ok
 cp "$release/server/yudesk-relay" "$root/bin/yudesk-relay.next"
 chmod 700 "$root/bin/yudesk-relay.next"
 mv "$root/bin/yudesk-relay.next" "$root/bin/yudesk-relay"
+cp "$config_next" "$root/server.conf.next"
+chmod 600 "$root/server.conf.next"
+mv "$root/server.conf.next" "$root/server.conf"
+cp "$start_next" "$root/start.sh.next"
+chmod 700 "$root/start.sh.next"
+mv "$root/start.sh.next" "$root/start.sh"
 for file in $files; do
   mkdir -p "$(dirname "$root/downloads/$file")"
   cp "$release/downloads/$file" "$root/downloads/$file.next"
@@ -108,6 +128,8 @@ done
 test "$(shasum -a 256 "$root/bin/yudesk-relay" | awk '{print $1}')" = "$(shasum -a 256 "$release/server/yudesk-relay" | awk '{print $1}')"
 test "$(/usr/bin/sqlite3 "$root/data/yudesk.db" 'PRAGMA quick_check;')" = ok
 lsof -nP -a -p "$(cat "$root/run/yudesk-relay.pid")" -iUDP:8233 >/dev/null
+lsof -nP -a -p "$(cat "$root/run/yudesk-relay.pid")" -iUDP:8254 >/dev/null
+lsof -nP -a -p "$(cat "$root/run/yudesk-relay.pid")" -iTCP:8254 >/dev/null
 committed=1
 echo "Deployed $name; backup: $backup"
 "$root/status.sh"

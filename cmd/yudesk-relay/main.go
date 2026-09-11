@@ -52,19 +52,22 @@ type activeSession struct {
 }
 type broker struct {
 	sync.Mutex
-	devices        map[string]waiting
-	active         map[string]activeSession
-	controls       map[string]*deviceControl
-	stopRequests   map[string]string
-	adminFlashes   map[string]adminFlash
-	autoActivate   bool
-	token          string
-	accounts       *account.Store
-	deviceLicenses bool
-	lookups        map[string]lookupWindow
-	meetings       map[string]meetingRoom
-	meetingDevices map[string]string
-	conferenceSeq  uint64
+	devices                   map[string]waiting
+	active                    map[string]activeSession
+	controls                  map[string]*deviceControl
+	stopRequests              map[string]string
+	adminFlashes              map[string]adminFlash
+	autoActivate              bool
+	token                     string
+	accounts                  *account.Store
+	deviceLicenses            bool
+	lookups                   map[string]lookupWindow
+	meetings                  map[string]meetingRoom
+	meetingDevices            map[string]string
+	conferenceSeq             uint64
+	conferenceTURN            *conferenceTURN
+	conferenceSTUN            string
+	conferenceDirectTimeoutMS int
 }
 
 type adminFlash struct {
@@ -89,12 +92,25 @@ func main() {
 	publicAccount := flag.String("public-account", "", "public HTTPS account API URL shown on the usage guide")
 	deviceLicenses := flag.Bool("device-licenses", false, "authorize standalone devices without user accounts")
 	adminKeyFile := flag.String("admin-key-file", "", "file containing the web administration password")
+	conferenceTURNListen := flag.String("conference-turn", "", "optional conference TURN UDP/TCP listen address")
+	conferenceTURNPublic := flag.String("conference-turn-public", "", "public conference TURN host:port")
+	conferenceTURNSecret := flag.String("conference-turn-secret-file", "", "conference TURN credential secret file")
+	conferenceTURNRealm := flag.String("conference-turn-realm", "yudesk", "conference TURN authentication realm")
+	conferenceTURNRelayMin := flag.Int("conference-turn-relay-min-port", 20200, "first conference TURN UDP relay port")
+	conferenceTURNRelayMax := flag.Int("conference-turn-relay-max-port", 20295, "last conference TURN UDP relay port")
+	conferenceDirectTimeout := flag.Int("conference-direct-timeout-ms", 3000, "P2P conference timeout before TURN fallback")
 	flag.Parse()
 	if *downloadHTTP != "" && *publicAccount == "" {
 		log.Fatal("-public-account is required with -download-http")
 	}
 	if *deviceLicenses && *adminKeyFile == "" {
 		log.Fatal("-admin-key-file is required with -device-licenses")
+	}
+	if *conferenceDirectTimeout < 1000 || *conferenceDirectTimeout > 30000 {
+		log.Fatal("-conference-direct-timeout-ms must be 1000-30000")
+	}
+	if *conferenceTURNListen != "" && (*conferenceTURNPublic == "" || *conferenceTURNSecret == "") {
+		log.Fatal("-conference-turn-public and -conference-turn-secret-file are required with -conference-turn")
 	}
 	adminKey := ""
 	if *adminKeyFile != "" {
@@ -148,7 +164,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	b := &broker{devices: map[string]waiting{}, active: map[string]activeSession{}, stopRequests: map[string]string{}, token: *token, accounts: store, deviceLicenses: *deviceLicenses, autoActivate: autoActivate}
+	conferenceSTUN := ""
+	if *publicRelay != "" {
+		conferenceSTUN = "stun:" + *publicRelay
+	}
+	b := &broker{devices: map[string]waiting{}, active: map[string]activeSession{}, stopRequests: map[string]string{}, token: *token, accounts: store, deviceLicenses: *deviceLicenses, autoActivate: autoActivate, conferenceSTUN: conferenceSTUN, conferenceDirectTimeoutMS: *conferenceDirectTimeout}
+	if *conferenceTURNListen != "" {
+		media, mediaErr := startConferenceTURN(b, conferenceTURNConfig{Listen: *conferenceTURNListen, PublicAddress: *conferenceTURNPublic, SecretFile: *conferenceTURNSecret, Realm: *conferenceTURNRealm, RelayMinPort: *conferenceTURNRelayMin, RelayMaxPort: *conferenceTURNRelayMax})
+		if mediaErr != nil {
+			log.Fatal(mediaErr)
+		}
+		b.conferenceTURN = media
+		defer media.close()
+		log.Printf("conference TURN listening on %s (UDP/TCP), relay ports %d-%d", media.address, *conferenceTURNRelayMin, *conferenceTURNRelayMax)
+	}
 	log.Printf("YuDesk relay listening on %s (tls=%v)", *listen, *tlsFlag)
 	if *httpAddr != "" {
 		go serveAccounts(b, *httpAddr, *downloads, *httpTLS, *certFile, *keyFile, fingerprint, *publicRelay, *publicAccount, adminKey)

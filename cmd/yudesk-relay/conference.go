@@ -177,7 +177,13 @@ func (b *broker) handleConference(c net.Conn, reader *bufio.Reader, hello relay.
 	b.meetings[hello.Room] = room
 	hostID := room.conference.hostID
 	b.broadcastConferenceLocked(room.conference, relay.ConferenceMessage{Type: "peer-joined", ID: p.id, Name: p.name, Host: hostID}, p.id)
-	b.queueConferenceLocked(p, relay.ConferenceMessage{Type: "welcome", ID: p.id, Name: p.name, Host: hostID, Peers: peers})
+	welcome := relay.ConferenceMessage{Type: "welcome", ID: p.id, Name: p.name, Host: hostID, Peers: peers}
+	if b.conferenceTURN != nil {
+		welcome.RTC = b.conferenceTURN.policy(hello.Room, p.id, room.expires, b.conferenceSTUN, b.conferenceDirectTimeoutMS)
+	} else if b.conferenceSTUN != "" {
+		welcome.RTC = &relay.RTCPolicy{ICEServers: []relay.ICEServer{{URLs: []string{b.conferenceSTUN}}}, DirectTimeoutMS: b.conferenceDirectTimeoutMS}
+	}
+	b.queueConferenceLocked(p, welcome)
 	b.Unlock()
 
 	go writeConferenceMessages(p)

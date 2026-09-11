@@ -31,9 +31,21 @@ type ConferencePeer struct {
 	Recording  bool   `json:"recording,omitempty"`
 }
 
-// ConferenceMessage carries signaling and room state only. Camera, microphone
-// and screen media use peer-to-peer WebRTC/DTLS and never pass through this
-// relay message channel.
+type ICEServer struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username,omitempty"`
+	Credential string   `json:"credential,omitempty"`
+}
+
+type RTCPolicy struct {
+	ICEServers      []ICEServer `json:"iceServers"`
+	DirectTimeoutMS int         `json:"directTimeoutMs"`
+	RelayEnabled    bool        `json:"relayEnabled,omitempty"`
+}
+
+// ConferenceMessage carries signaling, room state and temporary ICE policy.
+// Camera, microphone and screen media use WebRTC/DTLS-SRTP. TURN fallback may
+// forward encrypted packets but cannot read the media.
 type ConferenceMessage struct {
 	Type       string           `json:"type"`
 	ID         string           `json:"id,omitempty"`
@@ -50,6 +62,7 @@ type ConferenceMessage struct {
 	Screen     bool             `json:"screen,omitempty"`
 	Recording  bool             `json:"recording,omitempty"`
 	Message    string           `json:"message,omitempty"`
+	RTC        *RTCPolicy       `json:"rtc,omitempty"`
 }
 
 func ValidConferenceName(value string) bool {

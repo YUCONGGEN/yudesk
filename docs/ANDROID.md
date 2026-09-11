@@ -1,19 +1,19 @@
-# YuDesk Android 2.0.0-preview.11
+# YuDesk Android 2.0.0-preview.12
 
 Android 端采用原生 Java 界面、Go 通信核心和原生 WebRTC。一个 APK 可以控制电脑或 Android，也可以在手机持有人明确授权后共享手机屏幕、接受远程触控和参加多人会议。iOS 与原生鸿蒙当前暂停。
 
 ## 当前交付
 
-`preview.11` 的版本代码为 `2000011`，最低 Android 8.0 / API 26，包含 `arm64-v8a`、`armeabi-v7a`、`x86_64` 和 `x86` 四种 ABI。签名证书 SHA-256：
+`preview.12` 的版本代码为 `2000012`，最低 Android 8.0 / API 26，包含 `arm64-v8a`、`armeabi-v7a`、`x86_64` 和 `x86` 四种 ABI。签名证书 SHA-256：
 
 ```text
 c8e35f5904ad92ab55a651f940d531c1193042dcfc2ac1a98b7dadf0c3994a6a
 ```
 
-官网 APK 为 43,853,257 字节，SHA-256：
+官网 APK 为 43,859,861 字节，SHA-256：
 
 ```text
-81260d3dd89511cb2148a18ceef5941cd3b376124e928ed8f522787c686edbcb
+1f8f6d4d91f7713c7a499c6c41d8a435b28e849235d2457b9f3c9ceab3b20a59
 ```
 
 该版本保留 Android 厂商启动时序修复：系统栏操作在 `setContentView` 之后执行，并先确保 `DecorView` 已创建，避免部分 Android 11+ 系统在冷启动时因空 `WindowInsetsController` 直接退出。覆盖安装会保留应用私有设备身份；签名不一致时 Android 会拒绝覆盖，不能通过自动卸载规避，因为卸载会丢失身份与设置。
@@ -41,13 +41,13 @@ Android 自身的系统“返回”和“主页”不会误发送到远端。工
 - 远端会议音轨会显式启用并默认路由至手机扬声器；工具栏可关闭声音或再次播放声音；
 - 参会者不需要主持人二次确认；
 - Android 会议自动进入横屏全屏，退出后恢复原方向；
-- 会议媒体使用原生 WebRTC/ICE/DTLS-SRTP 点对点传输，Relay 只中转设备签名认证后的 SDP、ICE 和成员状态；
+- 会议媒体使用原生 WebRTC/ICE/DTLS-SRTP，优先设备直连；3 秒无法建立媒体路径时自动使用服务器下发的短期 TURN 凭据，服务器只转发加密数据包；
 - Android 本地录制当前视频/屏幕画面，暂不包含会议或系统音频；
 - 主持人共享 Android 屏幕时仍会显示真实系统 MediaProjection 授权窗口和持续通知。
 
 Android 的屏幕共享当前发送画面并保留麦克风通话，不采集其他应用的内部系统声音；这是与桌面“共享系统音频”的平台差异。
 
-当前会议是最多 8 人的 P2P mesh，没有 TURN 或 SFU。严格 NAT 可能造成部分媒体无法直连；人数增多会增加每台手机的上行、下行、编解码、发热和耗电。详情见 [多人会议说明](CONFERENCE_20260911.md)。
+当前会议是最多 8 人的 P2P 优先 mesh，直连失败会自动回退 TURN，但没有 SFU。人数增多会增加每台手机的上行、下行、编解码、发热和耗电。详情见 [多人会议说明](CONFERENCE_20260911.md)。
 
 ## 功能边界
 
@@ -71,7 +71,7 @@ Android 的屏幕共享当前发送画面并保留麦克风通话，不采集其
 
 远程桌面预览路径以最长边 1280、JPEG 75、最高 30 FPS 和约 8 Mbps 画面预算为基线；实际帧率取决于屏幕变化、CPU、编码和网络，不保证固定 30 帧或零延迟。会议使用原生 WebRTC 自带的拥塞控制、抖动缓冲、回声消除、降噪和自动增益；网络 RTT 的物理传播时间无法由多线程消除。
 
-本批次修复了无媒体入会时空 SDP 与 `max-bundle` 冲突、TLS 合并首条欢迎消息导致超时，以及成员离开后迟到 ICE 误断开其他成员的问题。Go 核心三轮竞态测试、Java 单测、Android lint、四 ABI 构建、APK v2 签名、16 KiB ZIP/ELF 对齐和 API 26 模拟器冷启动均通过。
+本批次修复了无媒体入会时空 SDP 与 `max-bundle` 冲突、TLS 合并首条欢迎消息导致超时、成员离开后迟到 ICE 误断开其他成员，以及 Windows/Android 跨严格 NAT 时只有成员状态却没有音频路径的问题。Android 显式使用 `JavaAudioDeviceModule` 启动录音与播放，启用硬件回声消除和降噪，并把通话默认路由到扬声器。Go 核心三轮竞态测试、Java 单测、Android lint、四 ABI 构建、APK v2 签名、16 KiB ZIP/ELF 对齐和 API 26 模拟器冷启动均通过。
 
 ## 构建
 

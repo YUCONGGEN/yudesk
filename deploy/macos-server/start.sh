@@ -16,6 +16,9 @@ source "$CONFIG_FILE"
 : "${WEB_PORT:?WEB_PORT is required}"
 : "${PUBLIC_HTTP_PORT:?PUBLIC_HTTP_PORT is required}"
 : "${PUBLIC_HOST:?PUBLIC_HOST is required}"
+: "${TURN_PORT:?TURN_PORT is required}"
+: "${TURN_RELAY_MIN_PORT:?TURN_RELAY_MIN_PORT is required}"
+: "${TURN_RELAY_MAX_PORT:?TURN_RELAY_MAX_PORT is required}"
 
 mkdir -p "$ROOT_DIR/data" "$ROOT_DIR/downloads" "$ROOT_DIR/logs" "$ROOT_DIR/run"
 if [[ -f "$PID_FILE" ]]; then
@@ -37,6 +40,12 @@ nohup "$ROOT_DIR/bin/yudesk-relay" \
   -cert "$ROOT_DIR/data/relay.crt" \
   -key "$ROOT_DIR/data/relay.key" \
   -downloads "$ROOT_DIR/downloads" \
+  -conference-turn ":$TURN_PORT" \
+  -conference-turn-public "$PUBLIC_HOST:$TURN_PORT" \
+  -conference-turn-secret-file "$ROOT_DIR/data/conference-turn.secret" \
+  -conference-turn-relay-min-port "$TURN_RELAY_MIN_PORT" \
+  -conference-turn-relay-max-port "$TURN_RELAY_MAX_PORT" \
+  -conference-direct-timeout-ms 3000 \
   >>"$LOG_FILE" 2>&1 &
 pid=$!
 echo "$pid" > "$PID_FILE"
@@ -51,4 +60,4 @@ public_web_url="http://$PUBLIC_HOST"
 if [[ "$PUBLIC_HTTP_PORT" != "80" ]]; then
   public_web_url="$public_web_url:$PUBLIC_HTTP_PORT"
 fi
-echo "YuDesk started (PID $pid, relay $PUBLIC_HOST:$RELAY_PORT, website $public_web_url/)"
+echo "YuDesk started (PID $pid, relay $PUBLIC_HOST:$RELAY_PORT, meeting TURN $PUBLIC_HOST:$TURN_PORT, website $public_web_url/)"

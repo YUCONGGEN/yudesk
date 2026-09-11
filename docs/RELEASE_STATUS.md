@@ -1,26 +1,27 @@
 # 当前部署状态（2026-09-11）
 
-## 当前会议声音修复：`conference-audio-20260911.4`
+## 当前跨平台会议声音修复：`conference-turn-20260911.5`
 
-桌面 **2.0.0** 与 Android **2.0.0-preview.11 / 2000011** 已于 **2026-09-11 09:29（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包已发布；iOS 与原生鸿蒙继续暂停。
+桌面 **2.0.0** 与 Android **2.0.0-preview.12 / 2000012** 已于 **2026-09-11 12:56（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包已发布；iOS 与原生鸿蒙继续暂停。
 
 - 会议继续支持最多 8 人、姓名、9 位会议号直接入会、麦克风、摄像头、成员列表、主持人共享屏幕、转交主持人、本地录制和横屏全屏。桌面与 Android 新增“关闭声音 / 播放声音”，Android 显式启用远端音轨并优先路由内置扬声器。
 - 桌面端为每条远端麦克风和共享系统声音建立独立播放元素，视频标签保持静音以避免重复播放和多音轨切换故障。声音设备面板可查看麦克风电平、选择系统扬声器、播放短测试音并显示接收/播放路数；失效端点自动回退默认扬声器。Windows 窗口启用会议媒体自动播放，仍被系统拦截时显示中文恢复提示。
 - 主持人共享屏幕会请求可选系统音频，并把麦克风、画面、系统声音先批量加入后统一 SDP 协商；待协商队列避免连续开关共享时丢音轨。
-- 服务器只转发经设备签名认证的房间状态、SDP 和 ICE；摄像头、麦克风、屏幕媒体走 WebRTC/DTLS-SRTP P2P，不经过 Relay。当前没有 TURN/SFU，严格 NAT 可能导致部分媒体连接失败；mesh 上限 8 人，不适合大规模会议。
+- 会议媒体现在优先 WebRTC P2P 直连；3 秒内无法建立媒体路径时，自动改用带短期房间凭据的 TURN。TURN 同时支持 UDP 和 TCP `8254`，媒体仍由端侧 DTLS-SRTP 加密，服务器只转发密文数据包。Relay 端口范围为 UDP `20200-20295`，SFU 仍未实现；mesh 上限 8 人，不适合大规模会议。
+- Android 使用显式 `JavaAudioDeviceModule`，启用硬件回声消除与降噪、远端接收 transceiver、扬声器通话路由及失败回调；桌面端不再在收到欢迎消息时误报媒体已连接，而是显示实际选中的 `P2P 直连` 或 `中转连接`。
 - 全量 Go short/vet、Android 核心三轮 race/vet、Java 单测、lint、四 ABI、v2 签名和 16 KiB 对齐通过。Windows 原生双客户端回归直接验证双方 `inbound-rtp` 音频包与字节增长、独立音频通道未静音且正在播放、扬声器枚举、声音开关和共享系统音频第二轨；其余原有会议、远控、审批和窗口流程也通过。本机安装更新后确认 Realtek 麦克风为 live、四个输出端点可枚举且 Web Audio 测试音调用成功。
 - macOS Intel/Apple Silicon 包由真实 Mac 工具链构建，双架构包展开、ad-hoc strict/deep 验签通过；Linux 包由 Ubuntu 22.04 环境构建。macOS/Linux 共享同一会议前端和播放逻辑，实际扬声器与屏幕系统音频仍受操作系统权限和采集源支持限制。
-- 为重新读取发布元数据，中转受控重启后 PID 为 **78619**；服务端二进制未改变。`/healthz`、SQLite `quick_check`、主页 2.0.0 与北京时间日期、公开在线/连接统计通过。发布目录 `/Users/yu/bin/yudesk/releases/conference-audio-20260911.4`，可恢复备份 `/Users/yu/bin/yudesk/backups/conference-audio-20260911.4`。
+- 中转受控重启后 PID 为 **10824**；TURN UDP/TCP 监听、`/healthz`、SQLite `quick_check`、主页 2.0.0 与公开在线/连接统计通过。发布目录 `/Users/yu/bin/yudesk/releases/conference-turn-20260911.5`，可恢复备份 `/Users/yu/bin/yudesk/backups/conference-turn-20260911.5`。
 - 五个平台公网文件均完整下载并与本地 SHA-256 一致；Android 1 MiB Range 请求返回 `206` 和正确 `Content-Range`。macOS 仍未 Developer ID 签名/公证；Android 尚未覆盖所有厂商物理真机。
 
 | 当前产物 | SHA-256 |
 | --- | --- |
-| Windows x64 EXE | `df22ebc1ef136e19b71f1812caf4cdbba7f60bb3c4037ebb755474ea413d9862` |
-| Linux x64 DEB | `9c390c2b6d16c464fc458c1d842f8216f47f89a5927e94bcfb03537b25c8168f` |
-| macOS Intel PKG | `dff003e7b6b85e95917bfb5127acd2d0a0cfa3f87ab9c3f011299693ff5ae652` |
-| macOS Apple Silicon PKG | `2a5efa8fa081ed3bf599ebd605549e9dd014449511f380e560b2a7a56d232061` |
-| Android preview.11 APK | `81260d3dd89511cb2148a18ceef5941cd3b376124e928ed8f522787c686edbcb` |
-| macOS 服务端 | `aebe449377b61d5aac8067fd927dfa13e340b0fffb73a46aa9e54e2cc806cea3` |
+| Windows x64 EXE | `a3a5a5ee21cee8fbe105a4bc41fa725350a6fe677f10784f2abb84965b3cb182` |
+| Linux x64 DEB | `1cc0cedcdb06ff1906babcfc3e0526358c53e1db0cfd3642d67364d08619d734` |
+| macOS Intel PKG | `2a6a8162ae9fb9576a9c901837066723c680fc79d617474e94b309ba1021c624` |
+| macOS Apple Silicon PKG | `f7a69436721126b365f8a78637759622ec1dd948916162e7fd528ec6f4d6cb32` |
+| Android preview.12 APK | `1f8f6d4d91f7713c7a499c6c41d8a435b28e849235d2457b9f3c9ceab3b20a59` |
+| macOS 服务端 | `8dd29dc581a64a74e208d45505b324eea206ea0340780d6e6b2efca466dce8cb` |
 
 完整会议范围和限制见 [多人会议说明](CONFERENCE_20260911.md)。
 

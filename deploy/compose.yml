@@ -7,6 +7,9 @@ services:
     ports:
       - "8233:8233/tcp"
       - "8233:8233/udp"
+      - "8254:8254/tcp"
+      - "8254:8254/udp"
+      - "20200-20295:20200-20295/udp"
       - "8235:8235/tcp"
     volumes:
       - yudesk-data:/data
