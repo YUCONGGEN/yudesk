@@ -1,6 +1,6 @@
 # YuDesk 2.0.0
 
-2026-09-11 **多人音视频会议批次 `multiparty-conference-20260911.1` 已部署**：桌面与 Android 会议升级为最多 8 人的 WebRTC 音视频会议。发起人和参会者都需填写姓名，使用 9 位会议号直接入会；支持麦克风、摄像头、成员列表、主持人共享屏幕、转交主持人、主持人本地录制，以及桌面/Android 横屏全屏。会议界面采用原创的浅色、留白、蓝色强调设计，视觉语言参考 `E:\welink`，未复制其品牌、图标或资源。Android 当前版本为 **2.0.0-preview.10 / 2000010**。媒体使用 WebRTC/DTLS 点对点传输，服务器只中转经过设备身份验证的信令；全互联拓扑适合小型会议，不是大型 SFU 会议。详情见 [多人会议说明](docs/CONFERENCE_20260911.md)、[Android 说明](docs/ANDROID.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
+2026-09-11 **会议声音修复批次 `conference-audio-20260911.4` 已部署**：桌面端把每条远端麦克风和共享系统声音放入独立播放通道，不再依附视频标签；会议内新增声音设备面板，可查看麦克风电平、选择扬声器并播放测试音。桌面与 Android 都支持“关闭声音 / 播放声音”，Windows 独立窗口允许会议媒体自动播放，遇到系统拦截时会显示中文恢复提示。桌面主持人共享屏幕时会请求系统音频，并把麦克风、共享声音和画面作为独立 WebRTC 轨道批量协商，停止共享也不会破坏后续声音。Android 当前版本为 **2.0.0-preview.11 / 2000011**。会议继续支持最多 8 人、姓名与 9 位会议号直接入会、摄像头、成员列表、主持人共享/转交/录制及横屏全屏。媒体使用 WebRTC/DTLS-SRTP 点对点传输，Relay 只处理中转信令；详情见 [多人会议说明](docs/CONFERENCE_20260911.md)、[Android 说明](docs/ANDROID.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
 
 2026-09-10 **Android 厂商启动时序热修复 `2.0.0-preview.8`**：用户手机的可恢复故障页确认，部分 Android 11+ 厂商系统会在首个内容视图创建前让 `Window.getWindowInsetsController()` 访问空 `DecorView`；重启只是偶然改变初始化时序。系统栏调用现移到 `setContentView` 之后，并先确保 `DecorView` 已创建。四 ABI 通用 APK 继续保持约 19.2 MB、断点续传和 16 KiB 对齐。Android 8 x86_64 模拟器已完成覆盖安装、冷启动、原生 Go 核心上线和持续进程检查；真实故障手机仍需用新包复核。Windows 同批取消 YuDesk 安装二次确认和设置页闪跳，直接进入系统 UAC。详情见 [Android 说明](docs/ANDROID.md)、[启动修复记录](docs/ANDROID_STARTUP_20260910.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
 
@@ -12,13 +12,13 @@
 
 2026-09-09 **12:44（北京时间）窗口拖动修复批次 `drag-20260909.1` 已部署**：主界面、远程页和连接过渡页使用可拖动顶部区域，Windows 原生输入与 Linux 连续拖动回归通过；macOS 同步修复事件桥并更新双架构安装包，真机拖动尚待验证。更新前请完全退出旧程序，再安装新包。详情见 [拖动修复与验证边界](docs/WINDOW_DRAG_20260909.md)。Android 保持 preview.5，未因桌面拖动改动重新发布移动端代码。
 
-本版提供只填设备码的 **60 秒连接审批**、Windows 托盘及紧凑窗口、官网产品介绍和脱敏功能截图。2026-09-11 多人会议与五个平台安装包已部署；下载校验与验证范围见 [发布状态](docs/RELEASE_STATUS.md)、[跨平台集成](docs/ALL_PLATFORM_RELEASE_20260909.md)。Android 双向端为 **preview.10 预览版**，构建和真机验收边界见 [Android 说明](docs/ANDROID.md)；iOS 暂停。
+本版提供只填设备码的 **60 秒连接审批**、Windows 托盘及紧凑窗口、官网产品介绍和脱敏功能截图。2026-09-11 会议音频修复与五个平台安装包已部署；下载校验与验证范围见 [发布状态](docs/RELEASE_STATUS.md)、[跨平台集成](docs/ALL_PLATFORM_RELEASE_20260909.md)。Android 双向端为 **preview.11 预览版**，构建和真机验收边界见 [Android 说明](docs/ANDROID.md)；iOS 暂停。
 
 当前界面与声音说明：[紧凑窗口及关闭行为](docs/WINDOW_LIFECYCLE.md)、[按需系统声音及平台限制](docs/AUDIO.md)。设备授权在“设置”内默认折叠；不提供隐私屏或虚拟屏。
 
 最新响应优化与实测：[2026-09-09 桌面基线](docs/DESKTOP_INSTALLED_LATENCY_20260909.md)、[Android 专项](docs/ANDROID_LATENCY_20260909.md)。排队修复不等于物理 RTT 降低，不承诺零延迟；部署版本和校验值见 [发布状态](docs/RELEASE_STATUS.md)。
 
-继续包含 2026-09-08 网络更新：[P2P 优先、打洞与中转回退](docs/P2P_20260908.md)、[传输排队优化](docs/RTT_20260908.md)。官网桌面版为 2.0.0，Android 为 preview.10；UDP 8233 已开放并验证。远程桌面在 PIN 或审批认证后优先 UDP 直连，失败沿用原中转；会议媒体采用 WebRTC P2P，信令复用已验证 TLS 连接。服务器授权管控继续有效。远程桌面中途直连丢失需要重新连接，不宣称无缝切换。
+继续包含 2026-09-08 网络更新：[P2P 优先、打洞与中转回退](docs/P2P_20260908.md)、[传输排队优化](docs/RTT_20260908.md)。官网桌面版为 2.0.0，Android 为 preview.11；UDP 8233 已开放并验证。远程桌面在 PIN 或审批认证后优先 UDP 直连，失败沿用原中转；会议媒体采用 WebRTC P2P，信令复用已验证 TLS 连接。服务器授权管控继续有效。远程桌面中途直连丢失需要重新连接，不宣称无缝切换。
 
 本轮健壮性、后台北京时间/心跳修复及界面备案标识：[检查记录与已知限制](docs/ROBUSTNESS_20260908.md)。
 

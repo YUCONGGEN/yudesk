@@ -30,6 +30,7 @@ import java.util.Locale;
 final class ConferenceUi {
     interface Actions {
         void microphone();
+        void speaker();
         void camera();
         void switchCamera();
         void share();
@@ -54,7 +55,7 @@ final class ConferenceUi {
     private final LinearLayout memberList, memberPanel;
     private final TextView connection, count, recordingBadge;
     private final Map<String, Tile> tiles = new LinkedHashMap<>();
-    private final Tool mic, camera, switchCamera, share, members, record, leave;
+    private final Tool mic, speaker, camera, switchCamera, share, members, record, leave;
     private boolean memberPanelOpen;
 
     ConferenceUi(Activity activity, String code, EglBase.Context eglContext, Actions actions) {
@@ -72,8 +73,8 @@ final class ConferenceUi {
 
         HorizontalScrollView toolbarScroll=new HorizontalScrollView(activity);toolbarScroll.setHorizontalScrollBarEnabled(false);toolbarScroll.setFillViewport(true);toolbarScroll.setBackgroundColor(0xffffffff);
         LinearLayout toolbar=row();toolbar.setGravity(Gravity.CENTER);toolbar.setPadding(dp(8),dp(4),dp(8),dp(4));
-        mic=tool("麦克风",this.actions::microphone);camera=tool("摄像头",this.actions::camera);switchCamera=tool("切换镜头",this.actions::switchCamera);share=tool("共享屏幕",this.actions::share);members=tool("成员",()->setMembersOpen(!memberPanelOpen));record=tool("录制",this.actions::record);leave=tool("离开",this.actions::leave);leave.label.setTextColor(0xffff7272);
-        for(Tool tool:new Tool[]{mic,camera,switchCamera,share,members,record,leave})toolbar.addView(tool.root,new LinearLayout.LayoutParams(dp(72),dp(70)));
+        mic=tool("麦克风",this.actions::microphone);speaker=tool("扬声器",this.actions::speaker);camera=tool("摄像头",this.actions::camera);switchCamera=tool("切换镜头",this.actions::switchCamera);share=tool("共享屏幕",this.actions::share);members=tool("成员",()->setMembersOpen(!memberPanelOpen));record=tool("录制",this.actions::record);leave=tool("离开",this.actions::leave);leave.label.setTextColor(0xffff7272);
+        for(Tool tool:new Tool[]{mic,speaker,camera,switchCamera,share,members,record,leave})toolbar.addView(tool.root,new LinearLayout.LayoutParams(dp(72),dp(70)));
         toolbarScroll.addView(toolbar,new HorizontalScrollView.LayoutParams(-1,-1));
         FrameLayout.LayoutParams toolbarParams=new FrameLayout.LayoutParams(-1,dp(78),Gravity.BOTTOM);root.addView(toolbarScroll,toolbarParams);
 
@@ -119,8 +120,8 @@ final class ConferenceUi {
         recordingBadge.setVisibility(anyRecording?View.VISIBLE:View.GONE);
     }
 
-    void setControls(boolean microphone,boolean cameraEnabled,boolean screen,boolean recording,boolean host) {
-        mic.setActive(microphone,microphone?"静音":"解除静音");camera.setActive(cameraEnabled,cameraEnabled?"关闭视频":"开启视频");switchCamera.root.setVisibility(cameraEnabled?View.VISIBLE:View.GONE);share.root.setVisibility(host?View.VISIBLE:View.GONE);record.root.setVisibility(host?View.VISIBLE:View.GONE);share.setActive(screen,screen?"停止共享":"共享屏幕");record.setActive(recording,recording?"停止录制":"录制");leave.label.setText(host?"结束会议":"离开会议");
+    void setControls(boolean microphone,boolean speakerEnabled,boolean cameraEnabled,boolean screen,boolean recording,boolean host) {
+        mic.setActive(microphone,microphone?"静音":"解除静音");speaker.setActive(speakerEnabled,speakerEnabled?"关闭声音":"播放声音");camera.setActive(cameraEnabled,cameraEnabled?"关闭视频":"开启视频");switchCamera.root.setVisibility(cameraEnabled?View.VISIBLE:View.GONE);share.root.setVisibility(host?View.VISIBLE:View.GONE);record.root.setVisibility(host?View.VISIBLE:View.GONE);share.setActive(screen,screen?"停止共享":"共享屏幕");record.setActive(recording,recording?"停止录制":"录制");leave.label.setText(host?"结束会议":"离开会议");
     }
 
     void setMembersOpen(boolean open){memberPanelOpen=open;memberPanel.setVisibility(open?View.VISIBLE:View.GONE);members.setActive(open,"成员");}
@@ -147,6 +148,7 @@ final class ConferenceUi {
         @Override protected void onDraw(Canvas canvas){super.onDraw(canvas);canvas.save();canvas.scale(getWidth()/24f,getHeight()/24f);pen.setStyle(Paint.Style.STROKE);pen.setStrokeWidth(1.6f);pen.setStrokeCap(Paint.Cap.ROUND);pen.setStrokeJoin(Paint.Join.ROUND);pen.setColor(kind.equals("离开")?0xffdc535a:active?0xff0099ff:0xff718095);
             switch(kind){
                 case "麦克风":canvas.drawRoundRect(9,2,15,14,3,3,pen);canvas.drawArc(6,5,18,18,0,180,false,pen);canvas.drawLine(6,9,6,12,pen);canvas.drawLine(18,9,18,12,pen);canvas.drawLine(12,18,12,22,pen);canvas.drawLine(8,22,16,22,pen);break;
+                case "扬声器":path(canvas,new float[]{3,9,8,9,14,4,14,20,8,15,3,15},true);canvas.drawArc(15,8,21,16,-70,140,false,pen);break;
                 case "摄像头":canvas.drawRoundRect(2,5,16,19,2,2,pen);path(canvas,new float[]{16,9,22,6,22,18,16,15},true);break;
                 case "切换镜头":canvas.drawRoundRect(2,6,22,20,2,2,pen);path(canvas,new float[]{7,6,9,3,15,3,17,6},false);canvas.drawArc(8,9,16,17,35,260,false,pen);path(canvas,new float[]{15,9,16,12,13,12},false);break;
                 case "共享屏幕":canvas.drawRoundRect(2,3,22,18,2,2,pen);canvas.drawLine(8,22,16,22,pen);canvas.drawLine(12,18,12,22,pen);path(canvas,new float[]{8,10,12,6,16,10},false);canvas.drawLine(12,6,12,14,pen);break;

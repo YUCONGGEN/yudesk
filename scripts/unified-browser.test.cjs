@@ -175,6 +175,23 @@ const {chromium}=require('playwright');
     await Promise.all([left.waitForFunction(()=>document.querySelectorAll('.conference-tile').length===2),right.waitForFunction(()=>document.querySelectorAll('.conference-tile').length===2)]);
     await left.locator('#conferenceMic').click();
     await Promise.all([left.waitForFunction(()=>document.querySelector('.conference-tile:not(.local) video')?.srcObject?.getAudioTracks().some(track=>track.readyState==='live')),right.waitForFunction(()=>document.querySelector('.conference-tile:not(.local) video')?.srcObject?.getAudioTracks().some(track=>track.readyState==='live'))]);
+    await Promise.all([left,right].map(page=>page.waitForFunction(async()=>{for(const entry of conference.peers.values()){const stats=await entry.pc.getStats();for(const report of stats.values())if(report.type==='inbound-rtp'&&(report.kind==='audio'||report.mediaType==='audio')&&report.packetsReceived>0&&report.bytesReceived>0)return true;}return false;},null,{timeout:15000})));
+    await Promise.all([left,right].map(page=>page.waitForFunction(()=>conference.audioElements.size>0&&[...conference.audioElements.values()].every(item=>!item.audio.paused&&!item.audio.muted&&item.audio.volume===1),null,{timeout:15000})));
+    for(const page of [left,right]){
+      const playback=await page.evaluate(()=>[...conference.audioElements.values()].map(item=>({muted:item.audio.muted,paused:item.audio.paused,volume:item.audio.volume,live:item.track.readyState==='live'})));
+      assert.ok(playback.length>0&&playback.every(item=>!item.muted&&!item.paused&&item.volume===1&&item.live),'remote meeting audio must use the independent live playback channel');
+    }
+    await right.locator('#conferenceSpeaker').click();
+    assert.equal(await right.evaluate(()=>[...conference.audioElements.values()].every(item=>item.audio.muted)),true,'speaker control must mute every remote audio channel');
+    assert.match(await right.locator('#conferenceSpeaker').textContent(),/播放声音/);
+    await right.locator('#conferenceSpeaker').click();
+    await right.waitForFunction(()=>[...conference.audioElements.values()].every(item=>!item.audio.muted&&!item.audio.paused));
+    assert.equal(await right.evaluate(()=>[...conference.audioElements.values()].every(item=>!item.audio.muted)),true,'speaker control must restore every remote audio channel');
+    await right.locator('#conferenceAudioSettings').click();
+    assert.equal(await right.locator('#conferenceAudioPanel').isVisible(),true,'conference must expose audio diagnostics and output selection');
+    await right.waitForFunction(()=>document.querySelectorAll('#conferenceOutputList button').length>0);
+    assert.ok(await right.locator('#conferenceOutputList button').count()>0,'conference audio settings must list an output device');
+    await right.locator('#conferenceAudioClose').click();
     assert.equal(await right.locator('#incomingApproval').isVisible(),false,'meeting number must join without host confirmation');
     assert.equal(await right.locator('#conferenceShare').isVisible(),true,'host must be allowed to share its screen');
     assert.equal(await left.locator('#conferenceShare').isVisible(),false,'ordinary participants must not publish screen share');
@@ -189,9 +206,11 @@ const {chromium}=require('playwright');
     ]);
     assert.equal(await left.locator('#conferenceShare').isVisible(),true,'transferred host must receive host controls');
     assert.equal(await right.locator('#conferenceShare').isVisible(),false,'old host must lose host controls');
-    await left.evaluate(()=>{navigator.mediaDevices.getDisplayMedia=()=>navigator.mediaDevices.getUserMedia({video:true});});
+    await left.evaluate(()=>{navigator.mediaDevices.getDisplayMedia=constraints=>{window.testDisplayConstraints=constraints;return navigator.mediaDevices.getUserMedia({video:true,audio:true});};});
     await left.locator('#conferenceShare').click();
     await right.waitForFunction(()=>[...document.querySelectorAll('.conference-tile-state')].some(element=>element.textContent.includes('共享')));
+    assert.equal(await left.evaluate(()=>testDisplayConstraints.audio),true,'screen sharing must request system audio');
+    try{await right.waitForFunction(()=>document.querySelector('.conference-tile:not(.local) video')?.srcObject?.getAudioTracks().length>=2&&conference.audioElements.size>=2,null,{timeout:15000});}catch(error){const diagnostics={sender:await left.evaluate(()=>({screen:conference.screen?.getTracks().map(track=>[track.kind,track.id,track.readyState]),peers:[...conference.peers.values()].map(entry=>({state:entry.pc.signalingState,senders:entry.pc.getSenders().map(sender=>[sender.track?.kind,sender.track?.id]),local:entry.pc.localDescription?.sdp?.match(/^m=audio/gm)?.length||0}))})),receiver:await right.evaluate(()=>({audioElements:conference.audioElements.size,peers:[...conference.peers.values()].map(entry=>({state:entry.pc.signalingState,tracks:entry.remoteStream.getTracks().map(track=>[track.kind,track.id,track.readyState]),remote:entry.pc.remoteDescription?.sdp?.match(/^m=audio/gm)?.length||0}))}))};throw Error('shared system audio did not reach the independent playback channel: '+JSON.stringify(diagnostics),{cause:error});}
     await left.locator('#conferenceShare').click();
     await right.waitForFunction(()=>![...document.querySelectorAll('.conference-tile-state')].some(element=>element.textContent.includes('共享')));
     await left.locator('#conferenceRecord').click();

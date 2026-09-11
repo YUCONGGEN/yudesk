@@ -199,7 +199,7 @@ func (b *appWindow) Show() error {
 		if err != nil {
 			continue
 		}
-		args := []string{"--app=" + b.url, "--user-data-dir=" + b.profile, "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", "--no-first-run", "--disable-first-run-ui", "--no-default-browser-check", "--disable-background-mode", fmt.Sprintf("--window-size=%d,%d", appWindowWidth, appWindowHeight)}
+		args := []string{"--app=" + b.url, "--user-data-dir=" + b.profile, "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", "--no-first-run", "--disable-first-run-ui", "--no-default-browser-check", "--disable-background-mode", "--autoplay-policy=no-user-gesture-required", fmt.Sprintf("--window-size=%d,%d", appWindowWidth, appWindowHeight)}
 		if b.headless {
 			args = append(args, "--headless=new", "--disable-gpu")
 		}

@@ -22,6 +22,9 @@ cp "$ROOT/mobile/go.mod" "$ROOT/mobile/go.sum" "$ROOT/mobile/tools.go" "$STAGE/m
 cp "$ROOT/mobile/android/settings.gradle" "$ROOT/mobile/android/build.gradle" "$ROOT/mobile/android/gradle.properties" "$STAGE/mobile/android/"
 cp "$ROOT/mobile/android/app/build.gradle" "$STAGE/mobile/android/app/"
 cp -a "$ROOT/mobile/android/app/src" "$STAGE/mobile/android/app/"
+if [ -f "$ROOT/mobile/android/app/libs/webrtc-local.aar" ]; then
+  cp "$ROOT/mobile/android/app/libs/webrtc-local.aar" "$STAGE/mobile/android/app/libs/"
+fi
 GRADLE_ROOT=/opt/yudesk-gradle
 if [ ! -x "$GRADLE_ROOT/gradle-8.11.1/bin/gradle" ]; then
   printf '%s  %s\n' f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6 "$ROOT/mobile/build/gradle.zip" | sha256sum --check --strict

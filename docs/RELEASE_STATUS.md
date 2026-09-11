@@ -1,23 +1,25 @@
 # 当前部署状态（2026-09-11）
 
-## 当前多人音视频会议：`multiparty-conference-20260911.1`
+## 当前会议声音修复：`conference-audio-20260911.4`
 
-桌面 **2.0.0** 与 Android **2.0.0-preview.10 / 2000010** 已于 **2026-09-11 01:17（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包全部重建并发布；iOS 与原生鸿蒙继续暂停。
+桌面 **2.0.0** 与 Android **2.0.0-preview.11 / 2000011** 已于 **2026-09-11 09:29（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包已发布；iOS 与原生鸿蒙继续暂停。
 
-- 原单观看者会议升级为最多 8 人的 WebRTC 音视频会议：姓名、9 位会议号直接入会、麦克风、摄像头、成员列表、主持人共享屏幕、转交主持人、本地录制和横屏全屏均已实现。会议采用原创浅色界面，视觉语言参考 `E:\welink`，不包含其品牌或资源。
+- 会议继续支持最多 8 人、姓名、9 位会议号直接入会、麦克风、摄像头、成员列表、主持人共享屏幕、转交主持人、本地录制和横屏全屏。桌面与 Android 新增“关闭声音 / 播放声音”，Android 显式启用远端音轨并优先路由内置扬声器。
+- 桌面端为每条远端麦克风和共享系统声音建立独立播放元素，视频标签保持静音以避免重复播放和多音轨切换故障。声音设备面板可查看麦克风电平、选择系统扬声器、播放短测试音并显示接收/播放路数；失效端点自动回退默认扬声器。Windows 窗口启用会议媒体自动播放，仍被系统拦截时显示中文恢复提示。
+- 主持人共享屏幕会请求可选系统音频，并把麦克风、画面、系统声音先批量加入后统一 SDP 协商；待协商队列避免连续开关共享时丢音轨。
 - 服务器只转发经设备签名认证的房间状态、SDP 和 ICE；摄像头、麦克风、屏幕媒体走 WebRTC/DTLS-SRTP P2P，不经过 Relay。当前没有 TURN/SFU，严格 NAT 可能导致部分媒体连接失败；mesh 上限 8 人，不适合大规模会议。
-- 修复 TLS 合并 `OK`/`welcome` 时丢首条消息、无媒体入会产生无 BUNDLE SDP、成员离开后迟到 ICE 误断开其他成员三项真实联调故障，并加入对应 Go/浏览器回归测试。
-- 全量 Go short/vet、Android 核心三轮 race/vet、23 项协议测试、42 项窗口/弹窗测试和最终 Windows 原生双客户端会议联调通过。Android 四 ABI、Java 单测、lint、v2 签名和 16 KiB 对齐通过；API 26 模拟器冷启动和 Windows/Android 公网入会通过。macOS 双架构由真实 Mac 工具链构建并完成包结构、权限说明和 ad-hoc strict/deep 验签；Linux 由 Ubuntu 22.04 环境构建。
-- 部署后服务 PID **5679**，`/healthz`、SQLite `quick_check`、管理员未登录 401、主页版本/北京时间日期及公开在线/连接统计通过。发布目录 `/Users/yu/bin/yudesk/releases/multiparty-conference-20260911.1`，可恢复备份 `/Users/yu/bin/yudesk/backups/multiparty-conference-20260911.1`。
+- 全量 Go short/vet、Android 核心三轮 race/vet、Java 单测、lint、四 ABI、v2 签名和 16 KiB 对齐通过。Windows 原生双客户端回归直接验证双方 `inbound-rtp` 音频包与字节增长、独立音频通道未静音且正在播放、扬声器枚举、声音开关和共享系统音频第二轨；其余原有会议、远控、审批和窗口流程也通过。本机安装更新后确认 Realtek 麦克风为 live、四个输出端点可枚举且 Web Audio 测试音调用成功。
+- macOS Intel/Apple Silicon 包由真实 Mac 工具链构建，双架构包展开、ad-hoc strict/deep 验签通过；Linux 包由 Ubuntu 22.04 环境构建。macOS/Linux 共享同一会议前端和播放逻辑，实际扬声器与屏幕系统音频仍受操作系统权限和采集源支持限制。
+- 为重新读取发布元数据，中转受控重启后 PID 为 **78619**；服务端二进制未改变。`/healthz`、SQLite `quick_check`、主页 2.0.0 与北京时间日期、公开在线/连接统计通过。发布目录 `/Users/yu/bin/yudesk/releases/conference-audio-20260911.4`，可恢复备份 `/Users/yu/bin/yudesk/backups/conference-audio-20260911.4`。
 - 五个平台公网文件均完整下载并与本地 SHA-256 一致；Android 1 MiB Range 请求返回 `206` 和正确 `Content-Range`。macOS 仍未 Developer ID 签名/公证；Android 尚未覆盖所有厂商物理真机。
 
 | 当前产物 | SHA-256 |
 | --- | --- |
-| Windows x64 EXE | `b33ea6aad663da008d63ce024f6c358928c0214fd77afca0c716608b797aeae5` |
-| Linux x64 DEB | `55866fc7baa0371a6bf4c456c3c8f0bf0ef0ccd193eee4376da0f8f0ff32b2d2` |
-| macOS Intel PKG | `48207a9e254858f0f420a05fba5c4b4930807f4695e6b8a75f258f1053f8f172` |
-| macOS Apple Silicon PKG | `02a9f42d5390ee4e6c0b01eb5c4acd2ff4a39c0a488b4f3516b3dbf9c100772d` |
-| Android preview.10 APK | `8b428136dd7b6f4418f9a243110e0d7e39428a837ab823ffa03bb2f7fb3ad1a0` |
+| Windows x64 EXE | `df22ebc1ef136e19b71f1812caf4cdbba7f60bb3c4037ebb755474ea413d9862` |
+| Linux x64 DEB | `9c390c2b6d16c464fc458c1d842f8216f47f89a5927e94bcfb03537b25c8168f` |
+| macOS Intel PKG | `dff003e7b6b85e95917bfb5127acd2d0a0cfa3f87ab9c3f011299693ff5ae652` |
+| macOS Apple Silicon PKG | `2a5efa8fa081ed3bf599ebd605549e9dd014449511f380e560b2a7a56d232061` |
+| Android preview.11 APK | `81260d3dd89511cb2148a18ceef5941cd3b376124e928ed8f522787c686edbcb` |
 | macOS 服务端 | `aebe449377b61d5aac8067fd927dfa13e340b0fffb73a46aa9e54e2cc806cea3` |
 
 完整会议范围和限制见 [多人会议说明](CONFERENCE_20260911.md)。

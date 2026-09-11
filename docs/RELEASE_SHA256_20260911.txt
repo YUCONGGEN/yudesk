@@ -1,6 +1,6 @@
-b33ea6aad663da008d63ce024f6c358928c0214fd77afca0c716608b797aeae5  YuDesk-2.0.0-windows-amd64.exe
-55866fc7baa0371a6bf4c456c3c8f0bf0ef0ccd193eee4376da0f8f0ff32b2d2  YuDesk-2.0.0-linux-amd64.deb
-48207a9e254858f0f420a05fba5c4b4930807f4695e6b8a75f258f1053f8f172  YuDesk-2.0.0-darwin-amd64.pkg
-02a9f42d5390ee4e6c0b01eb5c4acd2ff4a39c0a488b4f3516b3dbf9c100772d  YuDesk-2.0.0-darwin-arm64.pkg
-8b428136dd7b6f4418f9a243110e0d7e39428a837ab823ffa03bb2f7fb3ad1a0  YuDesk-2.0.0-android-preview.10.apk
+df22ebc1ef136e19b71f1812caf4cdbba7f60bb3c4037ebb755474ea413d9862  YuDesk-2.0.0-windows-amd64.exe
+9c390c2b6d16c464fc458c1d842f8216f47f89a5927e94bcfb03537b25c8168f  YuDesk-2.0.0-linux-amd64.deb
+dff003e7b6b85e95917bfb5127acd2d0a0cfa3f87ab9c3f011299693ff5ae652  YuDesk-2.0.0-darwin-amd64.pkg
+2a5efa8fa081ed3bf599ebd605549e9dd014449511f380e560b2a7a56d232061  YuDesk-2.0.0-darwin-arm64.pkg
+81260d3dd89511cb2148a18ceef5941cd3b376124e928ed8f522787c686edbcb  YuDesk-2.0.0-android-preview.11.apk
 d161c8bb25cbda01a2773e1dbcf688071dff323ac7475e7c3b8d1da213b4f318  THIRD_PARTY_NOTICES.txt

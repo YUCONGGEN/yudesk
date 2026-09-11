@@ -1,6 +1,6 @@
 # YuDesk 2.0.0 多人音视频会议
 
-本版本把临时共享升级为最多 8 人的小型音视频会议，并同步发布 Windows、Linux、macOS 与 Android `2.0.0-preview.10`。
+本版本把临时共享升级为最多 8 人的小型音视频会议，并在声音修复批次同步发布 Windows、Linux、macOS 与 Android `2.0.0-preview.11`。
 
 主要更新：
 
@@ -10,10 +10,14 @@
 - 原创浅色紧凑 UI，视觉语言参考 WeLink，不包含其品牌或资源；
 - WebRTC/DTLS-SRTP 点对点媒体，Relay 只传经设备签名认证的信令；
 - 修复合并欢迎报文丢失、无媒体入会 SDP 失败、成员离开后迟到 ICE 误断开三项稳定性问题。
+- 修复“远端音轨已连接但播放器被自动播放策略拦截”的无声问题，桌面和 Android 均增加会议声音开关；
+- 桌面端改用每条音轨独立播放，增加麦克风电平、扬声器列表和测试音，失效输出设备会回退系统默认值；
+- 桌面共享屏幕可同时请求系统声音，麦克风、画面与系统声音批量重新协商，避免第二条音轨丢失；
+- Android 显式启用远端音频轨并优先路由到内置扬声器。
 
-验证：全量 Go short/vet、Android Go race/vet、65 项协议与窗口回归、Windows 原生双客户端会议联调、Windows/Android 公网会议联调、Android 四 ABI/Java/lint/签名/16 KiB 对齐、macOS 双架构真实工具链构建与验签、Ubuntu 22.04 Linux 构建均通过。
+验证：全量 Go short/vet、Android Go race/vet、65 项协议与窗口回归、Windows 原生双客户端会议联调均通过；声音回归进一步验证两端 `inbound-rtp` 音频包/字节增长、独立音频通道实际播放、扬声器枚举与开关和共享系统音频第二轨。本机新安装版确认 Realtek 麦克风为 live、四个输出端点可枚举且测试音调用成功。Android 四 ABI/Java/lint/签名/16 KiB 对齐、macOS 双架构真实工具链构建与验签、Ubuntu 22.04 Linux 构建均通过。
 
 已知边界：会议为 P2P mesh，没有 TURN/SFU；严格 NAT 可能导致部分媒体无法直连，8 人高清视频也受设备和上行带宽限制。Android 录制不含会议/系统音频。macOS 包尚未 Developer ID 签名或公证，Android 尚未覆盖所有厂商物理真机。
 
-部署批次：`multiparty-conference-20260911.1`
+部署批次：`conference-audio-20260911.4`
 官网：http://www.yucg.cn:8235/
