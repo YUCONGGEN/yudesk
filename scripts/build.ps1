@@ -62,6 +62,34 @@ try {
                 if ($LASTEXITCODE -ne 0) { throw "build failed: $component" }
             }
         }
+        if ($buildTarget.OS -eq 'windows') {
+            # The public Windows download is a real one-window installer. Keep
+            # the application payload separate while building, then append it
+            # to the GUI setup stub with an authenticated footer.
+            $clientOutput = Join-Path $outputDir 'yudesk-client.exe'
+            $setupStub = Join-Path $outputDir 'yudesk-setup-stub.exe'
+            $installerOutput = Join-Path $outputDir 'yudesk.exe'
+            Move-Item -LiteralPath $installerOutput -Destination $clientOutput -Force
+            if ($localGo) {
+                $previousGOOS, $previousGOARCH = $env:GOOS, $env:GOARCH
+                $env:GOOS, $env:GOARCH = 'windows', $buildTarget.Arch
+                try {
+                    & go build -trimpath -ldflags '-s -w -H=windowsgui' -o $setupStub './cmd/yudesk-setup'
+                    if ($LASTEXITCODE -ne 0) { throw 'build failed: yudesk-setup' }
+                } finally {
+                    $env:GOOS, $env:GOARCH = $previousGOOS, $previousGOARCH
+                }
+            } else {
+                $containerStub = "/src/dist/windows-$($buildTarget.Arch)/yudesk-setup-stub.exe"
+                & docker run --rm -e GOOS=windows -e "GOARCH=$($buildTarget.Arch)" -v "${projectRoot}:/src" -w /src -v yudesk-gomod:/go/pkg/mod -v yudesk-gocache:/root/.cache/go-build $goImage sh -lc "/usr/local/go/bin/go build -trimpath -ldflags='-s -w -H=windowsgui' -o '$containerStub' './cmd/yudesk-setup'"
+                if ($LASTEXITCODE -ne 0) { throw 'build failed: yudesk-setup' }
+            }
+            $packager = Start-Process -FilePath $setupStub -ArgumentList @('-package', ('"' + $clientOutput + '"'), '-output', ('"' + $installerOutput + '"')) -WindowStyle Hidden -Wait -PassThru
+            if ($packager.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $installerOutput -PathType Leaf)) {
+                throw 'Windows installer packaging failed'
+            }
+            Remove-Item -LiteralPath $clientOutput, $setupStub -Force
+        }
     }
     if ($Target -eq 'all' -or $Target -eq 'darwin') {
         $serverOutputDir = Join-Path $projectRoot 'dist/server'

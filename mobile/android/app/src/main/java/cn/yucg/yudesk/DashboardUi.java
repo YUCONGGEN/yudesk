@@ -107,7 +107,10 @@ final class DashboardUi {
             }
         };
         page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(16), dp(10), dp(16), dp(20));
+        // WindowInsets keeps the page below the status bar; this additional
+        // breathing room prevents the brand row from touching camera cutouts
+        // or looking pinned to the top on tall Android phones.
+        page.setPadding(dp(16), dp(22), dp(16), dp(20));
         center.addView(page, new LinearLayout.LayoutParams(-1, -2));
 
         LinearLayout header = row();
