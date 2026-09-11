@@ -1,6 +1,6 @@
 # YuDesk 2.0.0
 
-2026-09-11 **会议声音修复批次 `conference-audio-20260911.4` 已部署**：桌面端把每条远端麦克风和共享系统声音放入独立播放通道，不再依附视频标签；会议内新增声音设备面板，可查看麦克风电平、选择扬声器并播放测试音。桌面与 Android 都支持“关闭声音 / 播放声音”，Windows 独立窗口允许会议媒体自动播放，遇到系统拦截时会显示中文恢复提示。桌面主持人共享屏幕时会请求系统音频，并把麦克风、共享声音和画面作为独立 WebRTC 轨道批量协商，停止共享也不会破坏后续声音。Android 当前版本为 **2.0.0-preview.11 / 2000011**。会议继续支持最多 8 人、姓名与 9 位会议号直接入会、摄像头、成员列表、主持人共享/转交/录制及横屏全屏。媒体使用 WebRTC/DTLS-SRTP 点对点传输，Relay 只处理中转信令；详情见 [多人会议说明](docs/CONFERENCE_20260911.md)、[Android 说明](docs/ANDROID.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
+2026-09-11 **安装体验批次 `installer-polish-20260911.6` 已部署**：Windows 官网下载现为独立的一体化安装器，安装前不再先打开便携版；一次管理员授权后写入受保护程序目录、启用锁屏服务、创建带蓝色 Yu 图标的桌面和开始菜单快捷方式，再直接打开正式程序。安装在后台工作线程完成，窗口保持响应；重复双击只保留一个安装窗口。Android 当前版本为 **2.0.0-preview.13 / 2000013**，首页头部增加状态栏与刘海安全间距，远控和会议横屏全屏逻辑不变。既有 Windows/Android 会议声音和 WebRTC P2P 优先、TURN 回退继续保留；详情见 [多人会议说明](docs/CONFERENCE_20260911.md)、[Android 说明](docs/ANDROID.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
 
 2026-09-10 **Android 厂商启动时序热修复 `2.0.0-preview.8`**：用户手机的可恢复故障页确认，部分 Android 11+ 厂商系统会在首个内容视图创建前让 `Window.getWindowInsetsController()` 访问空 `DecorView`；重启只是偶然改变初始化时序。系统栏调用现移到 `setContentView` 之后，并先确保 `DecorView` 已创建。四 ABI 通用 APK 继续保持约 19.2 MB、断点续传和 16 KiB 对齐。Android 8 x86_64 模拟器已完成覆盖安装、冷启动、原生 Go 核心上线和持续进程检查；真实故障手机仍需用新包复核。Windows 同批取消 YuDesk 安装二次确认和设置页闪跳，直接进入系统 UAC。详情见 [Android 说明](docs/ANDROID.md)、[启动修复记录](docs/ANDROID_STARTUP_20260910.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
 

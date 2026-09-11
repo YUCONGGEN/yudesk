@@ -1,22 +1,22 @@
-# YuDesk Android 2.0.0-preview.12
+# YuDesk Android 2.0.0-preview.13
 
 Android 端采用原生 Java 界面、Go 通信核心和原生 WebRTC。一个 APK 可以控制电脑或 Android，也可以在手机持有人明确授权后共享手机屏幕、接受远程触控和参加多人会议。iOS 与原生鸿蒙当前暂停。
 
 ## 当前交付
 
-`preview.12` 的版本代码为 `2000012`，最低 Android 8.0 / API 26，包含 `arm64-v8a`、`armeabi-v7a`、`x86_64` 和 `x86` 四种 ABI。签名证书 SHA-256：
+`preview.13` 的版本代码为 `2000013`，最低 Android 8.0 / API 26，包含 `arm64-v8a`、`armeabi-v7a`、`x86_64` 和 `x86` 四种 ABI。签名证书 SHA-256：
 
 ```text
 c8e35f5904ad92ab55a651f940d531c1193042dcfc2ac1a98b7dadf0c3994a6a
 ```
 
-官网 APK 为 43,859,861 字节，SHA-256：
+官网 APK 为 43,859,825 字节，SHA-256：
 
 ```text
-1f8f6d4d91f7713c7a499c6c41d8a435b28e849235d2457b9f3c9ceab3b20a59
+b93fe2b80994712f37975d6876f874e5be44c905a0d664072dd85098bb82a2ca
 ```
 
-该版本保留 Android 厂商启动时序修复：系统栏操作在 `setContentView` 之后执行，并先确保 `DecorView` 已创建，避免部分 Android 11+ 系统在冷启动时因空 `WindowInsetsController` 直接退出。覆盖安装会保留应用私有设备身份；签名不一致时 Android 会拒绝覆盖，不能通过自动卸载规避，因为卸载会丢失身份与设置。
+该版本保留 Android 厂商启动时序修复：系统栏操作在 `setContentView` 之后执行，并先确保 `DecorView` 已创建，避免部分 Android 11+ 系统在冷启动时因空 `WindowInsetsController` 直接退出。首页在系统状态栏/刘海安全区之外增加 22dp 顶部留白，不再紧贴屏幕顶边；远控和会议仍使用独立的横屏沉浸式全屏布局。覆盖安装会保留应用私有设备身份；签名不一致时 Android 会拒绝覆盖，不能通过自动卸载规避，因为卸载会丢失身份与设置。
 
 这是预览版，不是“全部安卓手机均已验收”的正式版。厂商后台策略、安全桌面、系统应用、DRM 和 `FLAG_SECURE` 内容可能限制共享或触控；YuDesk 不绕过系统锁屏或安全限制。
 

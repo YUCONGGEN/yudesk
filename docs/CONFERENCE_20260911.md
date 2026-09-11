@@ -2,7 +2,7 @@
 
 ## 交付内容
 
-`multiparty-conference-20260911.1` 将原来的“一位主持人共享、一位参与者观看”升级为最多 **8 人**的小型音视频会议；`conference-turn-20260911.5` 修复 Windows 与 Android 跨公网入会后互相无声的问题。Windows、Linux、macOS 和 Android 使用同一套房间、成员和 WebRTC 信令协议。
+`multiparty-conference-20260911.1` 将原来的“一位主持人共享、一位参与者观看”升级为最多 **8 人**的小型音视频会议；`conference-turn-20260911.5` 修复 Windows 与 Android 跨公网入会后互相无声的问题，`installer-polish-20260911.6` 在不改变会议协议的前提下更新 Windows 安装器和 Android 首页安全区。Windows、Linux、macOS 和 Android 使用同一套房间、成员和 WebRTC 信令协议。
 
 - 发起人与参与者均需填写 1～32 个字符的姓名；
 - 发起人创建独立的 9 位会议号，并作为第一位主持人进入会议；
@@ -56,7 +56,7 @@
 - 最终 Windows 原生 EXE 双客户端联调通过：双方 WebRTC `inbound-rtp` 音频包和字节持续增长，远端独立音频通道处于未静音播放状态，扬声器枚举、声音开关、麦克风、摄像头、屏幕与第二条系统音频轨、停止共享、录制、转交主持人和返回首页均通过；
 - Windows 与 Android 模拟器完成真实公网跨端入会，成员数、媒体连接和浅色会议界面通过；
 - Android 四 ABI、Java 单测、lint、APK v2 签名、16 KiB ZIP/ELF 对齐和 API 26 模拟器冷启动通过；
-- Android `preview.12` 显式启用远端音轨、优先路由内置扬声器并提供播放开关；四 ABI 编译、单测和 lint 已验证，真实品牌手机的声学回声与蓝牙路由仍需真机验收；
+- Android `preview.13` 显式启用远端音轨、优先路由内置扬声器并提供播放开关；四 ABI 编译、单测和 lint 已验证，真实品牌手机的声学回声与蓝牙路由仍需真机验收；
 - 真实公网 Windows 与 Android 模拟器完成跨端入会：Windows 上行音频 RTP 包和字节持续增长，Android 日志确认录音启动、内置麦克风配置通过、远端播放启动且通话音量有效；模拟器以 `-no-audio` 运行，因此该项只能验证采集/传输/播放链路，不能代替物理扬声器听感验收；
 - TURN UDP 与 TURN-over-TCP 均完成真实分配、双向数据转发、离会撤销和地址策略测试；公网 `8254/TCP` 与服务器 UDP/TCP 监听通过；
 - macOS Intel/Apple Silicon 包由真实 Mac 工具链构建，Info.plist 摄像头/麦克风说明、arm64 helper 自检、包展开和 ad-hoc strict/deep 验签通过；

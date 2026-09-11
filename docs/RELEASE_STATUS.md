@@ -1,26 +1,25 @@
 # 当前部署状态（2026-09-11）
 
-## 当前跨平台会议声音修复：`conference-turn-20260911.5`
+## 当前一体化安装与 Android 界面优化：`installer-polish-20260911.6`
 
-桌面 **2.0.0** 与 Android **2.0.0-preview.12 / 2000012** 已于 **2026-09-11 12:56（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包已发布；iOS 与原生鸿蒙继续暂停。
+桌面 **2.0.0** 与 Android **2.0.0-preview.13 / 2000013** 已于 **2026-09-11 22:56（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包均可下载；iOS 与原生鸿蒙继续暂停。
 
-- 会议继续支持最多 8 人、姓名、9 位会议号直接入会、麦克风、摄像头、成员列表、主持人共享屏幕、转交主持人、本地录制和横屏全屏。桌面与 Android 新增“关闭声音 / 播放声音”，Android 显式启用远端音轨并优先路由内置扬声器。
-- 桌面端为每条远端麦克风和共享系统声音建立独立播放元素，视频标签保持静音以避免重复播放和多音轨切换故障。声音设备面板可查看麦克风电平、选择系统扬声器、播放短测试音并显示接收/播放路数；失效端点自动回退默认扬声器。Windows 窗口启用会议媒体自动播放，仍被系统拦截时显示中文恢复提示。
-- 主持人共享屏幕会请求可选系统音频，并把麦克风、画面、系统声音先批量加入后统一 SDP 协商；待协商队列避免连续开关共享时丢音轨。
-- 会议媒体现在优先 WebRTC P2P 直连；3 秒内无法建立媒体路径时，自动改用带短期房间凭据的 TURN。TURN 同时支持 UDP 和 TCP `8254`，媒体仍由端侧 DTLS-SRTP 加密，服务器只转发密文数据包。Relay 端口范围为 UDP `20200-20295`，SFU 仍未实现；mesh 上限 8 人，不适合大规模会议。
-- Android 使用显式 `JavaAudioDeviceModule`，启用硬件回声消除与降噪、远端接收 transceiver、扬声器通话路由及失败回调；桌面端不再在收到欢迎消息时误报媒体已连接，而是显示实际选中的 `P2P 直连` 或 `中转连接`。
-- 全量 Go short/vet、Android 核心三轮 race/vet、Java 单测、lint、四 ABI、v2 签名和 16 KiB 对齐通过。Windows 原生双客户端回归直接验证双方 `inbound-rtp` 音频包与字节增长、独立音频通道未静音且正在播放、扬声器枚举、声音开关和共享系统音频第二轨；其余原有会议、远控、审批和窗口流程也通过。本机安装更新后确认 Realtek 麦克风为 live、四个输出端点可枚举且 Web Audio 测试音调用成功。
-- macOS Intel/Apple Silicon 包由真实 Mac 工具链构建，双架构包展开、ad-hoc strict/deep 验签通过；Linux 包由 Ubuntu 22.04 环境构建。macOS/Linux 共享同一会议前端和播放逻辑，实际扬声器与屏幕系统音频仍受操作系统权限和采集源支持限制。
-- 中转受控重启后 PID 为 **10824**；TURN UDP/TCP 监听、`/healthz`、SQLite `quick_check`、主页 2.0.0 与公开在线/连接统计通过。发布目录 `/Users/yu/bin/yudesk/releases/conference-turn-20260911.5`，可恢复备份 `/Users/yu/bin/yudesk/backups/conference-turn-20260911.5`。
-- 五个平台公网文件均完整下载并与本地 SHA-256 一致；Android 1 MiB Range 请求返回 `206` 和正确 `Content-Range`。macOS 仍未 Developer ID 签名/公证；Android 尚未覆盖所有厂商物理真机。
+- Windows 官网 EXE 已改为独立的一体化安装器：用户不会先看到便携版主界面；点击“立即安装”后只经历一次 Windows 管理员授权，随后程序写入受保护的 `Program Files\YuDesk`、启用既有锁屏桌面服务并直接打开正式程序。
+- 安装器自动创建桌面与开始菜单快捷方式，使用本地生成并验证过的蓝色 Yu ICO。安装在后台工作线程执行，等待系统授权时窗口仍响应；重复双击第二个安装器会立即退出，只保留一个安装窗口。没有更新工具或命令行步骤。
+- 安装包把正式客户端作为带长度和 SHA-256 摘要的受限载荷附加，启动前和解包后均校验；构建目录中的载荷与安装器外壳不会作为独立下载发布。最终 21,026,360 字节安装器的载荷校验、真实窗口启动和双实例回归通过。未通过自动化点击 UAC 或修改本机已安装服务。
+- Android 首页在系统状态栏/刘海安全区之外增加 22dp 顶部留白；API 26 软件模拟器完成安装、冷启动、进程存活和实际截图检查。普通远控与会议仍使用独立的横屏沉浸式全屏，不受首页留白影响。
+- Android 四 ABI Go 核心三轮 race/vet、29 项 Java 单测（0 失败）、lint（0 错误）、APK v2 签名及 16 KiB ZIP/ELF 对齐通过。APK 仍是调试签名预览版，尚未覆盖所有品牌物理真机。
+- 根模块全量 `go test -short ./...`、`go vet ./...`、Windows 交叉 vet、安装器打包/损坏拒绝测试通过。新增 WebView2 安装界面依赖及间接 loader 的许可证已纳入完整 80 模块、127 份许可文档。
+- 本次只原子替换下载文件，没有重启中转；PID 仍为 **10824**，现有连接不因发布被主动中断。`/healthz`、未登录后台 401、公开在线/连接统计和 SQLite `quick_check` 均通过。发布目录 `/Users/yu/bin/yudesk/releases/installer-polish-20260911.6`，可恢复备份 `/Users/yu/bin/yudesk/backups/installer-polish-20260911.6`。
+- Windows 与 Android 从公网域名完整重新下载后 SHA-256 与本地一致；Android 1 MiB Range 请求返回 `206` 和正确 `Content-Range`。Linux/macOS 包字节未变，macOS 仍未 Developer ID 签名或公证。
 
 | 当前产物 | SHA-256 |
 | --- | --- |
-| Windows x64 EXE | `a3a5a5ee21cee8fbe105a4bc41fa725350a6fe677f10784f2abb84965b3cb182` |
+| Windows x64 一体化安装器 | `2919ab9de11c8467a1ac30c6810775c517bcb700ffee759cb7b65da3eda4cca1` |
 | Linux x64 DEB | `1cc0cedcdb06ff1906babcfc3e0526358c53e1db0cfd3642d67364d08619d734` |
 | macOS Intel PKG | `2a6a8162ae9fb9576a9c901837066723c680fc79d617474e94b309ba1021c624` |
 | macOS Apple Silicon PKG | `f7a69436721126b365f8a78637759622ec1dd948916162e7fd528ec6f4d6cb32` |
-| Android preview.12 APK | `1f8f6d4d91f7713c7a499c6c41d8a435b28e849235d2457b9f3c9ceab3b20a59` |
+| Android preview.13 APK | `b93fe2b80994712f37975d6876f874e5be44c905a0d664072dd85098bb82a2ca` |
 | macOS 服务端 | `8dd29dc581a64a74e208d45505b324eea206ea0340780d6e6b2efca466dce8cb` |
 
 完整会议范围和限制见 [多人会议说明](CONFERENCE_20260911.md)。
