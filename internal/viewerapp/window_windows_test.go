@@ -492,11 +492,24 @@ func TestNativeFramelessTransitions(t *testing.T) {
 		assertNativeContent(t, b)
 	}
 	postAppWindowMessage.Call(b.nativeHandle(), 0x10, 0, 0) // owned WM_CLOSE, no injected input
-	select {
-	case <-h.ctx.Done():
-	case <-time.After(3 * time.Second):
-		t.Fatal("native close did not exit")
+	waitNative(t, "native close did not hide to tray", func() bool {
+		visible, _, _ := appWindowVisible.Call(initial)
+		return visible == 0
+	})
+	if h.ctx.Err() != nil {
+		t.Fatal("native close stopped the application")
 	}
+	if b.native != old || b.browserPID != pid {
+		t.Fatal("native close replaced the live renderer")
+	}
+	if err := h.showWindow(); err != nil {
+		t.Fatal(err)
+	}
+	waitNative(t, "desktop relaunch did not restore the existing window", func() bool {
+		visible, _, _ := appWindowVisible.Call(initial)
+		return visible != 0
+	})
+	assertNativeContent(t, b)
 }
 
 func TestNativeCaptionGeometry(t *testing.T) {

@@ -1,4 +1,30 @@
-# 当前部署状态（2026-09-12）
+# 当前部署状态（2026-09-13）
+
+## 当前桌面安装生命周期与会议姓名隐私：`desktop-lifecycle-20260913.10`
+
+桌面 **2.0.0** 与 Android **2.0.0-preview.16 / 2000016** 已于 **2026-09-13 06:30（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包均已更新；iOS 与原生鸿蒙继续暂停。
+
+- Windows 安装版在管理员拥有的注册表位置登记“已安装的应用/程序和功能”，包含版本、发布者、安装位置、图标、卸载命令和预计大小；卸载仅清理已登记的精确程序文件、服务、快捷方式和条目，不递归删除用户选择的目录。
+- Windows 安装器默认使用 Program Files，也可在折叠项中填写本地绝对安装目录；拒绝相对路径、网络路径、磁盘根目录、链接和含无关文件的目录。安装路径由管理员注册表保存，服务和本机管道共同验证同一受信程序。
+- 主界面点 X 改为关闭窗口到托盘并保持在线；托盘“退出”仍完整结束应用。短时间重复双击桌面图标会合并为一次恢复请求，只显示一个 GUI；安装后本机验证保持一个主界面进程、一个服务和一个锁屏工作进程。
+- 桌面发起/加入会议姓名框不再使用本地存储、不再相互复制，并关闭浏览器自动填表；Android 不再读写姓名偏好，同时禁止系统自动填充和状态保存。此前填写的“本机声音检测”等内容不会自动出现，当次参会仍要求主动填写 1～32 个字符。
+- 根模块全量 `go test ./...` 和 `go vet ./...` 通过；Windows 安装载荷校验通过。Android 四 ABI 核心三轮竞态测试、Java 单测、lint、APK v2 签名及 16 KiB 对齐通过。Linux revision 15 在 Ubuntu 22.04 构建；macOS revision 15 在真实 macOS 主机重新构建，并通过包展开、架构及应用 ad-hoc strict/deep 验签。
+- 部署前连续两次确认参与连接和活动会话均为 0；部署脚本再次执行相同空闲检查，备份程序、配置、下载目录和一致性数据库后原子切换。当前 PID **77403**；`/healthz`、未登录后台 401、SQLite `quick_check`、TCP 8233/8235/8254 与 UDP 8233/8254 监听均通过，最近日志没有 panic、fatal error 或 data race。
+- 配置 SHA-256 保持 `86fb7368c75b0c14ffa5bbff8f015531f79546c8216e962fde741f3f448407a2`，TLS 指纹保持 `20FC953E48B6BEED7FB3A5F73BF177CC4E2557CF274C409FF4F0179E5FA0F836`。发布目录 `/Users/yu/bin/yudesk/releases/desktop-lifecycle-20260913.10`，可恢复备份 `/Users/yu/bin/yudesk/backups/desktop-lifecycle-20260913.10`；数据库账号 0、激活码 9、已授权设备 374，完整性为 `ok`。
+- 五个平台安装文件均从公网域名完整重新下载并与本地产物 SHA-256 一致；Android 1 MiB Range 请求返回 `206` 和正确范围。官网显示版本 2.0.0、发布日期 2026-09-13 06:30（北京时间）；发布后在线设备 1、参与连接和活动会话均为 0，这些数量为实时状态。
+
+| 当前产物 | SHA-256 |
+| --- | --- |
+| Windows x64 一体化安装器 | `48d905e18941a5e57f834aae228cafe064b9cf80775eff291b85c97942e47822` |
+| Linux x64 DEB revision 15 | `c372f5d892019bc5ad58d7b09393e097f896330937d91f07bac4665dd9436a15` |
+| macOS Intel PKG revision 15 | `1c3dbf6fdb45075e05fff3fe638d0c31455742196bb7926b50f5d09def72e7c8` |
+| macOS Apple Silicon PKG revision 15 | `cae458c912af2d44b83d367f53f93355d12358cb56649be7a8830a01c24cafcf` |
+| Android preview.16 APK | `266e63809e20bfd205d292a51fc6b6392a0816bd447826495a42c32eadda2868` |
+| macOS 服务端 | `6355df81cb78d1d478ba281255fa13cb7a54df597d1aab328e5fde98a4303f41` |
+
+macOS 外层 PKG 仍未 Developer ID 签名或公证，Android 仍为调试证书签名的预览版；不同厂商物理手机、Linux/macOS 图形输入和长时间弱网仍需真机验收。
+
+完整变更见 [本次发布说明](RELEASE_NOTES_20260913.md)、[Windows 服务说明](WINDOWS_DESKTOP_SERVICE.md)、[窗口生命周期](WINDOW_LIFECYCLE.md) 和 [Android 说明](ANDROID.md)。
 
 ## 当前外网自适应延迟与 Windows 重启稳定：`low-latency-restart-20260912.9`
 

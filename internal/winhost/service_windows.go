@@ -18,7 +18,10 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/yudesk/yudesk/internal/releaseinfo"
+	"github.com/yudesk/yudesk/internal/singleinstance"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -42,14 +45,31 @@ func HandleCommand(handler Handler) bool {
 		worker.Store(true)
 		err = serveWorker(handler)
 	case "-desktop-service-install":
-		err = install(false)
-	case "-desktop-setup-install", "-desktop-setup-remove":
-		err = install(os.Args[1] == "-desktop-setup-remove")
+		err = install(false, "")
+	case "-desktop-uninstall":
+		err = uninstallApplication()
+	case "-desktop-uninstall-elevated":
+		err = uninstallInstalledApplication()
+	case "-desktop-setup-install":
+		if len(os.Args) > 3 {
+			err = errors.New("安装目录参数无效")
+		} else {
+			directory := ""
+			if len(os.Args) == 3 {
+				directory = os.Args[2]
+			}
+			err = install(false, directory)
+		}
+		if err != nil {
+			os.Exit(1)
+		} // caller displays a styled, non-privileged error
+	case "-desktop-setup-remove":
+		err = install(true, "")
 		if err != nil {
 			os.Exit(1)
 		} // caller displays a styled, non-privileged error
 	case "-desktop-service-remove":
-		err = install(true)
+		err = install(true, "")
 	case "-desktop-service-check":
 		var result struct {
 			Bytes int            `json:"bytes"`
@@ -110,17 +130,24 @@ func ElevateInstall(remove bool) error {
 		return errors.New("安装操作正在进行，请稍候")
 	}
 	defer setupMu.Unlock()
+	arg := "-desktop-setup-install"
+	if remove {
+		arg = "-desktop-setup-remove"
+	}
+	return runElevatedOperation(arg)
+}
+
+func runElevatedOperation(args ...string) error {
+	if len(args) == 0 {
+		return errors.New("缺少安装操作")
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	verb, _ := windows.UTF16PtrFromString("runas")
 	file, _ := windows.UTF16PtrFromString(exe)
-	arg := "-desktop-setup-install"
-	if remove {
-		arg = "-desktop-setup-remove"
-	}
-	params, _ := windows.UTF16PtrFromString(arg)
+	params, _ := windows.UTF16PtrFromString(windows.ComposeCommandLine(args))
 	info := shellExecuteInfo{Mask: 0x40 | 0x100 | 0x400, Verb: verb, File: file, Parameters: params, Show: windows.SW_HIDE}
 	info.Size = uint32(unsafe.Sizeof(info))
 	ok, _, callErr := windows.NewLazySystemDLL("shell32.dll").NewProc("ShellExecuteExW").Call(uintptr(unsafe.Pointer(&info)))
@@ -143,6 +170,9 @@ func ElevateInstall(remove bool) error {
 		return err
 	}
 	if code != 0 {
+		if args[0] == "-desktop-uninstall-elevated" {
+			return errors.New("卸载未完成，请先从托盘退出 YuDesk 后重试")
+		}
 		return errors.New("安装未完成，请退出旧安装版后重试；原有设备和授权保留")
 	}
 	return nil
@@ -251,13 +281,197 @@ func protectDirectory(dir string) error {
 	return windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, owner, nil, dacl, nil)
 }
 
-func install(remove bool) (resultErr error) {
+const uninstallRegistryPath = `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\YuDesk`
+
+func uninstallCommand(path string) string {
+	return syscall.EscapeArg(path) + " -desktop-uninstall"
+}
+
+func estimatedInstallSize(size int64) uint32 {
+	if size <= 0 {
+		return 1
+	}
+	kib := (size + 1023) / 1024
+	if kib > int64(^uint32(0)) {
+		return ^uint32(0)
+	}
+	return uint32(kib)
+}
+
+func registerUninstall(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, uninstallRegistryPath, registry.SET_VALUE|registry.WOW64_64KEY)
+	if err != nil {
+		return fmt.Errorf("无法登记到 Windows 程序列表: %w", err)
+	}
+	defer key.Close()
+	values := map[string]string{
+		"DisplayName":          "YuDesk",
+		"DisplayVersion":       releaseinfo.Version,
+		"Publisher":            "YuDesk",
+		"InstallLocation":      filepath.Dir(path),
+		"DisplayIcon":          path + ",0",
+		"UninstallString":      uninstallCommand(path),
+		"QuietUninstallString": uninstallCommand(path),
+		"URLInfoAbout":         "http://www.yucg.cn:8235/",
+		"InstallDate":          time.Now().Format("20060102"),
+	}
+	for name, value := range values {
+		if err = key.SetStringValue(name, value); err != nil {
+			return fmt.Errorf("无法写入 Windows 程序信息 %s: %w", name, err)
+		}
+	}
+	for name, value := range map[string]uint32{"NoModify": 1, "NoRepair": 1, "EstimatedSize": estimatedInstallSize(info.Size())} {
+		if err = key.SetDWordValue(name, value); err != nil {
+			return fmt.Errorf("无法写入 Windows 程序信息 %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// UninstallRegistered lets the outer installer repair an older installation
+// whose executable/service are current but which is absent from Programs and
+// Features. Reading HKLM does not require elevation.
+func UninstallRegistered(path string) bool {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, uninstallRegistryPath, registry.QUERY_VALUE|registry.WOW64_64KEY)
+	if err != nil {
+		return false
+	}
+	defer key.Close()
+	name, _, nameErr := key.GetStringValue("DisplayName")
+	version, _, versionErr := key.GetStringValue("DisplayVersion")
+	command, _, commandErr := key.GetStringValue("UninstallString")
+	directory, _, directoryErr := key.GetStringValue("InstallLocation")
+	return nameErr == nil && versionErr == nil && commandErr == nil && directoryErr == nil && name == "YuDesk" && version == releaseinfo.Version && command == uninstallCommand(path) && strings.EqualFold(filepath.Clean(directory), filepath.Dir(path))
+}
+
+func uninstallApplication() error {
+	if windows.GetCurrentProcessToken().IsElevated() {
+		if err := uninstallInstalledApplication(); err != nil {
+			return err
+		}
+		removeUserIntegration()
+		return nil
+	}
+	if err := runElevatedOperation("-desktop-uninstall-elevated"); err != nil {
+		return err
+	}
+	removeUserIntegration()
+	return nil
+}
+
+func uninstallInstalledApplication() error {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return errors.New("请允许管理员授权")
+	}
+	source, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if !sameInstalledPath(source) {
+		return errors.New("请从 Windows 程序列表卸载安装版 YuDesk")
 	}
 	path, err := installedPath()
 	if err != nil {
 		return err
+	}
+	if err = install(true, ""); err != nil {
+		return err
+	}
+	path16, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	// This executable is the uninstaller itself, so Windows cannot remove it
+	// before process exit. Queue only the exact registered executable. A custom
+	// directory can contain files owned by the user and is never removed here.
+	if err = windows.MoveFileEx(path16, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT); err != nil {
+		return fmt.Errorf("无法安排删除安装程序: %w", err)
+	}
+	if err = registry.DeleteKey(registry.LOCAL_MACHINE, uninstallRegistryPath); err != nil && !errors.Is(err, registry.ErrNotExist) {
+		return fmt.Errorf("无法删除 Windows 程序登记: %w", err)
+	}
+	return nil
+}
+
+func removeUserIntegration() {
+	paths := []string{
+		filepath.Join(os.Getenv("APPDATA"), "Microsoft", "Windows", "Start Menu", "Programs", "YuDesk.lnk"),
+		filepath.Join(os.Getenv("USERPROFILE"), "Desktop", "YuDesk.lnk"),
+		filepath.Join(os.Getenv("LOCALAPPDATA"), "YuDesk", "YuDesk.ico"),
+	}
+	for _, path := range paths {
+		if path != "" {
+			_ = os.Remove(path)
+		}
+	}
+}
+
+func installDirectoryAvailable(directory, previousPath string) error {
+	info, err := os.Stat(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("安装目录指向的不是文件夹")
+	}
+	if strings.EqualFold(filepath.Clean(directory), filepath.Clean(filepath.Dir(previousPath))) {
+		return nil
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return errors.New("自定义安装目录必须是空目录或新的 YuDesk 目录")
+	}
+	return nil
+}
+
+func desktopGUIRunning() (bool, error) {
+	root, err := os.UserConfigDir()
+	if err != nil {
+		return false, err
+	}
+	lock, acquired, err := singleinstance.Acquire(filepath.Join(root, "yudesk", "viewer.lock"))
+	if err != nil {
+		return false, err
+	}
+	if acquired {
+		return false, lock.Close()
+	}
+	return true, nil
+}
+
+func install(remove bool, requestedDirectory string) (resultErr error) {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		return errors.New("请允许管理员授权")
+	}
+	previousPath, err := installedPath()
+	if err != nil {
+		return err
+	}
+	path := previousPath
+	if !remove {
+		path, err = ResolveInstallPath(requestedDirectory)
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(path, previousPath) {
+			running, runningErr := desktopGUIRunning()
+			if runningErr != nil {
+				return fmt.Errorf("无法确认 YuDesk 是否已退出: %w", runningErr)
+			}
+			if running {
+				return errors.New("更换安装目录前，请先从 YuDesk 托盘菜单选择“退出”")
+			}
+		}
 	}
 	m, err := mgr.Connect()
 	if err != nil {
@@ -265,6 +479,7 @@ func install(remove bool) (resultErr error) {
 	}
 	defer m.Disconnect()
 	service, openErr := m.OpenService(serviceName)
+	relocated := false
 	if openErr == nil {
 		defer service.Close()
 		previous, _ := service.Query()
@@ -279,10 +494,12 @@ func install(remove bool) (resultErr error) {
 		if err != nil {
 			return err
 		}
+		expectedPrevious := syscall.EscapeArg(previousPath) + " -desktop-service"
 		expected := syscall.EscapeArg(path) + " -desktop-service"
-		if !strings.EqualFold(config.BinaryPathName, expected) {
+		if !strings.EqualFold(config.BinaryPathName, expected) && !strings.EqualFold(config.BinaryPathName, expectedPrevious) {
 			return errors.New("同名服务的安装路径不同，未修改该服务")
 		}
+		relocated = !strings.EqualFold(config.BinaryPathName, expected)
 		_, _ = service.Control(svc.Stop)
 		until := time.Now().Add(10 * time.Second)
 		stopped := false
@@ -310,6 +527,9 @@ func install(remove bool) (resultErr error) {
 		if remove {
 			return nil
 		}
+	}
+	if err = installDirectoryAvailable(filepath.Dir(path), previousPath); err != nil {
+		return err
 	}
 	if err = os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -354,11 +574,35 @@ func install(remove bool) (resultErr error) {
 			return err
 		}
 		defer service.Close()
+	} else if relocated {
+		config, configErr := service.Config()
+		if configErr != nil {
+			return configErr
+		}
+		config.BinaryPathName = syscall.EscapeArg(path) + " -desktop-service"
+		if err = service.UpdateConfig(config); err != nil {
+			return fmt.Errorf("无法更新系统服务安装目录: %w", err)
+		}
+	}
+	// Register before service start: the LocalSystem worker authenticates its
+	// executable against this administrator-owned location during startup.
+	if err = registerUninstall(path); err != nil {
+		return err
 	}
 	if err := service.Start(); err != nil {
 		return err
 	}
-	return waitForInstalledService(service.Query, 10*time.Second)
+	if err := waitForInstalledService(service.Query, 10*time.Second); err != nil {
+		return err
+	}
+	// If this was an explicit directory migration, remove only the old exact
+	// executable when Windows permits it. A running old GUI can keep the file
+	// open; leaving that inert, no-longer-trusted copy is safer than scheduling a
+	// surprising deletion at a later reboot.
+	if relocated && !strings.EqualFold(previousPath, path) {
+		_ = os.Remove(previousPath)
+	}
+	return nil
 }
 
 func waitForInstalledService(query func() (svc.Status, error), timeout time.Duration) error {

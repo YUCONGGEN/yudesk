@@ -272,7 +272,10 @@ final class DashboardUi {
         meetingCard.addView(nameLabel);
         space(meetingCard, 6);
         meetingName = nameInput("输入参会姓名");
-        meetingName.setText(activity.getPreferences(Activity.MODE_PRIVATE).getString("meeting_name", ""));
+        meetingName.setSaveEnabled(false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            meetingName.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        }
         meetingName.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         meetingCard.addView(meetingName, new LinearLayout.LayoutParams(-1, -2));
         space(meetingCard, 8);
@@ -332,7 +335,6 @@ final class DashboardUi {
         meetingName.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence value, int start, int count, int after) { }
             @Override public void onTextChanged(CharSequence value, int start, int before, int count) {
-                activity.getPreferences(Activity.MODE_PRIVATE).edit().putString("meeting_name", value.toString().trim()).apply();
                 updateMeetingJoin();
             }
             @Override public void afterTextChanged(Editable value) { }

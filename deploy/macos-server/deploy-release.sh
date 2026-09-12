@@ -18,6 +18,15 @@ test -z "$(find "$root/downloads" -type l -print)"
 test ! -L "$root/bin/yudesk-relay"
 test "$(cat "$root/run/yudesk-relay.pid")" = "$expected_pid"
 kill -0 "$expected_pid"
+first_stats=$(/usr/bin/curl --noproxy '*' -fsS http://127.0.0.1:8235/api/public-stats)
+sleep 2
+second_stats=$(/usr/bin/curl --noproxy '*' -fsS http://127.0.0.1:8235/api/public-stats)
+for snapshot in "$first_stats" "$second_stats"; do
+  case "$snapshot" in
+    *'"connectedDevices":0'*'"activeSessions":0'*) ;;
+    *) echo "Active session detected; deployment postponed: $snapshot" >&2; exit 1;;
+  esac
+done
 archive="$root/staging/$name.tgz"
 config_next="$root/staging/$name-server.conf"
 start_next="$root/staging/$name-start.sh"

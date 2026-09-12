@@ -32,7 +32,10 @@ type viewerHost struct {
 	tray     *appTray
 	openUI   bool
 	journal  *lifecycleJournal
+	lastShow time.Time
 }
+
+const duplicateShowWindow = 750 * time.Millisecond
 
 func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHost, error) {
 	l, err := net.Listen("tcp", addr)
@@ -47,7 +50,9 @@ func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHo
 	h.window = newAppWindow(l.Addr().String(), token)
 	h.window.journal = h.journal
 	h.version.Store("desktop-input-files-v3")
-	// X always exits the app. Only the explicit End Control action returns home.
+	// Closing a renderer unexpectedly still exits, so a browser crash cannot
+	// leave an invisible process. Windows' owned native X has a separate callback
+	// below and only hides the healthy window to the notification area.
 	windowClosed := func() { h.requestExit("window_closed") }
 	tracker := uilifecycle.NewWithCallback(700*time.Millisecond, func() {
 		// Managed native windows report target destruction directly, avoiding
@@ -58,6 +63,12 @@ func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHo
 		}
 	})
 	h.window.onClose = windowClosed
+	h.window.onUserClose = func() {
+		h.journal.record("window_closed_to_tray", nil)
+		if err := h.closeToTray(); err != nil {
+			h.journal.record("window_close_to_tray_failed", err)
+		}
+	}
 	h.tracker = tracker
 	h.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 	h.server.Handler = localSecurityHeaders(requireAccessToken(token, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +89,18 @@ func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHo
 				return
 			}
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/api/ui/close-to-tray" {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if err := h.closeToTray(); err != nil {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		if r.URL.Path == "/api/ui/drag-regions" {
@@ -125,7 +148,7 @@ func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHo
 			}
 			var err error
 			if r.URL.Path == "/api/ui/minimize" {
-				err = h.window.Minimize()
+				err = h.minimizeWindow()
 			} else {
 				err = h.window.Drag()
 			}
@@ -224,9 +247,15 @@ func (h *viewerHost) showWindow() error {
 	if err := h.ctx.Err(); err != nil {
 		return err
 	}
+	now := time.Now()
+	if !h.lastShow.IsZero() && now.Sub(h.lastShow) < duplicateShowWindow {
+		return nil
+	}
 	if err := h.window.Show(); err != nil {
 		return err
 	}
+	h.lastShow = time.Now()
+	h.setDeskHidden(false)
 	h.setTrayVisible(true)
 	return nil
 }
@@ -234,12 +263,51 @@ func (h *viewerHost) showWindow() error {
 func (h *viewerHost) hideWindow() error {
 	h.windowMu.Lock()
 	defer h.windowMu.Unlock()
+	h.lastShow = time.Time{}
 	h.tracker.Suspend()
 	if err := h.window.Hide(); err != nil {
 		return err
 	}
+	h.setDeskHidden(true)
 	h.setTrayVisible(false)
 	return nil
+}
+
+// closeToTray differs from the explicit Hide action: the native window and
+// taskbar button disappear, but the tray icon remains as the visible way back.
+func (h *viewerHost) closeToTray() error {
+	h.windowMu.Lock()
+	defer h.windowMu.Unlock()
+	if err := h.ctx.Err(); err != nil {
+		return err
+	}
+	h.lastShow = time.Time{}
+	h.tracker.Suspend()
+	if err := h.window.Hide(); err != nil {
+		return err
+	}
+	h.setDeskHidden(true)
+	h.setTrayVisible(true)
+	return nil
+}
+
+func (h *viewerHost) minimizeWindow() error {
+	h.windowMu.Lock()
+	defer h.windowMu.Unlock()
+	if err := h.ctx.Err(); err != nil {
+		return err
+	}
+	h.lastShow = time.Time{}
+	return h.window.Minimize()
+}
+
+func (h *viewerHost) setDeskHidden(hidden bool) {
+	h.mu.RLock()
+	desk := h.desk
+	h.mu.RUnlock()
+	if desk != nil {
+		desk.hidden.Store(hidden)
+	}
 }
 
 func (h *viewerHost) Close() {

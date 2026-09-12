@@ -29,6 +29,7 @@ import (
 	webview "github.com/jchv/go-webview2"
 	"github.com/yudesk/yudesk/internal/nativeinit"
 	"github.com/yudesk/yudesk/internal/releaseinfo"
+	"github.com/yudesk/yudesk/internal/winhost"
 	"golang.org/x/sys/windows"
 )
 
@@ -43,6 +44,7 @@ func runSetup() {
 	packagePath := flag.String("package", "", "YuDesk client executable to package")
 	outputPath := flag.String("output", "", "packaged setup output")
 	silent := flag.Bool("silent", false, "install and launch without installer UI")
+	directory := flag.String("dir", "", "custom installation directory")
 	verify := flag.Bool("verify", false, "verify the embedded client payload")
 	iconOutput := flag.String("write-icon", "", "write the YuDesk shortcut icon and exit")
 	flag.Parse()
@@ -99,7 +101,7 @@ func runSetup() {
 	}
 	if *silent {
 		setupLog("silent_install_started", nil)
-		path, installErr := installYuDesk(executable)
+		path, installErr := installYuDesk(executable, *directory)
 		if installErr != nil {
 			setupLog("silent_install_failed", installErr)
 			os.Exit(1)
@@ -145,13 +147,13 @@ func runSetup() {
 		setupUser32.NewProc("ReleaseCapture").Call()
 		setupUser32.NewProc("SendMessageW").Call(hwnd, 0x00a1, 2, 0)
 	})
-	view.Bind("beginInstall", func() {
+	view.Bind("beginInstall", func(directory string) {
 		if !installing.CompareAndSwap(false, true) {
 			return
 		}
 		go func() {
 			setupLog("install_started", nil)
-			path, installErr := installYuDesk(executable)
+			path, installErr := installYuDesk(executable, directory)
 			if installErr != nil {
 				setupLog("install_failed", installErr)
 				installing.Store(false)
@@ -170,9 +172,17 @@ func runSetup() {
 			view.Dispatch(func() { view.Terminate() })
 		}()
 	})
+	defaultPath, pathErr := winhost.ResolveInstallPath(*directory)
+	if pathErr != nil {
+		setupLog("install_directory_failed", pathErr)
+		showNativeError("无法读取安装目录：" + pathErr.Error())
+		return
+	}
+	directoryJSON, _ := json.Marshal(filepath.Dir(defaultPath))
 	icon, _ := setupFiles.ReadFile("icon.svg")
 	page := strings.ReplaceAll(setupHTML, "{{ICON}}", base64.StdEncoding.EncodeToString(icon))
 	page = strings.ReplaceAll(page, "{{VERSION}}", releaseinfo.Version)
+	page = strings.ReplaceAll(page, "{{DIRECTORY}}", string(directoryJSON))
 	view.SetHtml(page)
 	setupLog("installer_window_ready", nil)
 	view.Run()
@@ -243,7 +253,7 @@ func removeSetupCaption(hwnd uintptr) {
 	setPosition.Call(hwnd, 0, 0, 0, 0, 0, 0x0027)
 }
 
-func installYuDesk(packagePath string) (string, error) {
+func installYuDesk(packagePath, directory string) (string, error) {
 	localRoot := filepath.Join(os.Getenv("LOCALAPPDATA"), "YuDesk")
 	if localRoot == "YuDesk" {
 		return "", errors.New("无法确定当前用户的应用目录")
@@ -255,18 +265,20 @@ func installYuDesk(packagePath string) (string, error) {
 		return "", err
 	}
 	defer os.Remove(payloadPath)
-	programFiles, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
+	installed, err := winhost.ResolveInstallPath(directory)
 	if err != nil {
-		return "", errors.New("无法确定 Windows 安装目录")
+		return "", err
 	}
-	installed := filepath.Join(programFiles, "YuDesk", "yudesk.exe")
-	if !fileMatchesHash(installed, payloadHash) || !installedServiceReady(installed) {
-		if err = runElevated(payloadPath, "-desktop-setup-install"); err != nil {
+	if !fileMatchesHash(installed, payloadHash) || !installedServiceReady(installed) || !winhost.UninstallRegistered(installed) {
+		if err = runElevated(payloadPath, "-desktop-setup-install", filepath.Dir(installed)); err != nil {
 			return "", err
 		}
 	}
 	if !fileMatchesHash(installed, payloadHash) {
 		return "", errors.New("安装后的 YuDesk 程序校验失败，请重试")
+	}
+	if !winhost.UninstallRegistered(installed) {
+		return "", errors.New("YuDesk 未能登记到 Windows 程序列表，请重试")
 	}
 	iconPath := filepath.Join(localRoot, "YuDesk.ico")
 	if err = writeYuIcon(iconPath); err != nil {
@@ -548,7 +560,7 @@ func cubic(a, b, c, d, e, f, g, h, t float64) (float64, float64) {
 }
 
 const setupHTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>
-*{box-sizing:border-box}html,body{height:100%;margin:0;overflow:hidden;font-family:"Microsoft YaHei UI","Segoe UI",sans-serif;color:#15243a}body{background:radial-gradient(circle at 10% 0,#eef6ff 0,transparent 38%),radial-gradient(circle at 95% 80%,#e9f2ff 0,transparent 42%),#fbfdff;user-select:none}.bar{height:44px;display:flex;align-items:center;padding:0 8px 0 18px;-webkit-app-region:drag}.bar .title{font-size:13px;color:#78879a;letter-spacing:.02em}.bar .space{flex:1}.bar button{width:44px;height:34px;border:0;border-radius:9px;background:transparent;color:#63738a;font-size:22px;cursor:pointer;-webkit-app-region:no-drag}.bar button:hover{background:#eaf1fa}.bar .close:hover{background:#ef5962;color:white}.content{height:calc(100% - 44px);padding:35px 64px 30px;display:grid;grid-template-columns:1.15fr .85fr;gap:42px}.hero{display:flex;flex-direction:column;justify-content:center}.brand{display:flex;align-items:center;gap:17px;margin-bottom:24px}.brand img{width:66px;height:66px;filter:drop-shadow(0 12px 22px #1769e82b)}.brand strong{font-size:37px;letter-spacing:-1.5px}.version{font-size:13px;color:#7e8da1;margin-left:3px}.hero h1{font-size:29px;line-height:1.28;margin:0 0 13px;letter-spacing:-.5px}.hero p{font-size:14px;line-height:1.8;color:#6f7f94;margin:0;max-width:430px}.features{display:grid;gap:12px;margin-top:24px}.feature{display:flex;align-items:center;gap:10px;font-size:13px;color:#4c6078}.tick{width:21px;height:21px;border-radius:50%;display:grid;place-items:center;background:#e8f6ef;color:#159466;font-weight:bold}.panel{align-self:center;background:#fff;border:1px solid #e1e9f3;border-radius:24px;padding:30px 28px;box-shadow:0 24px 65px #42658f18;text-align:center}.panel h2{font-size:21px;margin:2px 0 9px}.panel p{font-size:13px;color:#7a899b;line-height:1.7;margin:0 0 23px}.install{width:100%;height:48px;border:0;border-radius:13px;background:linear-gradient(135deg,#237cf5,#1264e8);color:white;font-size:16px;font-weight:600;cursor:pointer;box-shadow:0 10px 24px #1769e833}.install:hover{filter:brightness(1.04)}.install:disabled{cursor:wait;opacity:.72}.status{min-height:42px;padding-top:14px;color:#67788e;font-size:12px;line-height:1.5}.hint{font-size:11px;color:#a0acba;border-top:1px solid #edf1f6;padding-top:15px}.spinner{display:none;width:16px;height:16px;border:2px solid #ffffff66;border-top-color:#fff;border-radius:50%;animation:spin .75s linear infinite;margin-right:8px;vertical-align:-3px}@keyframes spin{to{transform:rotate(360deg)}}
-</style></head><body><header class="bar" onpointerdown="if(event.target===this||event.target.classList.contains('title')||event.target.classList.contains('space'))dragSetup()"><span class="title">YuDesk 安装程序</span><span class="space"></span><button onclick="minimizeSetup()" aria-label="最小化">−</button><button class="close" onclick="closeSetup()" aria-label="关闭">×</button></header><main class="content"><section class="hero"><div class="brand"><img src="data:image/svg+xml;base64,{{ICON}}"><div><strong>YuDesk</strong><div class="version">版本 {{VERSION}} · Windows 10 / 11</div></div></div><h1>低延迟连接，安装后立即使用。</h1><p>控制端与被控端合并为一个程序。设备码、连接记录和授权数据会继续保存在当前用户目录。</p><div class="features"><div class="feature"><span class="tick">✓</span>自动创建桌面与开始菜单图标</div><div class="feature"><span class="tick">✓</span>安装系统服务，支持 Windows 锁屏桌面</div><div class="feature"><span class="tick">✓</span>一次安装完成，不重复打开旧窗口</div></div></section><section class="panel"><h2>准备安装</h2><p>安装到 Windows 程序目录。系统仅会弹出一次管理员授权。</p><button class="install" id="install"><span class="spinner" id="spinner"></span><span id="label">立即安装</span></button><div class="status" id="status" role="status">安装完成后自动打开 YuDesk。</div><div class="hint">安装不会删除已有设备码或连接记录</div></section></main><script>
-const button=document.getElementById('install'),label=document.getElementById('label'),spinner=document.getElementById('spinner'),status=document.getElementById('status');button.onclick=()=>{if(button.disabled)return;button.disabled=true;spinner.style.display='inline-block';label.textContent='正在安装';status.textContent='请完成 Windows 管理员授权，安装窗口会保持打开。';beginInstall()};window.yudeskInstallStatus=(state,message)=>{status.textContent=message;if(state==='complete'){label.textContent='安装完成';return}spinner.style.display='none';button.disabled=false;label.textContent='重新安装'};
+*{box-sizing:border-box}html,body{height:100%;margin:0;overflow:hidden;font-family:"Microsoft YaHei UI","Segoe UI",sans-serif;color:#15243a}body{background:radial-gradient(circle at 10% 0,#eef6ff 0,transparent 38%),radial-gradient(circle at 95% 80%,#e9f2ff 0,transparent 42%),#fbfdff;user-select:none}.bar{height:44px;display:flex;align-items:center;padding:0 8px 0 18px;-webkit-app-region:drag}.bar .title{font-size:13px;color:#78879a;letter-spacing:.02em}.bar .space{flex:1}.bar button{width:44px;height:34px;border:0;border-radius:9px;background:transparent;color:#63738a;font-size:22px;cursor:pointer;-webkit-app-region:no-drag}.bar button:hover{background:#eaf1fa}.bar .close:hover{background:#ef5962;color:white}.content{height:calc(100% - 44px);padding:30px 58px 26px;display:grid;grid-template-columns:1.12fr .88fr;gap:38px}.hero{display:flex;flex-direction:column;justify-content:center}.brand{display:flex;align-items:center;gap:17px;margin-bottom:22px}.brand img{width:66px;height:66px;filter:drop-shadow(0 12px 22px #1769e82b)}.brand strong{font-size:37px;letter-spacing:-1.5px}.version{font-size:13px;color:#7e8da1;margin-left:3px}.hero h1{font-size:29px;line-height:1.28;margin:0 0 13px;letter-spacing:-.5px}.hero p{font-size:14px;line-height:1.8;color:#6f7f94;margin:0;max-width:430px}.features{display:grid;gap:12px;margin-top:22px}.feature{display:flex;align-items:center;gap:10px;font-size:13px;color:#4c6078}.tick{width:21px;height:21px;border-radius:50%;display:grid;place-items:center;background:#e8f6ef;color:#159466;font-weight:bold}.panel{align-self:center;background:#fff;border:1px solid #e1e9f3;border-radius:24px;padding:25px 25px 22px;box-shadow:0 24px 65px #42658f18;text-align:center}.panel h2{font-size:21px;margin:0 0 7px}.panel p{font-size:12px;color:#7a899b;line-height:1.65;margin:0 0 14px}.options-toggle{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;height:30px;border:0;background:transparent;color:#5f7390;font-size:12px;cursor:pointer}.options-toggle:hover{color:#176fe8}.chevron{transition:transform .2s}.options-toggle[aria-expanded="true"] .chevron{transform:rotate(180deg)}.custom{display:none;text-align:left;margin:0 0 13px}.custom.open{display:block}.custom label{display:block;margin:0 0 6px;color:#687a91;font-size:11px}.custom input{width:100%;height:37px;border:1px solid #dce6f2;border-radius:9px;background:#f8fbff;padding:0 11px;color:#354861;font:12px "Segoe UI","Microsoft YaHei UI",sans-serif;outline:none;user-select:text}.custom input:focus{border-color:#68a7f8;box-shadow:0 0 0 3px #237cf512}.custom input:disabled{opacity:.65}.install{width:100%;height:46px;border:0;border-radius:13px;background:linear-gradient(135deg,#237cf5,#1264e8);color:white;font-size:16px;font-weight:600;cursor:pointer;box-shadow:0 10px 24px #1769e833}.install:hover{filter:brightness(1.04)}.install:disabled{cursor:wait;opacity:.72}.status{min-height:38px;padding-top:11px;color:#67788e;font-size:11px;line-height:1.45}.hint{font-size:10px;color:#a0acba;border-top:1px solid #edf1f6;padding-top:11px}.spinner{display:none;width:16px;height:16px;border:2px solid #ffffff66;border-top-color:#fff;border-radius:50%;animation:spin .75s linear infinite;margin-right:8px;vertical-align:-3px}@keyframes spin{to{transform:rotate(360deg)}}
+</style></head><body><header class="bar" onpointerdown="if(event.target===this||event.target.classList.contains('title')||event.target.classList.contains('space'))dragSetup()"><span class="title">YuDesk 安装程序</span><span class="space"></span><button onclick="minimizeSetup()" aria-label="最小化">−</button><button class="close" onclick="closeSetup()" aria-label="关闭">×</button></header><main class="content"><section class="hero"><div class="brand"><img src="data:image/svg+xml;base64,{{ICON}}"><div><strong>YuDesk</strong><div class="version">版本 {{VERSION}} · Windows 10 / 11</div></div></div><h1>低延迟连接，安装后立即使用。</h1><p>控制端与被控端合并为一个程序。设备码、连接记录和授权数据会继续保存在当前用户目录。</p><div class="features"><div class="feature"><span class="tick">✓</span>自动创建桌面与开始菜单图标</div><div class="feature"><span class="tick">✓</span>安装系统服务，支持 Windows 锁屏桌面</div><div class="feature"><span class="tick">✓</span>一次安装完成，不重复打开旧窗口</div></div></section><section class="panel"><h2>准备安装</h2><p>默认安装到 Windows 程序目录，仅弹出一次管理员授权。</p><button class="options-toggle" id="optionsToggle" type="button" aria-expanded="false"><span class="chevron">⌄</span>自定义安装目录</button><div class="custom" id="custom"><label for="directory">安装位置（请选择空目录或 YuDesk 专用目录）</label><input id="directory" autocomplete="off" spellcheck="false"></div><button class="install" id="install"><span class="spinner" id="spinner"></span><span id="label">立即安装</span></button><div class="status" id="status" role="status">安装完成后自动打开 YuDesk。</div><div class="hint">安装不会删除已有设备码或连接记录</div></section></main><script>
+const button=document.getElementById('install'),label=document.getElementById('label'),spinner=document.getElementById('spinner'),status=document.getElementById('status'),directory=document.getElementById('directory'),custom=document.getElementById('custom'),toggle=document.getElementById('optionsToggle');directory.value={{DIRECTORY}};toggle.onclick=()=>{const open=!custom.classList.contains('open');custom.classList.toggle('open',open);toggle.setAttribute('aria-expanded',String(open));if(open)directory.focus()};button.onclick=()=>{if(button.disabled)return;const target=directory.value.trim();if(!target){custom.classList.add('open');toggle.setAttribute('aria-expanded','true');status.textContent='请输入完整安装目录';directory.focus();return}button.disabled=true;directory.disabled=true;toggle.disabled=true;spinner.style.display='inline-block';label.textContent='正在安装';status.textContent='请完成 Windows 管理员授权，安装窗口会保持打开。';beginInstall(target)};window.yudeskInstallStatus=(state,message)=>{status.textContent=message;if(state==='complete'){label.textContent='安装完成';return}spinner.style.display='none';button.disabled=false;directory.disabled=false;toggle.disabled=false;label.textContent='重新安装'};
 </script></body></html>`

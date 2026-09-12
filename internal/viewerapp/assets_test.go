@@ -40,4 +40,33 @@ func TestDashboardContainsMultipartyMeetingFlow(t *testing.T) {
 			t.Errorf("meeting dashboard does not contain %q", expected)
 		}
 	}
+	for _, forbidden := range []string{"yudesk.meetingName", "rememberMeetingName", "meetingHostName').value=$('meetingJoinName"} {
+		if strings.Contains(dashboardJS, forbidden) {
+			t.Errorf("meeting name must not be restored or copied automatically: found %q", forbidden)
+		}
+	}
+	if strings.Count(page, `autocomplete="off"`) < 3 || !strings.Contains(dashboardJS, "['meetingHostName','meetingJoinName'])$(id).value=''") {
+		t.Error("meeting name fields must start empty with browser autofill disabled")
+	}
+}
+
+func TestDashboardUsesNativeCloseToTrayOnWindows(t *testing.T) {
+	var windowsPage bytes.Buffer
+	if err := dashboardPage.Execute(&windowsPage, map[string]any{"Token": "test-token", "Windows": true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(windowsPage.String(), `id="closeToTray"`) || strings.Contains(windowsPage.String(), `action="/exit?`) {
+		t.Fatal("Windows dashboard must close to tray without rendering an exit form")
+	}
+	if !strings.Contains(dashboardJS, "/api/ui/close-to-tray") {
+		t.Fatal("Windows close control is not wired to the local lifecycle endpoint")
+	}
+
+	var otherPage bytes.Buffer
+	if err := dashboardPage.Execute(&otherPage, map[string]any{"Token": "test-token", "Windows": false}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(otherPage.String(), `action="/exit?`) {
+		t.Fatal("non-Windows dashboard lost its explicit close action")
+	}
 }

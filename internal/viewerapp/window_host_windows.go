@@ -85,7 +85,7 @@ type nativeAppWindow struct {
 	browserPID     uint32
 	browserStyle   uintptr
 	disposed       bool // host message thread only
-	onClose        func()
+	onUserClose    func()
 	ready          chan error
 	deadline       time.Time
 	dragRegions    atomic.Pointer[windowDragRegions]
@@ -178,9 +178,10 @@ var nativeWindowProc = syscall.NewCallback(func(hwnd uintptr, msg uint32, wp, lp
 				_ = n.layout()
 				return 0
 			}
-		case 0x0010: // WM_CLOSE (Alt+F4/taskbar), same exit semantics as the web X
-			if n.onClose != nil {
-				go n.onClose()
+		case 0x0010: // WM_CLOSE: keep the Windows app online in the notification area.
+			if n.onUserClose != nil {
+				go n.onUserClose()
+				return 0
 			}
 			fallthrough
 		case nativeDispose:
@@ -541,7 +542,7 @@ func (b *appWindow) showNativeWindow() error {
 		return errors.New("未找到 YuDesk 专用浏览器窗口")
 	}
 	ready := make(chan error, 1)
-	n := &nativeAppWindow{browser: browser, browserPID: b.browserPID, done: make(chan struct{}), onClose: b.onClose, ready: ready, deadline: time.Now().Add(5 * time.Second)}
+	n := &nativeAppWindow{browser: browser, browserPID: b.browserPID, done: make(chan struct{}), onUserClose: b.onUserClose, ready: ready, deadline: time.Now().Add(5 * time.Second)}
 	b.native = n
 	go n.run()
 	select {

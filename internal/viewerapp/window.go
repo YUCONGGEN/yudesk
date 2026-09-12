@@ -38,6 +38,7 @@ type appWindow struct {
 	stopBrowser   func() error // releases only this private renderer process group
 	managed       atomic.Bool
 	onClose       func()
+	onUserClose   func()
 	cancelMonitor func()
 	journal       *lifecycleJournal
 	native        *nativeAppWindow

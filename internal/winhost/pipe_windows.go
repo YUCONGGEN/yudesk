@@ -17,16 +17,76 @@ import (
 	"github.com/Microsoft/go-winio"
 	"github.com/yudesk/yudesk/internal/protocol"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 const serviceName = "YuDeskDesktop"
 
-func installedPath() (string, error) {
+func defaultInstallDirectory() (string, error) {
 	root, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "YuDesk", "yudesk.exe"), nil
+	return filepath.Join(root, "YuDesk"), nil
+}
+
+func validateInstallDirectory(directory string) (string, error) {
+	directory = strings.TrimSpace(directory)
+	if directory == "" || !filepath.IsAbs(directory) || strings.HasPrefix(directory, `\\`) || strings.HasPrefix(directory, `//`) {
+		return "", errors.New("请选择本机磁盘上的完整安装目录")
+	}
+	directory = filepath.Clean(directory)
+	volume := filepath.VolumeName(directory)
+	if volume == "" || strings.Trim(directory[len(volume):], `\/`) == "" {
+		return "", errors.New("不能直接安装到磁盘根目录")
+	}
+	if strings.EqualFold(filepath.Base(directory), "yudesk.exe") {
+		return "", errors.New("安装目录不能是程序文件名")
+	}
+	return directory, nil
+}
+
+func registeredInstallDirectory() (string, error) {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, uninstallRegistryPath, registry.QUERY_VALUE|registry.WOW64_64KEY)
+	if err != nil {
+		return "", err
+	}
+	defer key.Close()
+	directory, _, err := key.GetStringValue("InstallLocation")
+	if err != nil {
+		return "", err
+	}
+	return validateInstallDirectory(directory)
+}
+
+// ResolveInstallPath resolves an explicit installer choice, or the trusted
+// machine-wide location from a previous installation. The registry value is
+// written only by the elevated installer and is also used by the service when
+// authenticating its desktop worker and GUI peer.
+func ResolveInstallPath(directory string) (string, error) {
+	if strings.TrimSpace(directory) == "" {
+		registered, err := registeredInstallDirectory()
+		if err == nil {
+			return filepath.Join(registered, "yudesk.exe"), nil
+		}
+		if !errors.Is(err, registry.ErrNotExist) {
+			return "", fmt.Errorf("无法读取已登记的安装目录: %w", err)
+		}
+		var defaultErr error
+		directory, defaultErr = defaultInstallDirectory()
+		if defaultErr != nil {
+			return "", defaultErr
+		}
+	}
+	validated, err := validateInstallDirectory(directory)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(validated, "yudesk.exe"), nil
+}
+
+func installedPath() (string, error) {
+	return ResolveInstallPath("")
 }
 func sameInstalledPath(path string) bool {
 	want, err := installedPath()
@@ -37,7 +97,11 @@ func sameInstalledPath(path string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(filepath.Clean(actual), filepath.Clean(want))
+	trusted, err := filepath.EvalSymlinks(want)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(filepath.Clean(actual), filepath.Clean(trusted))
 }
 func sessionID(pid uint32) (uint32, error) {
 	var id uint32
