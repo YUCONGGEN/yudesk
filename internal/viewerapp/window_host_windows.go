@@ -51,6 +51,14 @@ var nativeSetDPIContext = windowUser32.NewProc("SetThreadDpiAwarenessContext")
 var nativePostThreadMessage = windowUser32.NewProc("PostThreadMessageW")
 var nativeMonitorFromWindow = windowUser32.NewProc("MonitorFromWindow")
 var nativeGetMonitorInfo = windowUser32.NewProc("GetMonitorInfoW")
+var nativeDWM = windows.NewLazySystemDLL("dwmapi.dll")
+var nativeDWMSetWindowAttribute = nativeDWM.NewProc("DwmSetWindowAttribute")
+var nativeDWMFlush = nativeDWM.NewProc("DwmFlush")
+
+const (
+	nativeDWMTransitionsForcedDisabled = 3
+	nativeDWMCloak                     = 13
+)
 
 type nativeRect struct{ Left, Top, Right, Bottom int32 }
 type nativePoint struct{ X, Y int32 }
@@ -85,6 +93,7 @@ type nativeAppWindow struct {
 	lastDragLayout *windowDragRegions // geometry only; lease is read separately
 	fullscreen     bool
 	restoreRect    nativeRect
+	startupCloaked bool // host GUI thread only; masks the first compositor frame
 }
 
 var nativeWindows sync.Map
@@ -249,12 +258,34 @@ func (n *nativeAppWindow) dispose() {
 }
 
 func (n *nativeAppWindow) show() {
+	hwnd := n.hwnd.Load()
 	command := uintptr(5) // SW_SHOW preserves maximized/snap bounds
-	if iconic, _, _ := nativeIsIconic.Call(n.hwnd.Load()); iconic != 0 {
+	if iconic, _, _ := nativeIsIconic.Call(hwnd); iconic != 0 {
 		command = 9 // SW_RESTORE
 	}
-	nativeShowWindow.Call(n.hwnd.Load(), command)
-	trayForeground.Call(n.hwnd.Load())
+	// The first ShowWindow primes Chromium's surface while DWM still cloaks the
+	// host. Flush that surface before uncloaking so a process restart cannot show
+	// a white/default frame or the browser's original caption for one refresh.
+	nativeShowWindow.Call(hwnd, command)
+	if n.startupCloaked {
+		nativeDWMFlush.Call()
+		if setNativeDWMFlag(hwnd, nativeDWMCloak, false) {
+			n.startupCloaked = false
+		}
+	}
+	trayForeground.Call(hwnd)
+}
+
+func setNativeDWMFlag(hwnd uintptr, attribute uint32, enabled bool) bool {
+	if hwnd == 0 || nativeDWMSetWindowAttribute.Find() != nil {
+		return false
+	}
+	var value uint32
+	if enabled {
+		value = 1
+	}
+	result, _, _ := nativeDWMSetWindowAttribute.Call(hwnd, uintptr(attribute), uintptr(unsafe.Pointer(&value)), unsafe.Sizeof(value))
+	return result == 0
 }
 
 // Runs on the native host thread. The ordinary shell remains fixed-size, but
@@ -352,6 +383,10 @@ func (n *nativeAppWindow) run() {
 	defer nativeWindows.Delete(hwnd)
 	defer n.hwnd.Store(0)
 	defer n.dispose()
+	// Disable DWM's default opening transition and keep the newly-created host
+	// cloaked until the embedded renderer is aligned and has a compositor frame.
+	_ = setNativeDWMFlag(hwnd, nativeDWMTransitionsForcedDisabled, true)
+	n.startupCloaked = setNativeDWMFlag(hwnd, nativeDWMCloak, true)
 	icon, iconErr := makeTrayIcon()
 	if iconErr == nil {
 		defer trayIconDestroy.Call(icon)
@@ -515,6 +550,21 @@ func (b *appWindow) showNativeWindow() error {
 	case <-time.After(7 * time.Second):
 		return errors.New("YuDesk 原生窗口启动超时")
 	}
+}
+
+// Chrome can ignore STARTF_USESHOWWINDOW while its app window is being created.
+// Re-hide the exact private top-level HWND before any CDP activation or resize;
+// the captionless native host will reveal it only after embedding is complete.
+func (b *appWindow) stageNativeBrowser() bool {
+	if b.headless {
+		return false
+	}
+	hwnd := b.browserHandle()
+	if hwnd == 0 {
+		return false
+	}
+	nativeShowWindow.Call(hwnd, windows.SW_HIDE)
+	return true
 }
 
 func (b *appWindow) closeNativeWindow() error {

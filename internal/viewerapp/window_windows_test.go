@@ -9,11 +9,40 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 	"unsafe"
 )
+
+var startupWindowScan struct {
+	sync.Mutex
+	pids []uint32
+}
+
+var recordVisibleTopLevelChromium = syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
+	visible, _, _ := appWindowVisible.Call(hwnd)
+	parent, _, _ := nativeGetParent.Call(hwnd)
+	if visible == 0 || parent != 0 {
+		return 1
+	}
+	var name [128]uint16
+	appWindowClass.Call(hwnd, uintptr(unsafe.Pointer(&name[0])), uintptr(len(name)))
+	if syscall.UTF16ToString(name[:]) != "Chrome_WidgetWin_1" {
+		return 1
+	}
+	var pid uint32
+	appWindowPID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	startupWindowScan.Lock()
+	startupWindowScan.pids = append(startupWindowScan.pids, pid)
+	startupWindowScan.Unlock()
+	return 1
+})
+
+func scanVisibleTopLevelChromium() {
+	enumAppWindows.Call(recordVisibleTopLevelChromium, 0)
+}
 
 func TestNativeCloseFailurePaths(t *testing.T) {
 	t.Run("already destroyed", func(t *testing.T) {
@@ -193,6 +222,132 @@ func assertNativeContent(t *testing.T, b *appWindow) {
 		t.Fatal("browser is no longer clipped by its owned host")
 	}
 	t.Logf("viewport=%dx%d, origin=(%d,%d), host style=%#x", client.Right, client.Bottom, origin.X, origin.Y, style)
+}
+
+func TestNativeColdStartDoesNotFlashRawChromium(t *testing.T) {
+	h := nativeWindowFixture(t)
+	showWithoutRawChromium(t, h.window)
+	assertNativeContent(t, h.window)
+}
+
+func showWithoutRawChromium(t *testing.T, b *appWindow) {
+	t.Helper()
+	startupWindowScan.Lock()
+	startupWindowScan.pids = nil
+	startupWindowScan.Unlock()
+
+	shown := make(chan error, 1)
+	go func() { shown <- b.Show() }()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(10 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case err := <-shown:
+			if err != nil {
+				t.Fatal(err)
+			}
+			scanVisibleTopLevelChromium()
+			startupWindowScan.Lock()
+			seen := append([]uint32(nil), startupWindowScan.pids...)
+			startupWindowScan.Unlock()
+			for _, pid := range seen {
+				if pid == b.browserPID {
+					t.Fatalf("raw Chromium window for pid %d became visible before YuDesk's native frame was ready", pid)
+				}
+			}
+			return
+		case <-ticker.C:
+			scanVisibleTopLevelChromium()
+		case <-timeout.C:
+			t.Fatal("YuDesk cold-start window timed out")
+		}
+	}
+}
+
+func TestNativeRestartAfterRendererExitDoesNotFlash(t *testing.T) {
+	h := nativeWindowFixture(t)
+	first := h.window
+	showWithoutRawChromium(t, first)
+	profile := first.profile
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new appWindow with the same URL and browser profile models a complete
+	// YuDesk process restart, including recently-released profile lock files.
+	restarted := newAppWindow(h.listener.Addr().String(), "caption-regression")
+	restarted.profile = profile
+	restarted.candidates = []string{os.Getenv("YUDESK_TEST_BROWSER")}
+	restarted.onClose = func() {}
+	t.Cleanup(func() {
+		if err := restarted.Close(); err != nil {
+			t.Errorf("restarted browser cleanup: %v", err)
+		}
+	})
+	showWithoutRawChromium(t, restarted)
+	assertNativeContent(t, restarted)
+}
+
+func TestNativeColdStartWaitsForPageStylesBeforeShowing(t *testing.T) {
+	h := nativeWindowFixture(t)
+	b := h.window
+	cssStarted := make(chan struct{})
+	releaseCSS := make(chan struct{})
+	var signaled sync.Once
+	l, err := listenViewerPage("", h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachViewerPage(l, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slow.css" {
+			signaled.Do(func() { close(cssStarted) })
+			<-releaseCSS
+			w.Header().Set("Content-Type", "text/css")
+			_, _ = w.Write([]byte("body{background:#fff;color:#123}"))
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<link rel="stylesheet" href="/slow.css?access_token=caption-regression"><main>styled fixture</main>`))
+	}))
+
+	shown := make(chan error, 1)
+	go func() { shown <- b.Show() }()
+	select {
+	case <-cssStarted:
+	case err := <-shown:
+		t.Fatalf("window finished before requesting its stylesheet: %v", err)
+	case <-time.After(8 * time.Second):
+		t.Fatal("browser did not request the fixture stylesheet")
+	}
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		visible := false
+		nativeWindows.Range(func(_, value any) bool {
+			n := value.(*nativeAppWindow)
+			if hwnd := n.ownedHandle(); hwnd != 0 {
+				state, _, _ := appWindowVisible.Call(hwnd)
+				visible = state != 0
+			}
+			return !visible
+		})
+		if visible {
+			close(releaseCSS)
+			t.Fatal("YuDesk host became visible while page styles were still loading")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	close(releaseCSS)
+	select {
+	case err := <-shown:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("styled YuDesk window did not appear")
+	}
+	assertNativeContent(t, b)
 }
 
 func TestNativeFramelessTransitions(t *testing.T) {

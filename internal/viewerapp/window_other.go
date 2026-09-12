@@ -24,6 +24,7 @@ func (b *appWindow) SetDragRegions(*windowDragRegions) error {
 }
 
 func (b *appWindow) showNativeWindow() error             { return nil }
+func (b *appWindow) stageNativeBrowser() bool            { return false }
 func (b *appWindow) closeNativeWindow() error            { return nil }
 func (b *appWindow) hideNativeWindow() (bool, error)     { return false, nil }
 func (b *appWindow) minimizeNativeWindow() (bool, error) { return false, nil }

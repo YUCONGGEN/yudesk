@@ -142,13 +142,14 @@ func (b *appWindow) Show() error {
 		id, err := b.target(c)
 		if err == nil {
 			// Activating a minimized Chromium target alone does not restore it.
-			if b.native == nil {
+			staged := b.stageNativeBrowser()
+			if b.native == nil && !staged {
 				var state struct{ Bounds struct{ WindowState string } }
 				if windowCommand(c, "Browser.getWindowForTarget", map[string]any{"targetId": id}, &state) == nil && state.Bounds.WindowState == "minimized" {
 					_ = setAppWindowState(c, id, "normal")
 				}
-				err = windowCommand(c, "Target.activateTarget", map[string]any{"targetId": id}, nil)
 			}
+			err = windowCommand(c, "Target.activateTarget", map[string]any{"targetId": id}, nil)
 			c.Close()
 			if err != nil {
 				return err
@@ -225,9 +226,15 @@ func (b *appWindow) Show() error {
 		if c, err := b.connection(); err == nil {
 			id, err := b.target(c)
 			if err == nil {
+				staged := b.stageNativeBrowser()
 				var result struct{ WindowID int }
 				if windowCommand(c, "Browser.getWindowForTarget", map[string]any{"targetId": id}, &result) == nil {
-					_ = windowCommand(c, "Browser.setWindowBounds", map[string]any{"windowId": result.WindowID, "bounds": map[string]any{"windowState": "normal"}}, nil)
+					// Windows embeds this hidden top-level HWND into YuDesk's native
+					// frame. Restoring it through CDP first produces a one-frame
+					// Chromium/title-bar flash on a cold restart.
+					if !staged {
+						_ = windowCommand(c, "Browser.setWindowBounds", map[string]any{"windowId": result.WindowID, "bounds": map[string]any{"windowState": "normal"}}, nil)
+					}
 					_ = windowCommand(c, "Browser.setWindowBounds", map[string]any{"windowId": result.WindowID, "bounds": map[string]any{"width": appWindowWidth, "height": appWindowHeight}}, nil)
 				}
 				c.Close()
