@@ -1,6 +1,31 @@
 # 当前部署状态（2026-09-12）
 
-## 当前会议管理、原生全屏与安装稳定性：`meeting-management-20260912.7`
+## 当前会议全屏恢复与真实声流：`meeting-fullscreen-audio-20260912.8`
+
+桌面 **2.0.0** 与 Android **2.0.0-preview.15 / 2000015** 已于 **2026-09-12 21:14（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包均已更新；iOS 与原生鸿蒙继续暂停。
+
+- 根因是原生全屏接口成功返回 `204 No Content`，旧页面却强制解析 JSON 并把成功误判为失败，随后又进入一次 DOM 全屏。现在通用请求层正确接受无正文成功响应，会议全屏使用显式 `native / dom / css` 单一状态，按钮、Esc、离会及结束会议都会完成匹配的退出。
+- macOS 宿主记录目标全屏状态与系统过渡状态；即使在进入全屏动画未结束时退出会议，也会在动画结束后继续恢复原来的固定窗口。
+- 桌面端从真实麦克风和每条 WebRTC 远端音轨计算音量，Android 从麦克风 PCM 及远端 `inbound-rtp` 统计计算音量。达到阈值的成员显示绿色声流与说话高亮；声音状态不是定时伪动画。
+- Android 音频设备模块启用低延迟模式与语音通信属性；播放开关同时控制 WebRTC playout、设备静音和远端音轨。Android 四 ABI 构建、Java 单测、lint、APK v2 签名和 16 KiB 对齐均通过，签名证书未改变。
+- 最终 Windows 原生双客户端回归耗时 91.67 秒并通过，实际覆盖音频 RTP 包/字节增长、独立远端音轨播放、音量分析器、空正文全屏响应、Esc 恢复、结束会议强制恢复、共享屏幕、录制、主持权转让、设备和审批流程。根模块全量 `go test ./...` 与 `go vet ./...` 通过。
+- macOS Intel/Apple Silicon 包由真实 Mac SDK 重新构建，三个可执行文件架构正确，应用 ad-hoc strict/deep 验签和 arm64 helper 自检通过；最低 macOS 13。外层 PKG 仍未 Developer ID 签名或公证。Linux revision 13 在 Ubuntu 22.04 环境构建。Android 物理手机的声学效果和厂商后台策略仍需真机验收。
+- 部署前连续两次确认活动会话及参与连接均为 0；备份后短暂重启，当前 PID **94256**。`/healthz`、未登录后台 401、公开统计、SQLite `quick_check`、TCP 8233/8235/8254 与 UDP 8233 监听均通过。服务器 TLS 指纹保持 `20FC953E48B6BEED7FB3A5F73BF177CC4E2557CF274C409FF4F0179E5FA0F836`；配置未改变。
+- 发布目录 `/Users/yu/bin/yudesk/releases/meeting-fullscreen-audio-20260912.8`，可恢复备份 `/Users/yu/bin/yudesk/backups/meeting-fullscreen-audio-20260912.8`。数据库保持账号 0、授权码 9、已授权设备 320，`quick_check` 为 `ok`。
+- 五个平台安装文件均从公网域名完整重新下载并与本地产物 SHA-256 一致；Android 1 MiB Range 请求返回 `206` 和正确范围。官网显示版本 2.0.0、发布日期 2026-09-12 21:08（北京时间）；验证时在线设备 1、参与连接 0、活动会话 0，这些数量是实时值。
+
+| 当前产物 | SHA-256 |
+| --- | --- |
+| Windows x64 一体化安装器 | `efdf05ba3e1e6d748a61cfa3f8f2fc0245bfba958fdc4548081ac4aceed2dc9d` |
+| Linux x64 DEB revision 13 | `33c04296c18e4329c5401aaa9cbd37ecccb33619c8dc665dc6e1664c78f4024d` |
+| macOS Intel PKG revision 13 | `9a967012b89163eb777021f33b19069f9a94713204292861ee7d4fb001550089` |
+| macOS Apple Silicon PKG revision 13 | `7e156d2b7ce3ab2ab8e62290ee47115a11352fe8d6740fbeb41f63a7ee81e460` |
+| Android preview.15 APK | `230d60d2149e01ac8fb3d9bdbd1f8ab223c752cfc6c9d971afdf8a85c7e3227d` |
+| macOS 服务端 | `41c92c818f372489a569daf154ddcb2fceb75c49abde0ae8b0ae124d78b19e48` |
+
+完整变更见 [本次发布说明](RELEASE_NOTES_20260912.md)、[多人会议说明](CONFERENCE_20260911.md) 和 [Android 说明](ANDROID.md)。
+
+## 上一批会议管理、原生全屏与安装稳定性：`meeting-management-20260912.7`
 
 桌面 **2.0.0** 与 Android **2.0.0-preview.14 / 2000014** 已于 **2026-09-12 19:01（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包均已更新；iOS 与原生鸿蒙继续暂停。
 

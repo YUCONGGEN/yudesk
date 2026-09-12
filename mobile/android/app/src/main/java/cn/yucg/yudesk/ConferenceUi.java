@@ -108,7 +108,7 @@ final class ConferenceUi {
     void upsert(Member member) {
         Tile tile=tiles.get(member.id);
         if(tile==null){tile=new Tile(member.id,member.name);tiles.put(member.id,tile);grid.addView(tile.root);}
-        tile.name=member.name;tile.self=member.self;tile.host=member.host;tile.microphone=member.microphone;tile.camera=member.camera;tile.screen=member.screen;tile.recording=member.recording;tile.render();grid.requestLayout();
+        tile.name=member.name;tile.self=member.self;tile.host=member.host;tile.microphone=member.microphone;tile.camera=member.camera;tile.screen=member.screen;tile.recording=member.recording;if(!member.microphone)tile.voice.setLevel(0);tile.render();grid.requestLayout();
     }
 
     void attachVideo(String id, VideoTrack track, boolean mirror) {
@@ -117,6 +117,8 @@ final class ConferenceUi {
         if(tile.track!=null)tile.track.removeSink(tile.renderer);
         tile.track=track;tile.renderer.setMirror(mirror);if(track!=null)track.addSink(tile.renderer);tile.render();
     }
+
+    void setVoiceLevel(String id,int level) { Tile tile=tiles.get(id);if(tile!=null)tile.voice.setLevel(level); }
 
     void remove(String id) {
         Tile tile=tiles.remove(id);if(tile==null)return;if(tile.track!=null)tile.track.removeSink(tile.renderer);tile.renderer.release();grid.removeView(tile.root);if(id.equals(focusedID))clearShareFocus();grid.requestLayout();
@@ -159,9 +161,16 @@ final class ConferenceUi {
 
     private final class Tile {
         String id,name;boolean self,host,microphone,camera,screen,recording;VideoTrack track;
-        final FrameLayout root=new FrameLayout(activity);final SurfaceViewRenderer renderer=new SurfaceViewRenderer(activity);final TextView avatar,nameLabel,state;
-        Tile(String id,String name){this.id=id;this.name=name;root.setBackground(round(0xffffffff,14));renderer.init(eglContext,null);renderer.setEnableHardwareScaler(true);renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT);root.addView(renderer,new FrameLayout.LayoutParams(-1,-1));avatar=text(initial(name),30,0xff0099ff);avatar.setGravity(Gravity.CENTER);avatar.setTypeface(Typeface.DEFAULT_BOLD);avatar.setBackground(round(0xffe3f3ff,42));FrameLayout.LayoutParams avatarParams=new FrameLayout.LayoutParams(dp(84),dp(84),Gravity.CENTER);root.addView(avatar,avatarParams);LinearLayout badge=row();badge.setPadding(dp(10),0,dp(10),0);badge.setBackground(round(0xecffffff,8));nameLabel=text(name,12,0xff22262b);nameLabel.setSingleLine(true);badge.addView(nameLabel,new LinearLayout.LayoutParams(-2,dp(30)));state=text("",11,0xff0099ff);state.setPadding(dp(8),0,0,0);badge.addView(state,new LinearLayout.LayoutParams(-2,dp(30)));FrameLayout.LayoutParams badgeParams=new FrameLayout.LayoutParams(-2,dp(30),Gravity.START|Gravity.BOTTOM);badgeParams.setMargins(dp(10),0,0,dp(10));root.addView(badge,badgeParams);root.setOnClickListener(v->{if(screen){if(id.equals(focusedID))clearShareFocus();else focusShare(id,true);}});}
+        final FrameLayout root=new FrameLayout(activity);final SurfaceViewRenderer renderer=new SurfaceViewRenderer(activity);final TextView avatar,nameLabel,state;final VoiceFlow voice=new VoiceFlow(activity);
+        Tile(String id,String name){this.id=id;this.name=name;root.setBackground(round(0xffffffff,14));renderer.init(eglContext,null);renderer.setEnableHardwareScaler(true);renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT);root.addView(renderer,new FrameLayout.LayoutParams(-1,-1));avatar=text(initial(name),30,0xff0099ff);avatar.setGravity(Gravity.CENTER);avatar.setTypeface(Typeface.DEFAULT_BOLD);avatar.setBackground(round(0xffe3f3ff,42));FrameLayout.LayoutParams avatarParams=new FrameLayout.LayoutParams(dp(84),dp(84),Gravity.CENTER);root.addView(avatar,avatarParams);LinearLayout badge=row();badge.setPadding(dp(10),0,dp(10),0);badge.setBackground(round(0xecffffff,8));nameLabel=text(name,12,0xff22262b);nameLabel.setSingleLine(true);badge.addView(nameLabel,new LinearLayout.LayoutParams(-2,dp(30)));state=text("",11,0xff0099ff);state.setPadding(dp(8),0,0,0);badge.addView(state,new LinearLayout.LayoutParams(-2,dp(30)));FrameLayout.LayoutParams badgeParams=new FrameLayout.LayoutParams(-2,dp(30),Gravity.START|Gravity.BOTTOM);badgeParams.setMargins(dp(10),0,0,dp(10));root.addView(badge,badgeParams);FrameLayout.LayoutParams voiceParams=new FrameLayout.LayoutParams(dp(38),dp(26),Gravity.START|Gravity.TOP);voiceParams.setMargins(dp(10),dp(10),0,0);root.addView(voice,voiceParams);root.setOnClickListener(v->{if(screen){if(id.equals(focusedID))clearShareFocus();else focusShare(id,true);}});}
         void render(){nameLabel.setText(memberLabel(name,self,host));avatar.setText(initial(name));boolean video=track!=null&&(camera||screen);renderer.setVisibility(video?View.VISIBLE:View.INVISIBLE);avatar.setVisibility(video?View.GONE:View.VISIBLE);state.setText(screen?"共享屏幕 · 点击放大":microphone?"麦克风开启":"已静音");root.setClickable(screen);root.setContentDescription(screen?"放大查看 "+name+" 的共享屏幕":name);}
+    }
+
+    private static final class VoiceFlow extends View {
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);private int level;
+        VoiceFlow(Context context){super(context);setContentDescription("声音流");}
+        void setLevel(int value){value=Math.max(0,Math.min(100,value));if(level==value)return;level=value;setContentDescription(level>=7?"正在说话":"声音流");invalidate();}
+        @Override protected void onDraw(Canvas canvas){super.onDraw(canvas);float radius=getHeight()/2f;paint.setStyle(Paint.Style.FILL);paint.setColor(level>=7?0xffe8f9f0:0xeef7f9fc);canvas.drawRoundRect(0,0,getWidth(),getHeight(),radius,radius,paint);int[] shape={42,72,100,58};float center=getHeight()/2f,barWidth=Math.max(2,getWidth()/16f),gap=barWidth*1.4f,total=barWidth*4+gap*3,start=(getWidth()-total)/2f;paint.setColor(level>=7?0xff27ad70:0xff9aa6b5);for(int i=0;i<4;i++){float height=Math.max(3,(3+level*shape[i]/1000f)*getResources().getDisplayMetrics().density),left=start+i*(barWidth+gap);canvas.drawRoundRect(left,center-height/2,left+barWidth,center+height/2,barWidth/2,barWidth/2,paint);}}
     }
 
     private static final class TileGrid extends ViewGroup {

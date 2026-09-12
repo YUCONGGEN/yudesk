@@ -70,6 +70,8 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     private var loaded = false
     private var reloads = 0
     private var failureReported = false
+    private var fullscreenRequested = false
+    private var fullscreenTransitioning = false
     private var downloads: [WKDownload] = []
     private var cancelledDownloads = Set<ObjectIdentifier>()
     private let world = WKContentWorld.world(name: "YuDeskNativeWindow")
@@ -187,8 +189,24 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
     }
     private func setFullscreen(_ enabled: Bool) {
         guard let window = window else { emit("error", "not_open"); return }
+        fullscreenRequested = enabled
+        reconcileFullscreen(window)
+    }
+    private func reconcileFullscreen(_ window: NSWindow) {
         let active = window.styleMask.contains(.fullScreen)
-        if active != enabled { window.toggleFullScreen(nil) }
+        guard active != fullscreenRequested, !fullscreenTransitioning else { return }
+        fullscreenTransitioning = true
+        window.toggleFullScreen(nil)
+    }
+    func windowWillEnterFullScreen(_ notification: Notification) { fullscreenTransitioning = true }
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        fullscreenTransitioning = false
+        if let window = window { reconcileFullscreen(window) }
+    }
+    func windowWillExitFullScreen(_ notification: Notification) { fullscreenTransitioning = true }
+    func windowDidExitFullScreen(_ notification: Notification) {
+        fullscreenTransitioning = false
+        if let window = window { reconcileFullscreen(window) }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if !commandedClose { emit("closed"); commandedClose = true }

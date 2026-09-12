@@ -9,6 +9,8 @@ import android.content.pm.PackageManager;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.media.AudioDeviceInfo;
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
@@ -18,6 +20,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.util.DisplayMetrics;
 import cn.yucg.bridge.core.Conference;
@@ -41,6 +44,7 @@ import org.webrtc.PeerConnectionFactory;
 import org.webrtc.RtpReceiver;
 import org.webrtc.RtpSender;
 import org.webrtc.RtpTransceiver;
+import org.webrtc.RTCStats;
 import org.webrtc.ScreenCapturerAndroid;
 import org.webrtc.SdpObserver;
 import org.webrtc.SessionDescription;
@@ -93,20 +97,25 @@ final class ConferenceController {
     private String icePolicy="{\"iceServers\":[{\"urls\":[\"stun:www.yucg.cn:8233\"]}],\"directTimeoutMs\":3000}";
     private boolean closed, intentional, screenSharing, screenSharePending, recording, speakerEnabled=true;
     private boolean frontCamera=true;
+    private long lastMicrophoneLevelAt;
     private MediaRecorder recorder;
     private MediaProjection recordProjection;
     private VirtualDisplay recordDisplay;
     private File recordFile;
     private final Runnable projectionStopped=()->{if(closed)return;if(screenSharing)stopScreenShare();if(recording)stopRecording(true);};
     private final Runnable screenShareTimeout=()->{if(!screenSharePending||closed)return;screenSharePending=false;render();notice("系统共享选择已超时，请重新点击共享屏幕");};
+    private final Runnable audioLevelPoll=new Runnable(){@Override public void run(){if(closed)return;for(Peer peer:new ArrayList<>(peers.values()))peer.sampleAudioLevel();main.postDelayed(this,220);}};
 
     ConferenceController(MainActivity activity, Conference channel, String code, String name, boolean host, boolean microphone, boolean camera) throws Exception {
         this.activity=activity;this.channel=channel;this.code=code;this.localName=name;this.requestedHost=host;
         initializeWebRTC(activity.getApplicationContext());
         egl=EglBase.create();
         audioDevice=org.webrtc.audio.JavaAudioDeviceModule.builder(activity.getApplicationContext())
+                .setUseLowLatency(true)
+                .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
                 .setUseHardwareAcousticEchoCanceler(true)
                 .setUseHardwareNoiseSuppressor(true)
+                .setSamplesReadyCallback(this::onMicrophoneSamples)
                 .setAudioRecordErrorCallback(new org.webrtc.audio.JavaAudioDeviceModule.AudioRecordErrorCallback(){
                     @Override public void onWebRtcAudioRecordInitError(String error){main.post(ConferenceController.this::microphoneFailed);}
                     @Override public void onWebRtcAudioRecordStartError(org.webrtc.audio.JavaAudioDeviceModule.AudioRecordStartErrorCode code,String error){main.post(ConferenceController.this::microphoneFailed);}
@@ -134,6 +143,7 @@ final class ConferenceController {
         presentation.upsert(local.view(true));if(cameraTrack!=null)presentation.attachVideo("local",cameraTrack,true);render();
         ConferenceProjectionService.onStopped=projectionStopped;
         reader.execute(this::readLoop);
+        main.postDelayed(audioLevelPoll,220);
     }
 
     android.view.View view(){return presentation.root;}
@@ -169,7 +179,7 @@ final class ConferenceController {
 
     private void signal(JSONObject message) throws Exception {String from=message.getString("from"),kind=message.getString("signal");Peer peer=peers.get(from);if(peer==null)peer=createPeer(from,false);if(peer==null)return;if(kind.equals("candidate")){if(peer.ignoreOffer)return;JSONObject value=new JSONObject(message.getString("candidate"));IceCandidate candidate=new IceCandidate(value.optString("sdpMid",null),value.optInt("sdpMLineIndex"),value.optString("candidate"));if(peer.remoteSet)peer.pc.addIceCandidate(candidate);else if(peer.candidates.size()<64)peer.candidates.add(candidate);return;}SessionDescription description=new SessionDescription(kind.equals("offer")?SessionDescription.Type.OFFER:SessionDescription.Type.ANSWER,message.getString("sdp"));setRemote(peer,description);}
 
-    private Peer createPeer(String id,boolean offer){if(closed||id.equals(selfID))return null;Peer existing=peers.get(id);if(existing!=null)return existing;Peer peer=new Peer(id);peer.pc=factory.createPeerConnection(IcePathController.configuration(icePolicy,false),peer);if(peer.pc==null){notice("当前设备无法创建会议媒体连接");return null;}if(audioTrack!=null)peer.audioSender=peer.pc.addTrack(audioTrack,Collections.singletonList("yudesk"));else peer.pc.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,new RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY));VideoTrack outgoing=screenSharing?screenTrack:cameraTrack;if(outgoing!=null)peer.videoSender=peer.pc.addTrack(outgoing,Collections.singletonList("yudesk"));else peer.pc.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,new RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY));peers.put(id,peer);peer.route=new IcePathController(peer.pc,icePolicy,main,()->!closed&&peer.pc!=null&&peers.get(peer.id)==peer,this::renderConnection,()->{if(!closed&&peer.pc!=null&&peer.pc.signalingState()==PeerConnection.SignalingState.STABLE)createOffer(peer);});if(offer){peer.dataChannel=peer.pc.createDataChannel("yudesk-session",new DataChannel.Init());createOffer(peer);}renderConnection();return peer;}
+    private Peer createPeer(String id,boolean offer){if(closed||id.equals(selfID))return null;Peer existing=peers.get(id);if(existing!=null)return existing;Peer peer=new Peer(id);peer.pc=factory.createPeerConnection(IcePathController.configuration(icePolicy,false),peer);if(peer.pc==null){notice("当前设备无法创建会议媒体连接");return null;}peer.pc.setAudioPlayout(speakerEnabled);if(audioTrack!=null)peer.audioSender=peer.pc.addTrack(audioTrack,Collections.singletonList("yudesk"));else peer.pc.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,new RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY));VideoTrack outgoing=screenSharing?screenTrack:cameraTrack;if(outgoing!=null)peer.videoSender=peer.pc.addTrack(outgoing,Collections.singletonList("yudesk"));else peer.pc.addTransceiver(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,new RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY));peers.put(id,peer);peer.route=new IcePathController(peer.pc,icePolicy,main,()->!closed&&peer.pc!=null&&peers.get(peer.id)==peer,this::renderConnection,()->{if(!closed&&peer.pc!=null&&peer.pc.signalingState()==PeerConnection.SignalingState.STABLE)createOffer(peer);});if(offer){peer.dataChannel=peer.pc.createDataChannel("yudesk-session",new DataChannel.Init());createOffer(peer);}renderConnection();return peer;}
 
     private boolean peerAlive(Peer peer){return !closed&&peer.pc!=null&&peers.get(peer.id)==peer;}
     private void createOffer(Peer peer){if(!peerAlive(peer))return;if(peer.makingOffer||peer.pc.signalingState()!=PeerConnection.SignalingState.STABLE){peer.needsOffer=true;return;}peer.makingOffer=true;final int epoch=++peer.offerEpoch;peer.pc.createOffer(new Sdp(){@Override public void onCreateSuccess(SessionDescription sdp){main.post(()->{if(!peerAlive(peer)||epoch!=peer.offerEpoch)return;peer.pc.setLocalDescription(new Sdp(){@Override public void onSetSuccess(){main.post(()->{if(!peerAlive(peer)||epoch!=peer.offerEpoch)return;peer.makingOffer=false;sendSignal(peer.id,"offer",sdp.description,null);});}@Override public void onSetFailure(String error){main.post(()->{if(!peerAlive(peer)||epoch!=peer.offerEpoch)return;peer.makingOffer=false;connectionProblem(error);});}},sdp);});}@Override public void onCreateFailure(String error){main.post(()->{if(!peerAlive(peer)||epoch!=peer.offerEpoch)return;peer.makingOffer=false;connectionProblem(error);});}},new MediaConstraints());}
@@ -179,9 +189,18 @@ final class ConferenceController {
     private void sendSignal(String to,String type,String sdp,IceCandidate candidate){try{JSONObject message=new JSONObject().put("type","signal").put("to",to).put("signal",type);if(sdp!=null)message.put("sdp",sdp);if(candidate!=null){JSONObject c=new JSONObject().put("sdpMid",candidate.sdpMid).put("sdpMLineIndex",candidate.sdpMLineIndex).put("candidate",candidate.sdp);message.put("candidate",c.toString());}send(message);}catch(Exception failure){connectionProblem(failure.getMessage());}}
 
     private void createMicrophone(){if(audioTrack!=null)return;audioSource=factory.createAudioSource(new MediaConstraints());audioTrack=factory.createAudioTrack("yudesk-audio",audioSource);audioDevice.setMicrophoneMute(false);audioTrack.setEnabled(true);}
+    private void onMicrophoneSamples(org.webrtc.audio.JavaAudioDeviceModule.AudioSamples samples){
+        if(closed||audioTrack==null||!audioTrack.enabled())return;
+        long now=SystemClock.elapsedRealtime();if(now-lastMicrophoneLevelAt<80)return;lastMicrophoneLevelAt=now;
+        byte[] data=samples.getData();if(data==null||data.length==0)return;double sum=0;int count=0;
+        if(samples.getAudioFormat()==AudioFormat.ENCODING_PCM_16BIT){for(int i=0;i+1<data.length;i+=2){int value=(short)((data[i]&255)|(data[i+1]<<8));sum+=(double)value*value;count++;}}
+        else{for(byte value:data){int centered=(value&255)-128;sum+=(double)centered*centered;count++;}}
+        int level=count==0?0:(int)Math.min(100,Math.round(Math.sqrt(sum/count)/(samples.getAudioFormat()==AudioFormat.ENCODING_PCM_16BIT?32768d:128d)*180));
+        String id=selfID.isEmpty()?"local":selfID;main.post(()->{if(!closed)presentation.setVoiceLevel(id,level);});
+    }
     private void microphoneFailed(){if(closed||audioTrack==null||!audioTrack.enabled())return;audioTrack.setEnabled(false);audioDevice.setMicrophoneMute(true);Participant local=local();if(local!=null)local.microphone=false;sendState();render();notice("麦克风采集失败，请检查权限或其他应用的占用后重新开启");}
     private void routeAudioToSpeaker(){audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S){for(AudioDeviceInfo device:audioManager.getAvailableCommunicationDevices())if(device.getType()==AudioDeviceInfo.TYPE_BUILTIN_SPEAKER&&audioManager.setCommunicationDevice(device))return;}audioManager.setSpeakerphoneOn(true);}
-    private void toggleSpeaker(){speakerEnabled=!speakerEnabled;for(Peer peer:peers.values())for(AudioTrack track:peer.remoteAudioTracks)track.setEnabled(speakerEnabled);if(speakerEnabled)routeAudioToSpeaker();render();notice(speakerEnabled?"会议声音已开启":"会议声音已关闭");}
+    private void toggleSpeaker(){speakerEnabled=!speakerEnabled;audioDevice.setSpeakerMute(!speakerEnabled);for(Peer peer:peers.values()){if(peer.pc!=null)peer.pc.setAudioPlayout(speakerEnabled);for(AudioTrack track:peer.remoteAudioTracks)track.setEnabled(speakerEnabled);}if(speakerEnabled)routeAudioToSpeaker();render();notice(speakerEnabled?"会议声音已开启":"会议声音已关闭");}
     private void createCamera() throws Exception {if(cameraTrack!=null){cameraTrack.setEnabled(true);return;}CameraEnumerator enumerator=new Camera2Enumerator(activity);String selected=null;for(String id:enumerator.getDeviceNames())if(enumerator.isFrontFacing(id)){selected=id;break;}if(selected==null&&enumerator.getDeviceNames().length>0)selected=enumerator.getDeviceNames()[0];if(selected==null)throw new IllegalStateException("没有找到可用摄像头");frontCamera=enumerator.isFrontFacing(selected);cameraCapturer=enumerator.createCapturer(selected,null);if(cameraCapturer==null)throw new IllegalStateException("摄像头正在被其他应用使用");cameraSource=factory.createVideoSource(false);cameraTexture=SurfaceTextureHelper.create("YuDesk-camera",egl.getEglBaseContext());cameraCapturer.initialize(cameraTexture,activity,cameraSource.getCapturerObserver());cameraCapturer.startCapture(1280,720,24);cameraTrack=factory.createVideoTrack("yudesk-camera",cameraSource);cameraTrack.setEnabled(true);}
 
     private void toggleMicrophone(){if(closed)return;if((audioTrack==null||!audioTrack.enabled())&&activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){activity.requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},REQUEST_MICROPHONE);return;}try{if(audioTrack==null){createMicrophone();for(Peer peer:peers.values()){peer.audioSender=peer.pc.addTrack(audioTrack,Collections.singletonList("yudesk"));createOffer(peer);}}else{boolean enabled=!audioTrack.enabled();if(!enabled)audioTrack.setEnabled(false);audioDevice.setMicrophoneMute(!enabled);if(enabled)audioTrack.setEnabled(true);}local().microphone=audioTrack.enabled();sendState();render();}catch(Exception failure){notice("麦克风开启失败，请检查权限或其他应用占用");}}
@@ -214,9 +233,19 @@ final class ConferenceController {
     private void notice(String message){activity.conferenceNotice(message);}
     private String safeName(String value){value=value==null?"":value.trim();return value.isEmpty()?"参会者":value;}
 
-    private void finish(String reason,boolean unexpected){if(closed)return;closed=true;screenSharePending=false;main.removeCallbacks(screenShareTimeout);ConferenceProjectionService.onStopped=null;for(Peer peer:new ArrayList<>(peers.values()))peer.close();peers.clear();if(screenSharing||screenCapturer!=null)stopScreenShare();if(recording||recorder!=null)stopRecording(false);channel.close();reader.shutdownNow();writer.shutdown();if(cameraCapturer!=null){try{cameraCapturer.stopCapture();}catch(Exception ignored){}cameraCapturer.dispose();}if(cameraTrack!=null)cameraTrack.dispose();if(cameraSource!=null)cameraSource.dispose();if(cameraTexture!=null)cameraTexture.dispose();if(audioTrack!=null)audioTrack.dispose();if(audioSource!=null)audioSource.dispose();presentation.release();factory.dispose();audioDevice.release();egl.release();audioManager.abandonAudioFocus(audioFocusListener);if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S){if(oldCommunicationDevice!=null)audioManager.setCommunicationDevice(oldCommunicationDevice);else audioManager.clearCommunicationDevice();}audioManager.setSpeakerphoneOn(oldSpeaker);audioManager.setMode(oldAudioMode);activity.onConferenceClosed(reason,unexpected&&!intentional);}
+    private void finish(String reason,boolean unexpected){if(closed)return;closed=true;screenSharePending=false;main.removeCallbacks(screenShareTimeout);main.removeCallbacks(audioLevelPoll);ConferenceProjectionService.onStopped=null;for(Peer peer:new ArrayList<>(peers.values()))peer.close();peers.clear();if(screenSharing||screenCapturer!=null)stopScreenShare();if(recording||recorder!=null)stopRecording(false);channel.close();reader.shutdownNow();writer.shutdown();if(cameraCapturer!=null){try{cameraCapturer.stopCapture();}catch(Exception ignored){}cameraCapturer.dispose();}if(cameraTrack!=null)cameraTrack.dispose();if(cameraSource!=null)cameraSource.dispose();if(cameraTexture!=null)cameraTexture.dispose();if(audioTrack!=null)audioTrack.dispose();if(audioSource!=null)audioSource.dispose();presentation.release();factory.dispose();audioDevice.release();egl.release();audioManager.abandonAudioFocus(audioFocusListener);if(Build.VERSION.SDK_INT>=Build.VERSION_CODES.S){if(oldCommunicationDevice!=null)audioManager.setCommunicationDevice(oldCommunicationDevice);else audioManager.clearCommunicationDevice();}audioManager.setSpeakerphoneOn(oldSpeaker);audioManager.setMode(oldAudioMode);activity.onConferenceClosed(reason,unexpected&&!intentional);}
 
-    private final class Peer implements PeerConnection.Observer {final String id;PeerConnection pc;RtpSender audioSender,videoSender;DataChannel dataChannel;IcePathController route;boolean remoteSet,makingOffer,needsOffer,ignoreOffer;int offerEpoch;final List<IceCandidate> candidates=new ArrayList<>();final List<AudioTrack> remoteAudioTracks=new ArrayList<>();Peer(String id){this.id=id;}void addRemoteAudio(AudioTrack track){if(!remoteAudioTracks.contains(track))remoteAudioTracks.add(track);track.setEnabled(speakerEnabled);main.post(ConferenceController.this::routeAudioToSpeaker);}void close(){if(route!=null)route.close();for(AudioTrack track:remoteAudioTracks)track.setEnabled(false);remoteAudioTracks.clear();if(dataChannel!=null){dataChannel.close();dataChannel.dispose();dataChannel=null;}if(pc!=null){pc.close();pc.dispose();pc=null;}}
+    private final class Peer implements PeerConnection.Observer {
+        final String id;PeerConnection pc;RtpSender audioSender,videoSender;DataChannel dataChannel;IcePathController route;boolean remoteSet,makingOffer,needsOffer,ignoreOffer;int offerEpoch;double previousAudioEnergy=-1,previousAudioDuration=-1;final List<IceCandidate> candidates=new ArrayList<>();final List<AudioTrack> remoteAudioTracks=new ArrayList<>();
+        Peer(String id){this.id=id;}
+        void addRemoteAudio(AudioTrack track){if(!remoteAudioTracks.contains(track))remoteAudioTracks.add(track);track.setEnabled(speakerEnabled);main.post(ConferenceController.this::routeAudioToSpeaker);}
+        void sampleAudioLevel(){
+            PeerConnection current=pc;if(current==null)return;current.getStats(report->{double direct=0,energy=0,duration=0;boolean measured=false;
+                for(RTCStats stat:report.getStatsMap().values()){if(!"inbound-rtp".equals(stat.getType()))continue;Map<String,Object> values=stat.getMembers();Object kind=values.get("kind");if(kind==null)kind=values.get("mediaType");if(!"audio".equals(kind))continue;Object value=values.get("audioLevel");if(value instanceof Number){direct=Math.max(direct,((Number)value).doubleValue());measured=true;}Object e=values.get("totalAudioEnergy"),d=values.get("totalSamplesDuration");if(e instanceof Number&&d instanceof Number){energy+=((Number)e).doubleValue();duration+=((Number)d).doubleValue();}}
+                double level=direct;if(!measured&&previousAudioEnergy>=0&&duration>previousAudioDuration){level=Math.sqrt(Math.max(0,(energy-previousAudioEnergy)/(duration-previousAudioDuration)));measured=true;}if(duration>0){previousAudioEnergy=energy;previousAudioDuration=duration;}int percent=measured?(int)Math.min(100,Math.round(level*180)):0;main.post(()->{if(peerAlive(this))presentation.setVoiceLevel(id,percent);});
+            });
+        }
+        void close(){if(route!=null)route.close();for(AudioTrack track:remoteAudioTracks)track.setEnabled(false);remoteAudioTracks.clear();presentation.setVoiceLevel(id,0);if(dataChannel!=null){dataChannel.close();dataChannel.dispose();dataChannel=null;}if(pc!=null){pc.close();pc.dispose();pc=null;}}
         @Override public void onSignalingChange(PeerConnection.SignalingState state){}
         @Override public void onIceConnectionChange(PeerConnection.IceConnectionState state){main.post(()->{if(route!=null)route.update();renderConnection();});}
         @Override public void onIceConnectionReceivingChange(boolean receiving){}
