@@ -23,7 +23,6 @@ func runTileStream(ctx context.Context, c *protocol.Conn, options stream.Options
 	}
 	pending := map[string]flight{}
 	bytesPending := 0
-	inFlightLimit := tileFlightBudget(options.MaxMbps)
 	controller := stream.NewLatencyController(options)
 	ack := func(id string) {
 		if packet, ok := pending[id]; ok {
@@ -47,10 +46,12 @@ func runTileStream(ctx context.Context, c *protocol.Conn, options stream.Options
 	for ctx.Err() == nil {
 		// Permit a small bandwidth-delay window for cheap dirty updates, while
 		// bounding large frames by bytes. Never capture a queue of stale frames.
-		for options.FrameAck && (len(pending) >= 8 || bytesPending >= inFlightLimit) {
+		flightFrames, flightBytes := controller.FlightWindow(base, options.MaxMbps)
+		for options.FrameAck && (len(pending) >= flightFrames || bytesPending >= flightBytes) {
 			select {
 			case id := <-acks:
 				ack(id)
+				flightFrames, flightBytes = controller.FlightWindow(base, options.MaxMbps)
 			case <-ctx.Done():
 				return
 			}
@@ -167,14 +168,4 @@ func tileCaptureInterval(base, bandwidth time.Duration, idle, interactive bool) 
 		interval = max(base, 100*time.Millisecond)
 	}
 	return max(interval, bandwidth)
-}
-
-func tileFlightBudget(mbps int) int {
-	if mbps <= 0 {
-		return 128 << 10
-	}
-	// Approximately 100ms of configured payload bandwidth, not 1MB at every
-	// link speed. A single atomic update can exceed this bound; after it is
-	// sent, wait for ACKs before capturing any additional update.
-	return min(1<<20, max(8<<10, mbps*1_000_000/8/10))
 }

@@ -19,20 +19,31 @@ func runDesktopStream(ctx context.Context, c *protocol.Conn, options stream.Opti
 	hasPrevious := false
 	lastSent := time.Time{}
 	unchanged := 0
-	pending := map[string]bool{}
+	type flight struct{ sent time.Time }
+	pending := map[string]flight{}
+	controller := stream.NewLatencyController(options)
+	ack := func(id string) {
+		if packet, ok := pending[id]; ok {
+			controller.Ack(time.Since(packet.sent))
+			delete(pending, id)
+		}
+	}
 	sequence := uint64(0)
 	var captureError string
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		// At most two complete frames may be in flight. Slow links cannot build
-		// an ever-growing queue of obsolete screenshots ahead of input replies.
+		// Fill only the measured propagation path. A low-latency path stays at
+		// two complete frames; higher-RTT paths may use a few more to avoid
+		// starving the decoder, without treating queue growth as capacity.
 		if options.FrameAck {
-			for len(pending) >= 2 {
+			flightFrames, _ := controller.FlightWindow(base, 0)
+			for len(pending) >= flightFrames {
 				select {
 				case id := <-acks:
-					delete(pending, id)
+					ack(id)
+					flightFrames, _ = controller.FlightWindow(base, 0)
 				case <-ctx.Done():
 					return
 				}
@@ -85,7 +96,7 @@ func runDesktopStream(ctx context.Context, c *protocol.Conn, options stream.Opti
 				return
 			}
 			if options.FrameAck {
-				pending[id] = true
+				pending[id] = flight{sent: time.Now()}
 			}
 			lastSent = time.Now()
 			if options.MaxMbps > 0 {
@@ -120,7 +131,7 @@ func runDesktopStream(ctx context.Context, c *protocol.Conn, options stream.Opti
 				timer.Stop()
 				return
 			case id := <-acks:
-				delete(pending, id)
+				ack(id)
 			case <-input.wake:
 				// Input wakes an idle capture, but does not bypass the rate budget.
 				if options.SaveIdle && unchanged > options.FPS && time.Since(started) >= base && options.MaxMbps == 0 {

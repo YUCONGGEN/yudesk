@@ -25,3 +25,29 @@ func TestLatencyControllerBacksOffBeforeQualityAndRecoversSlowly(t *testing.T) {
 		t.Fatal("quality recovered before stable capacity")
 	}
 }
+
+func TestLatencyControllerFlightWindowTracksPropagationNotQueue(t *testing.T) {
+	c := NewLatencyController(Options{Quality: 70, MaxWidth: 1280})
+	frames, bytes := c.FlightWindow(time.Second/30, 8)
+	if frames != 2 || bytes != 50_000 {
+		t.Fatalf("initial window: %d frames, %d bytes", frames, bytes)
+	}
+	c.Ack(20 * time.Millisecond)
+	frames, bytes = c.FlightWindow(time.Second/30, 8)
+	if frames != 2 || bytes != 20_000 {
+		t.Fatalf("fast path retained excess queue: %d frames, %d bytes", frames, bytes)
+	}
+	for range 8 {
+		c.Ack(120 * time.Millisecond)
+	}
+	frames, bytes = c.FlightWindow(time.Second/30, 8)
+	if frames != 2 || bytes != 20_000 {
+		t.Fatalf("queue growth enlarged propagation window: %d frames, %d bytes", frames, bytes)
+	}
+	high := NewLatencyController(Options{Quality: 70, MaxWidth: 1280})
+	high.Ack(100 * time.Millisecond)
+	frames, bytes = high.FlightWindow(time.Second/30, 8)
+	if frames != 3 || bytes != 100_000 {
+		t.Fatalf("100ms path lost BDP: %d frames, %d bytes", frames, bytes)
+	}
+}

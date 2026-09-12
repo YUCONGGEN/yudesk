@@ -20,10 +20,12 @@ final class IcePathController {
     private final boolean hasRelay;
     private boolean closed, relay, recovering;
     private int restarts;
+    private int rttMs=-1;
+    private long availableOutgoingBitrate;
     private String path="正在直连";
     private final Runnable deadline=this::fallback;
     private final Runnable recovery=()->{recovering=false;fallback();};
-    private final Runnable statistics=new Runnable(){public void run(){if(!valid())return;readStats();main.postDelayed(this,2500);}};
+    private final Runnable statistics=new Runnable(){public void run(){if(!valid())return;readStats();main.postDelayed(this,2000);}};
 
     IcePathController(PeerConnection pc,String policy,Handler main,BooleanSupplier alive,Runnable changed,Runnable negotiate){
         this.pc=pc;this.policy=policy;this.main=main;this.alive=alive;this.changed=changed;this.negotiate=negotiate;
@@ -56,10 +58,18 @@ final class IcePathController {
         config.continualGatheringPolicy=PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY;
         config.iceTransportsType=PeerConnection.IceTransportsType.ALL;
         config.iceCandidatePoolSize=2;
+        config.rtcpMuxPolicy=PeerConnection.RtcpMuxPolicy.REQUIRE;
+        config.audioJitterBufferMaxPackets=40;
+        config.audioJitterBufferFastAccelerate=true;
+        config.enableDscp=true;
+        config.enableCpuOveruseDetection=true;
+        config.screencastMinBitrate=300_000;
         return config;
     }
 
     String path(){return path;}
+    int rttMs(){return rttMs;}
+    long availableOutgoingBitrate(){return availableOutgoingBitrate;}
     private boolean valid(){return !closed&&alive.getAsBoolean();}
     private boolean connected(){PeerConnection.IceConnectionState state=pc.iceConnectionState();return state==PeerConnection.IceConnectionState.CONNECTED||state==PeerConnection.IceConnectionState.COMPLETED;}
     private void path(String value){if(!path.equals(value)){path=value;changed.run();}}
@@ -84,7 +94,11 @@ final class IcePathController {
             for(RTCStats value:stats.values())if("transport".equals(value.getType())){Object id=value.getMembers().get("selectedCandidatePairId");if(id!=null)pair=stats.get(id.toString());}
             if(pair==null)for(RTCStats value:stats.values())if("candidate-pair".equals(value.getType())&&"succeeded".equals(value.getMembers().get("state"))&&Boolean.TRUE.equals(value.getMembers().get("nominated"))){pair=value;break;}
             if(pair==null)return;RTCStats local=stats.get(String.valueOf(pair.getMembers().get("localCandidateId"))),remote=stats.get(String.valueOf(pair.getMembers().get("remoteCandidateId")));
-            boolean viaRelay=local!=null&&"relay".equals(local.getMembers().get("candidateType"))||remote!=null&&"relay".equals(remote.getMembers().get("candidateType"));path(viaRelay?"中转连接":"P2P 直连");
+            int oldRTT=rttMs;long oldAvailable=availableOutgoingBitrate;Object rtt=pair.getMembers().get("currentRoundTripTime"),available=pair.getMembers().get("availableOutgoingBitrate");
+            if(rtt instanceof Number)rttMs=Math.max(0,(int)Math.round(((Number)rtt).doubleValue()*1000));
+            availableOutgoingBitrate=available instanceof Number?Math.max(0,((Number)available).longValue()):0;
+            boolean viaRelay=local!=null&&"relay".equals(local.getMembers().get("candidateType"))||remote!=null&&"relay".equals(remote.getMembers().get("candidateType"));String next=viaRelay?"中转连接":"P2P 直连";
+            if(!path.equals(next))path(next);else if(Math.abs(oldRTT-rttMs)>=10||Math.abs(oldAvailable-availableOutgoingBitrate)>=Math.max(100_000,oldAvailable/5))changed.run();
         }));}catch(RuntimeException ignored){}
     }
     void close(){closed=true;main.removeCallbacks(deadline);main.removeCallbacks(recovery);main.removeCallbacks(statistics);}

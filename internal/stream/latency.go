@@ -1,6 +1,9 @@
 package stream
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // LatencyController is a conservative delay-based fallback for the TCP tile
 // transport. It is not a reproduction of a learned congestion controller.
@@ -31,6 +34,33 @@ func (c *LatencyController) Ack(rtt time.Duration) {
 	}
 }
 func (c *LatencyController) QueueDelay() time.Duration { return max(0, c.rtt-c.baseline) }
+
+// FlightWindow keeps enough absolute tile updates in flight to fill the
+// measured bandwidth-delay product without retaining the old fixed 100 ms
+// window on a fast path. Before the first ACK it starts conservatively; after
+// that the minimum observed RTT is propagation time, while QueueDelay remains
+// excluded so congestion cannot enlarge the window that caused it.
+func (c *LatencyController) FlightWindow(framePeriod time.Duration, maxMbps int) (frames, bytes int) {
+	if framePeriod <= 0 {
+		framePeriod = time.Second / 30
+	}
+	propagation := c.baseline
+	if propagation <= 0 {
+		propagation = 50 * time.Millisecond
+		frames = 2
+	} else {
+		propagation = min(150*time.Millisecond, max(20*time.Millisecond, propagation))
+		frames = int(math.Round(float64(propagation) / float64(framePeriod)))
+		frames = min(8, max(2, frames))
+	}
+	if maxMbps <= 0 {
+		return frames, 128 << 10
+	}
+	bytes = int(float64(maxMbps*1_000_000) / 8 * propagation.Seconds())
+	bytes = min(1<<20, max(8<<10, bytes))
+	return frames, bytes
+}
+
 func (c *LatencyController) Update(now time.Time, cost, budget time.Duration, sourceWidth int) {
 	if c.QueueDelay() > 40*time.Millisecond || cost > budget*3/2 {
 		c.bad++

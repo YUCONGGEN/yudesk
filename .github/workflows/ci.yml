@@ -29,5 +29,5 @@ jobs:
         run: |
           go test -race ./...
           go test -race interface_android.go netlink_android.go android_api_level.go zone.go zone_test.go interface_android_test.go netlink_android_test.go
-      - run: node --test scripts/compat.test.cjs scripts/input.test.cjs scripts/frames.test.cjs scripts/presence.test.cjs scripts/audio.test.cjs scripts/files.test.cjs
+      - run: node --test scripts/compat.test.cjs scripts/input.test.cjs scripts/frames.test.cjs scripts/presence.test.cjs scripts/audio.test.cjs scripts/files.test.cjs scripts/conference-tuning.test.cjs
       - run: go build ./cmd/yudesk ./cmd/yudesk-agent ./cmd/yudesk-viewer ./cmd/yudesk-relay ./cmd/yudesk-account ./cmd/yudesk-admin ./cmd/yudesk-update ./cmd/yudesk-sign

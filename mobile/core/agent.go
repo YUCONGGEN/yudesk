@@ -402,13 +402,23 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 }
 
 func (e *Engine) sendFrames(ctx, writeCtx context.Context, c *protocol.Conn, acks <-chan string, options stream.Options, generation string) {
+	options = options.Normalized()
 	var last int64
-	pending := map[string]bool{}
+	pending := map[string]time.Time{}
+	controller := stream.NewLatencyController(options)
+	base := time.Second / time.Duration(options.FPS)
+	ack := func(id string) {
+		if sent, ok := pending[id]; ok {
+			controller.Ack(time.Since(sent))
+			delete(pending, id)
+		}
+	}
 	next := time.Now()
 	for ctx.Err() == nil {
-		if len(pending) >= 2 {
+		flightFrames, _ := controller.FlightWindow(base, 0)
+		if len(pending) >= flightFrames {
 			timer := time.NewTimer(10 * time.Second)
-			for len(pending) >= 2 {
+			for len(pending) >= flightFrames {
 				select {
 				case <-ctx.Done():
 					timer.Stop()
@@ -417,7 +427,8 @@ func (e *Engine) sendFrames(ctx, writeCtx context.Context, c *protocol.Conn, ack
 					_ = c.Close()
 					return
 				case id := <-acks:
-					delete(pending, id)
+					ack(id)
+					flightFrames, _ = controller.FlightWindow(base, 0)
 				}
 			}
 			timer.Stop()
@@ -426,7 +437,7 @@ func (e *Engine) sendFrames(ctx, writeCtx context.Context, c *protocol.Conn, ack
 		for draining {
 			select {
 			case id := <-acks:
-				delete(pending, id)
+				ack(id)
 			default:
 				draining = false
 			}
@@ -455,9 +466,9 @@ func (e *Engine) sendFrames(ctx, writeCtx context.Context, c *protocol.Conn, ack
 		}
 		last = f.Revision
 		if options.FrameAck {
-			pending[id] = true
+			pending[id] = time.Now()
 		}
-		interval := time.Second / time.Duration(options.FPS)
+		interval := base
 		if options.MaxMbps > 0 {
 			interval = max(interval, time.Duration(float64(len(f.Data)*8)/float64(options.MaxMbps*1000000)*float64(time.Second)))
 		}

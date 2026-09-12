@@ -33,13 +33,11 @@ func TestTileInteractionPacing(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestTileFlightBudget(t *testing.T) {
-	for _, tc := range []struct{ mbps, want int }{{0, 128 << 10}, {1, 12500}, {8, 100000}, {100, 1 << 20}} {
-		if got := tileFlightBudget(tc.mbps); got != tc.want {
-			t.Fatalf("%dMbps: got %d, want %d", tc.mbps, got, tc.want)
-		}
+	if got := inputCaptureInterval(base, 0); got != time.Second/120 {
+		t.Fatalf("fast interaction interval: got %v", got)
+	}
+	if got := inputTailCaptureInterval(base, 0); got != time.Second/60 {
+		t.Fatalf("interaction tail interval: got %v", got)
 	}
 }
 
@@ -63,7 +61,9 @@ func TestTileInputCannotBypassAcknowledgementWindow(t *testing.T) {
 	b.SetReadDeadline(time.Now().Add(3 * time.Second))
 	r := protocol.NewConn(b)
 	var first string
-	for i := 0; i < 8; i++ {
+	// Before the first ACK the latency controller starts with a two-frame
+	// window instead of the previous fixed eight-frame allowance.
+	for i := 0; i < 2; i++ {
 		m, err := r.ReadMessage()
 		if err != nil {
 			t.Fatal(err)
@@ -80,7 +80,7 @@ func TestTileInputCannotBypassAcknowledgementWindow(t *testing.T) {
 		t.Fatalf("transmitted past ACK bound: %v", err)
 	case <-time.After(80 * time.Millisecond):
 	}
-	if n := captures.Load(); n <= 8 {
+	if n := captures.Load(); n <= 2 {
 		t.Fatal("network wait blocked the independent capture worker")
 	}
 	acks <- first

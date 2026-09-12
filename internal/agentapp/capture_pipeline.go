@@ -37,7 +37,7 @@ func (s *captureSettings) recycle(pixels *image.RGBA) {
 // image, not discarded captures, so dirty regions are not lost.
 func captureLatest(ctx context.Context, options stream.Options, input *inputSession, settings *captureSettings, capture func(desktop.CaptureOptions) (desktop.Screenshot, error), frames chan capturedDesktop) {
 	base := time.Second / time.Duration(options.FPS)
-	var interactionUntil time.Time
+	var interactionUntil, interactionFastUntil time.Time
 	for ctx.Err() == nil {
 		start := time.Now()
 		var buffer *image.RGBA
@@ -80,10 +80,14 @@ func captureLatest(ctx context.Context, options stream.Options, input *inputSess
 		}
 		waiting := true
 		for waiting {
-			interactive := options.Mode == "adaptive" && time.Now().Before(interactionUntil)
+			now := time.Now()
+			interactive := options.Mode == "adaptive" && now.Before(interactionUntil)
 			interval := tileCaptureInterval(base, 0, options.SaveIdle && settings.idle.Load(), interactive)
 			if interactive {
-				interval = inputCaptureInterval(base, frame.cost)
+				interval = inputTailCaptureInterval(base, frame.cost)
+				if now.Before(interactionFastUntil) {
+					interval = inputCaptureInterval(base, frame.cost)
+				}
 			}
 			timer := time.NewTimer(max(0, interval-time.Since(start)))
 			select {
@@ -93,7 +97,9 @@ func captureLatest(ctx context.Context, options stream.Options, input *inputSess
 			case <-input.wake:
 				timer.Stop()
 				settings.idle.Store(false)
-				interactionUntil = time.Now().Add(100 * time.Millisecond)
+				now := time.Now()
+				interactionFastUntil = now.Add(100 * time.Millisecond)
+				interactionUntil = now.Add(350 * time.Millisecond)
 			case <-timer.C:
 				waiting = false
 			}
@@ -105,4 +111,12 @@ func captureLatest(ctx context.Context, options stream.Options, input *inputSess
 // native capture keeps the previous <=60 Hz ceiling; fixed FPS is unchanged.
 func inputCaptureInterval(base, captureCost time.Duration) time.Duration {
 	return min(base, max(time.Second/120, min(time.Second/60, captureCost*2)))
+}
+
+// Applications often paint menus, web pages and animations after the first
+// 100 ms following input. Continue a cheaper 60 Hz tail long enough to catch
+// that late visual response, while reserving 120 Hz sampling for the first
+// short burst where pointer feedback benefits most.
+func inputTailCaptureInterval(base, captureCost time.Duration) time.Duration {
+	return min(base, max(time.Second/60, captureCost*2))
 }
