@@ -27,4 +27,7 @@ func (b *appWindow) showNativeWindow() error             { return nil }
 func (b *appWindow) closeNativeWindow() error            { return nil }
 func (b *appWindow) hideNativeWindow() (bool, error)     { return false, nil }
 func (b *appWindow) minimizeNativeWindow() (bool, error) { return false, nil }
-func (b *appWindow) Drag() error                         { return errors.New("请拖动 YuDesk 顶部空白区域") }
+func (b *appWindow) fullscreenNativeWindow(bool) (bool, error) {
+	return false, nil
+}
+func (b *appWindow) Drag() error { return errors.New("请拖动 YuDesk 顶部空白区域") }

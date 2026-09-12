@@ -1,6 +1,29 @@
-# 当前部署状态（2026-09-11）
+# 当前部署状态（2026-09-12）
 
-## 当前一体化安装与 Android 界面优化：`installer-polish-20260911.6`
+## 当前会议管理、原生全屏与安装稳定性：`meeting-management-20260912.7`
+
+桌面 **2.0.0** 与 Android **2.0.0-preview.14 / 2000014** 已于 **2026-09-12 19:01（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包均已更新；iOS 与原生鸿蒙继续暂停。
+
+- 会议主持人可按姓名或成员标识模糊搜索，通过桌面右键/操作菜单或 Android 成员菜单查看信息、移出成员和转让主持权；服务器会阻止被移出的设备在当前会议结束前重新加入。
+- 共享者姓名持续显示。参会者可点击共享画面聚焦全屏，并在共享者变化时自动跟随；取消、拒绝或超时退出系统投屏选择后，共享按钮可靠恢复，不再永久变灰。
+- Windows、Linux、macOS 的远控和会议全屏均改为驱动原生宿主窗口占满当前显示器。Windows 原生测试实测从固定窗口进入 1920×1080 后精确恢复原坐标与尺寸；Linux X11/WebKitGTK 全屏与恢复通过。macOS 双架构由真实 Mac SDK 编译并完成 helper 自检、包展开、架构和 ad-hoc strict/deep 验签，但未做 Developer ID 签名、公证或图形真机手动验收。
+- Windows 安装器增加本地诊断日志、顶层异常捕获和重复安装窗口恢复；安装器只在正式 YuDesk 主界面确实可见后结束。最终官网包完成载荷校验、安装窗口与重复启动测试，并在当前 Windows 开发机真实更新 `Program Files`、恢复自动服务和启动主界面，日志落为 `silent_install_complete`。
+- 根模块全量 `go test ./...`、`go vet ./...`、Relay 三轮 race、双客户端真实进程与浏览器集成通过；集成覆盖远控原生全屏布局、会议共享聚焦、成员搜索/管理、转主持人、设备与审批流程。Android 四 ABI Go 核心、Java 单测、lint、v2 签名和 16 KiB 校验通过；物理手机的厂商后台策略、声学效果和长时间稳定性仍需真机验收。
+- 部署前活动会话为 0；服务端与下载文件原子替换后完成短暂重启，当前 PID **77596**。`/healthz`、未登录后台 401、公开统计、SQLite `quick_check` 和 Android 1 MiB Range `206` 均通过。发布目录 `/Users/yu/bin/yudesk/releases/meeting-management-20260912.7`，可恢复备份 `/Users/yu/bin/yudesk/backups/meeting-management-20260912.7`。
+- Windows 与 Android 均从公网域名完整重新下载，SHA-256 与发布文件一致。官网显示版本 2.0.0、发布日期 2026-09-12 19:01（北京时间），发布后快照为在线设备 2、参与连接 0、活动会话 0；这些数量是实时值。
+
+| 当前产物 | SHA-256 |
+| --- | --- |
+| Windows x64 一体化安装器 | `28fc5b539c9351f8b229f3024c540f121fe1742c04145bfcdd0f2fabfae8a249` |
+| Linux x64 DEB revision 12 | `cd907c55d8ceb61c041548993acf0d251fa10074fbe6422b38dc57a2e1649b7a` |
+| macOS Intel PKG revision 12 | `04dcc1dbd87bda26f591931375203225b9bfbee04c10ab443624fb5e94746b00` |
+| macOS Apple Silicon PKG revision 12 | `0e8dcfd942f9254adba9401bcc7a72b8c709b4222993560fd82bcf9a519d22e3` |
+| Android preview.14 APK | `339625a76a03ee6b877f692cfb616592356425abfa04c75193bb55b2b721ced7` |
+| macOS 服务端 | `10e4e3f25a7a2b3b8fa6c8720e21ffdb0e713b8faf199759ee1c4ea15b50c593` |
+
+完整变更见 [本次发布说明](RELEASE_NOTES_20260912.md)、[多人会议说明](CONFERENCE_20260911.md) 和 [Android 说明](ANDROID.md)。
+
+## 上一批一体化安装与 Android 界面优化：`installer-polish-20260911.6`
 
 桌面 **2.0.0** 与 Android **2.0.0-preview.13 / 2000013** 已于 **2026-09-11 22:56（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包均可下载；iOS 与原生鸿蒙继续暂停。
 

@@ -335,16 +335,7 @@ static const char drag_script[] =
 "(()=>{document.addEventListener('mousedown',e=>{"
 "if(!e.isTrusted||e.button!==0||!(e.target instanceof Element))return;"
 "if(!e.target.closest('[data-window-drag]')||e.target.closest('button,a,input,label,select,textarea,form,[contenteditable],[role=\"button\"]'))return;"
-"window.webkit.messageHandlers.yudeskDrag.postMessage('drag');},true);"
-// WebKitGTK 2.50.4 aborts on tested DOM fullscreen; custom enter/leave handlers
-// do not prevent that failure.
-// Native-window fullscreen keeps the toolbar usable and bypasses only that path.
-// This isolated, main-frame handler never accepts synthetic page events.
-"document.addEventListener('click',e=>{if(!e.isTrusted||!(e.target instanceof Element))return;"
-"const b=e.target.closest('button#fullscreen,button#exitFullscreen');if(!b)return;"
-"e.preventDefault();e.stopImmediatePropagation();window.webkit.messageHandlers.yudeskDrag.postMessage(b.id==='exitFullscreen'?'unfullscreen':'fullscreen');},true);"
-"document.addEventListener('keydown',e=>{if(e.isTrusted&&e.key==='Escape'&&document.getElementById('fullscreen')?.getAttribute('aria-pressed')==='true'){"
-"e.preventDefault();e.stopImmediatePropagation();window.webkit.messageHandlers.yudeskDrag.postMessage('unfullscreen');}},true);})();";
+"window.webkit.messageHandlers.yudeskDrag.postMessage('drag');},true);})();";
 
 static gboolean open_window(Shell *s, const char *url) {
     WebKitUserContentManager *manager = webkit_user_content_manager_new();
@@ -367,8 +358,8 @@ static gboolean open_window(Shell *s, const char *url) {
     webkit_settings_set_javascript_can_access_clipboard(settings, FALSE);
     webkit_settings_set_media_playback_requires_user_gesture(settings, FALSE);
     webkit_settings_set_enable_developer_extras(settings, FALSE);
-    // Working native fullscreen is provided above. Reject other DOM fullscreen
-    // requests safely instead of entering the affected WebKit coroutine.
+    // Fullscreen is performed by the authenticated local shell command. Keep
+    // the affected WebKitGTK DOM coroutine disabled; the page never needs it.
     webkit_settings_set_enable_fullscreen(settings, FALSE);
     webkit_settings_set_user_agent_with_application_details(settings, "YuDeskNative", "2.0.0");
     s->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -489,11 +480,20 @@ static void command(Shell *s, const guint8 *line, gsize length) {
         s->port = port;
         if (!open_window(s, url)) stop_shell(s);
     } else if (!strcmp(action, "close")) stop_shell(s);
-    else if (!strcmp(action, "show") || !strcmp(action, "hide") || !strcmp(action, "minimize")) {
+    else if (!strcmp(action, "show") || !strcmp(action, "hide") || !strcmp(action, "minimize") ||
+             !strcmp(action, "enter-fullscreen") || !strcmp(action, "exit-fullscreen")) {
         if (!s->window) { emit("error", "not_open"); goto done; }
         if (!strcmp(action, "show")) show_window(s);
         else if (!strcmp(action, "hide")) { gtk_widget_hide(s->window); gtk_window_set_skip_taskbar_hint(GTK_WINDOW(s->window), TRUE); }
-        else gtk_window_iconify(GTK_WINDOW(s->window));
+        else if (!strcmp(action, "minimize")) gtk_window_iconify(GTK_WINDOW(s->window));
+        else if (!strcmp(action, "enter-fullscreen")) {
+            if (!s->fullscreen) {
+                s->fullscreen = TRUE; fixed_geometry(s, FALSE);
+                gtk_window_fullscreen(GTK_WINDOW(s->window)); fullscreen_label(s);
+            }
+        } else if (s->fullscreen) {
+            s->fullscreen = FALSE; gtk_window_unfullscreen(GTK_WINDOW(s->window)); fullscreen_label(s);
+        }
     } else emit("error", "invalid_command");
 done:
     g_object_unref(parser);

@@ -37,7 +37,9 @@ var setupFiles embed.FS
 
 var setupUser32 = windows.NewLazySystemDLL("user32.dll")
 
-func main() {
+func main() { runSetup() }
+
+func runSetup() {
 	packagePath := flag.String("package", "", "YuDesk client executable to package")
 	outputPath := flag.String("output", "", "packaged setup output")
 	silent := flag.Bool("silent", false, "install and launch without installer UI")
@@ -80,19 +82,39 @@ func main() {
 		}
 		return
 	}
-	if releaseSetupMutex() != nil {
+	setupLog("setup_started", nil)
+	defer func() {
+		if failure := recover(); failure != nil {
+			err := fmt.Errorf("安装程序异常: %v", failure)
+			setupLog("setup_panic", err)
+			showNativeError("安装程序遇到异常，已安全停止。请重新下载最新版；诊断记录位于本机 YuDesk 安装目录。")
+		}
+	}()
+	if mutexErr := releaseSetupMutex(); mutexErr != nil {
+		setupLog("setup_duplicate", mutexErr)
+		if !restoreExistingSetupWindow() {
+			showNativeError("YuDesk 安装程序已经打开，请在任务栏中查看。")
+		}
 		return
 	}
 	if *silent {
+		setupLog("silent_install_started", nil)
 		path, installErr := installYuDesk(executable)
-		if installErr != nil || launchYuDesk(path) != nil {
+		if installErr != nil {
+			setupLog("silent_install_failed", installErr)
 			os.Exit(1)
 		}
+		if launchErr := launchYuDesk(path); launchErr != nil {
+			setupLog("silent_launch_failed", launchErr)
+			os.Exit(1)
+		}
+		setupLog("silent_install_complete", nil)
 		return
 	}
 	runtime.LockOSThread()
 	dataRoot := filepath.Join(os.Getenv("LOCALAPPDATA"), "YuDesk", "Setup")
 	if err = nativeinit.Prepare(dataRoot); err != nil {
+		setupLog("webview_prepare_failed", err)
 		showNativeError("安装界面组件加载失败，请确认系统已安装 Microsoft Edge WebView2。")
 		return
 	}
@@ -104,6 +126,7 @@ func main() {
 		},
 	})
 	if view == nil {
+		setupLog("webview_create_failed", errors.New("nil WebView2 instance"))
 		showNativeError("无法打开 YuDesk 安装界面，请重新下载安装包。")
 		return
 	}
@@ -127,8 +150,10 @@ func main() {
 			return
 		}
 		go func() {
+			setupLog("install_started", nil)
 			path, installErr := installYuDesk(executable)
 			if installErr != nil {
+				setupLog("install_failed", installErr)
 				installing.Store(false)
 				dispatchInstallStatus(view, "error", installErr.Error())
 				return
@@ -136,10 +161,12 @@ func main() {
 			dispatchInstallStatus(view, "complete", "正在打开 YuDesk…")
 			time.Sleep(220 * time.Millisecond)
 			if launchErr := launchYuDesk(path); launchErr != nil {
+				setupLog("launch_failed", launchErr)
 				installing.Store(false)
 				dispatchInstallStatus(view, "error", "程序已安装，但打开失败："+launchErr.Error())
 				return
 			}
+			setupLog("install_complete", nil)
 			view.Dispatch(func() { view.Terminate() })
 		}()
 	})
@@ -147,7 +174,29 @@ func main() {
 	page := strings.ReplaceAll(setupHTML, "{{ICON}}", base64.StdEncoding.EncodeToString(icon))
 	page = strings.ReplaceAll(page, "{{VERSION}}", releaseinfo.Version)
 	view.SetHtml(page)
+	setupLog("installer_window_ready", nil)
 	view.Run()
+	setupLog("installer_window_closed", nil)
+}
+
+func setupLog(event string, failure error) {
+	directory := filepath.Join(os.Getenv("LOCALAPPDATA"), "YuDesk", "Setup")
+	if directory == filepath.Join("YuDesk", "Setup") || os.MkdirAll(directory, 0700) != nil {
+		return
+	}
+	file, err := os.OpenFile(filepath.Join(directory, "install.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	detail := "none"
+	if failure != nil {
+		detail = strings.NewReplacer("\r", " ", "\n", " ").Replace(failure.Error())
+		if len(detail) > 500 {
+			detail = detail[:500]
+		}
+	}
+	_, _ = fmt.Fprintf(file, "%s pid=%d event=%s error=%s\n", time.Now().Format(time.RFC3339Nano), os.Getpid(), event, detail)
 }
 
 func dispatchInstallStatus(view webview.WebView, state, message string) {
@@ -171,6 +220,17 @@ func releaseSetupMutex() error {
 		return errors.New("YuDesk 安装程序已经打开")
 	}
 	return nil
+}
+
+func restoreExistingSetupWindow() bool {
+	title, _ := windows.UTF16PtrFromString("安装 YuDesk")
+	hwnd, _, _ := setupUser32.NewProc("FindWindowW").Call(0, uintptr(unsafe.Pointer(title)))
+	if hwnd == 0 {
+		return false
+	}
+	setupUser32.NewProc("ShowWindow").Call(hwnd, windows.SW_RESTORE)
+	setupUser32.NewProc("SetForegroundWindow").Call(hwnd)
+	return true
 }
 
 func removeSetupCaption(hwnd uintptr) {
@@ -333,7 +393,43 @@ func launchYuDesk(path string) error {
 	cmd := exec.Command(path)
 	cmd.Dir = filepath.Dir(path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	deadline := time.NewTimer(20 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+	for {
+		if yuDeskWindowVisible() {
+			return nil
+		}
+		select {
+		case err := <-done:
+			if yuDeskWindowVisible() {
+				return nil
+			}
+			if err == nil {
+				return errors.New("YuDesk 启动后提前退出，请查看安装诊断记录")
+			}
+			return fmt.Errorf("YuDesk 启动后提前退出: %w", err)
+		case <-ticker.C:
+		case <-deadline.C:
+			return errors.New("YuDesk 已安装，但主界面启动超时；请从桌面图标重新打开")
+		}
+	}
+}
+
+func yuDeskWindowVisible() bool {
+	title, _ := windows.UTF16PtrFromString("YuDesk")
+	hwnd, _, _ := setupUser32.NewProc("FindWindowW").Call(0, uintptr(unsafe.Pointer(title)))
+	if hwnd == 0 {
+		return false
+	}
+	visible, _, _ := setupUser32.NewProc("IsWindowVisible").Call(hwnd)
+	return visible != 0
 }
 
 func showNativeError(message string) {

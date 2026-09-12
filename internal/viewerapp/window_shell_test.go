@@ -77,7 +77,7 @@ func TestShellHideMinimizePreserveProcess(t *testing.T) {
 	var closed atomic.Int32
 	s := fixtureShell(t, "normal", func() { closed.Add(1) })
 	for range 12 {
-		for _, action := range []string{"hide", "show", "minimize", "show"} {
+		for _, action := range []string{"hide", "show", "minimize", "show", "enter-fullscreen", "exit-fullscreen"} {
 			if err := s.send(action, ""); err != nil {
 				t.Fatal(err)
 			}

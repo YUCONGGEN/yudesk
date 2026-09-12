@@ -24,6 +24,7 @@ var ErrConferenceMessageTooLarge = errors.New("conference signaling message is t
 type ConferencePeer struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
+	JoinedAt   int64  `json:"joinedAt,omitempty"`
 	Host       bool   `json:"host,omitempty"`
 	Microphone bool   `json:"microphone,omitempty"`
 	Camera     bool   `json:"camera,omitempty"`
@@ -52,6 +53,7 @@ type ConferenceMessage struct {
 	From       string           `json:"from,omitempty"`
 	To         string           `json:"to,omitempty"`
 	Name       string           `json:"name,omitempty"`
+	JoinedAt   int64            `json:"joinedAt,omitempty"`
 	Host       string           `json:"host,omitempty"`
 	Peers      []ConferencePeer `json:"peers,omitempty"`
 	Signal     string           `json:"signal,omitempty"`

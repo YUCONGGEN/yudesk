@@ -249,6 +249,32 @@ func TestNativeFramelessTransitions(t *testing.T) {
 	}
 	var fixed nativeRect
 	nativeGetRect.Call(initial, uintptr(unsafe.Pointer(&fixed)))
+	if err := b.Fullscreen(true); err != nil {
+		t.Fatal(err)
+	}
+	monitor, _, _ := nativeMonitorFromWindow.Call(initial, 2)
+	monitorInfo := nativeMonitorInfo{Size: uint32(unsafe.Sizeof(nativeMonitorInfo{}))}
+	if monitor == 0 {
+		t.Fatal("fullscreen host has no monitor")
+	}
+	if ok, _, err := nativeGetMonitorInfo.Call(monitor, uintptr(unsafe.Pointer(&monitorInfo))); ok == 0 {
+		t.Fatal(err)
+	}
+	waitNative(t, "host did not occupy its complete monitor", func() bool {
+		var current nativeRect
+		nativeGetRect.Call(initial, uintptr(unsafe.Pointer(&current)))
+		return current == monitorInfo.Monitor
+	})
+	assertNativeContent(t, b)
+	if err := b.Fullscreen(false); err != nil {
+		t.Fatal(err)
+	}
+	waitNative(t, "host did not restore its fixed bounds after fullscreen", func() bool {
+		var current nativeRect
+		nativeGetRect.Call(initial, uintptr(unsafe.Pointer(&current)))
+		return current == fixed
+	})
+	assertNativeContent(t, b)
 	var limits nativeMinMaxInfo
 	windowUser32.NewProc("SendMessageW").Call(initial, 0x0024, 0, uintptr(unsafe.Pointer(&limits)))
 	width, height := fixed.Right-fixed.Left, fixed.Bottom-fixed.Top

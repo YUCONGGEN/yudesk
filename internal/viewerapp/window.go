@@ -295,6 +295,47 @@ func (b *appWindow) Minimize() error {
 	return setAppWindowState(c, id, "minimized")
 }
 
+// Fullscreen changes only the local YuDesk shell. The page applies its own
+// matching layout after this succeeds, so remote input and session state stay
+// in the same renderer instead of opening another window.
+func (b *appWindow) Fullscreen(enabled bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.shell != nil {
+		action := "exit-fullscreen"
+		if enabled {
+			action = "enter-fullscreen"
+		}
+		return b.shell.send(action, "")
+	}
+	if handled, err := b.fullscreenNativeWindow(enabled); handled {
+		return err
+	}
+	if b.profile == "" {
+		return errors.New("当前页面不是 YuDesk 独立窗口")
+	}
+	c, err := b.connection()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	id, err := b.target(c)
+	if err != nil {
+		return err
+	}
+	if enabled {
+		return setAppWindowState(c, id, "fullscreen")
+	}
+	if err = setAppWindowState(c, id, "normal"); err != nil {
+		return err
+	}
+	var result struct{ WindowID int }
+	if err = windowCommand(c, "Browser.getWindowForTarget", map[string]any{"targetId": id}, &result); err != nil {
+		return err
+	}
+	return windowCommand(c, "Browser.setWindowBounds", map[string]any{"windowId": result.WindowID, "bounds": map[string]any{"width": appWindowWidth, "height": appWindowHeight}}, nil)
+}
+
 // Windows hides the actual owned host and keeps its renderer/session intact.
 // Its destruction watcher remains active, so a renderer crash cannot leave a
 // hidden, unresponsive Go app. Platforms without a host close only their UI.

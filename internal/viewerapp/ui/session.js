@@ -55,8 +55,25 @@ if(canControl){
   document.addEventListener('visibilitychange',()=>{if(document.hidden)releaseAll();});
   window.addEventListener('pagehide',()=>{navigator.sendBeacon(api('/api/input/release'),new Blob(['{}'],{type:'application/json'}));});
 }
-async function fullscreen(){try{if(document.fullscreenElement)await document.exitFullscreen();else await desktop.requestFullscreen();(canControl?keyboardCapture:screen).focus({preventScroll:true});}catch(e){showError(e);}}
-$('fullscreen').onclick=fullscreen;$('exitFullscreen').onclick=fullscreen;
+let shellFullscreen=false,fullscreenBusy=false;
+async function setSessionFullscreen(enabled){
+  if(fullscreenBusy||enabled===shellFullscreen)return;
+  fullscreenBusy=true;$('fullscreen').disabled=true;$('exitFullscreen').disabled=true;
+  try{
+    await post('/api/ui/fullscreen',{enabled});
+    shellFullscreen=enabled;document.body.classList.toggle('remote-fullscreen',enabled);
+    $('fullscreen').textContent=enabled?'退出整屏':'整屏显示';
+    (canControl?keyboardCapture:screen).focus({preventScroll:true});
+  }catch(error){
+    // Unmanaged development browsers retain the standards-based fallback.
+    try{if(enabled&&!document.fullscreenElement)await desktop.requestFullscreen();else if(!enabled&&document.fullscreenElement)await document.exitFullscreen();}
+    catch(_){showError(error);}
+  }finally{fullscreenBusy=false;$('fullscreen').disabled=false;$('exitFullscreen').disabled=false;}
+}
+function fullscreen(){return setSessionFullscreen(!shellFullscreen);}
+$('fullscreen').onclick=fullscreen;$('exitFullscreen').onclick=()=>setSessionFullscreen(false);
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&shellFullscreen){event.preventDefault();setSessionFullscreen(false);}});
+window.addEventListener('pagehide',()=>{if(shellFullscreen)fetch(api('/api/ui/fullscreen'),{method:'POST',headers:{'Content-Type':'application/json'},body:'{"enabled":false}',keepalive:true}).catch(()=>{});});
 function panelState(){const visible=innerWidth<=900?document.body.classList.contains('show-panel'):!document.body.classList.contains('hide-panel');$('settings').setAttribute('aria-expanded',String(visible));}
 $('settings').onclick=()=>{if(innerWidth<=900){document.body.classList.remove('hide-panel');document.body.classList.toggle('show-panel');}else{document.body.classList.toggle('hide-panel');}panelState();};
 window.addEventListener('resize',panelState);panelState();

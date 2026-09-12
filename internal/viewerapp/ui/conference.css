@@ -17,12 +17,15 @@
 .conference-code:hover{background:#f0f6fd;color:#087ff2}
 .conference-code svg,.conference-head-button svg{width:14px;height:14px}
 .conference-connection{margin-left:auto;color:#8d97a5;font-size:11px}
+.conference-sharing{max-width:220px;padding:4px 9px;overflow:hidden;border:1px solid #cdebdc;border-radius:12px;background:#effbf5;color:#23885c;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
 .conference-recording{color:#e45d64;font-size:11px}
 .conference-head-button{min-height:29px;padding:4px 10px;border:1px solid #dce3eb;border-radius:6px;background:#fff;color:#607083;font-size:11px}
 .conference-head-button:hover{border-color:#bcd7f4;background:#edf6ff;color:#087ff2}
 .conference-stage{flex:1;min-height:0;display:flex;background:#f5f6f7}
 .conference-grid{flex:1;min-width:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));grid-auto-rows:minmax(150px,1fr);gap:12px;padding:14px;overflow:auto;background:#f5f6f7}
 .conference-tile{position:relative;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid #e1e7ee;border-radius:10px;background:#fff;box-shadow:0 1px 4px rgba(36,52,74,.045)}
+.conference-tile.shareable{cursor:zoom-in;border-color:#a8d5fb;box-shadow:0 0 0 1px rgba(8,127,242,.08),0 5px 18px rgba(8,104,196,.10)}
+.conference-tile.shareable:focus-visible{outline:2px solid #087ff2;outline-offset:-3px}
 .conference-tile video{width:100%;height:100%;display:block;object-fit:cover;background:#fff}
 .conference-tile.local video:not(.screen){transform:scaleX(-1)}
 .conference-tile video.screen{object-fit:contain;background:#eef1f5}
@@ -32,17 +35,42 @@
 .conference-tile-state{position:absolute;top:9px;right:9px;display:flex;gap:5px}
 .conference-tile-state span{display:grid;place-items:center;min-width:22px;height:22px;padding:0 7px;border:1px solid #e3e8ee;border-radius:11px;background:rgba(255,255,255,.92);color:#8994a2;font-size:9px;backdrop-filter:blur(7px)}
 .conference-tile-state .active{border-color:#cdebdc;background:rgba(239,251,245,.94);color:#299b68}
+.conference-grid.conference-grid-focused{display:block;padding:0;background:#0f151d;overflow:hidden}
+.conference-grid.conference-grid-focused .conference-tile{display:none}
+.conference-grid.conference-grid-focused .conference-tile.conference-focused{width:100%;height:100%;display:flex;border:0;border-radius:0;box-shadow:none;cursor:zoom-out}
+.conference-grid.conference-grid-focused .conference-tile.conference-focused video{object-fit:contain;background:#0f151d}
+.conference-grid.conference-grid-focused .conference-tile-name{left:14px;bottom:14px}
 .conference-members{width:240px;flex:0 0 240px;overflow:auto;border-left:1px solid #e8ebef;background:#fff}
 .conference-members-head{height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid #e8edf2;color:#2b333e;font-size:13px}
 .conference-members-head span{color:#8995a3;font-size:10px}
+.conference-member-search{height:42px;display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid #edf0f3;color:#8a96a5;font-size:10px}
+.conference-member-search input{min-width:0;width:100%;height:29px;margin:0;padding:4px 8px;border:1px solid #dfe6ee;border-radius:7px;background:#f8fafc;color:#2b333e;font-size:10px;outline:none}
+.conference-member-search input:focus{border-color:#89c4f8;background:#fff;box-shadow:0 0 0 2px rgba(8,127,242,.08)}
 .conference-member{display:grid;grid-template-columns:30px minmax(0,1fr) auto;align-items:center;gap:9px;min-height:56px;padding:8px 13px;border-bottom:1px solid #edf0f3}
+.conference-member.host-manageable{cursor:context-menu}
+.conference-member.host-manageable:hover{background:#f7faff}
 .conference-member-avatar{width:30px;height:30px;display:grid;place-items:center;border-radius:50%;background:#e3f3ff;color:#008bf0;font-size:11px;font-weight:650}
 .conference-member strong{display:block;overflow:hidden;color:#2b333e;font-size:11px;font-weight:550;text-overflow:ellipsis;white-space:nowrap}
 .conference-member small{display:block;margin-top:3px;color:#8c97a4;font-size:9px}
-.conference-member button{min-height:25px;padding:3px 7px;border-radius:6px;background:#edf6ff;color:#087ff2;font-size:9px}
+.conference-member button{min-width:28px;min-height:25px;padding:3px 7px;border:0;border-radius:6px;background:#edf6ff;color:#087ff2;font-size:13px;line-height:1}
+.conference-member-empty{margin:18px 12px;color:#9aa5b2;font-size:10px;text-align:center}
+.conference-member-menu{position:fixed;z-index:60;width:148px;padding:5px;border:1px solid #dfe6ee;border-radius:9px;background:rgba(255,255,255,.98);box-shadow:0 12px 34px rgba(24,47,78,.18);backdrop-filter:blur(12px)}
+.conference-member-menu button{width:100%;min-height:32px;display:flex;justify-content:flex-start;padding:6px 10px;border:0;border-radius:6px;background:transparent;color:#394b5f;font-size:11px;text-align:left}
+.conference-member-menu button:hover{background:#edf6ff;color:#087ff2}
+.conference-member-menu button.danger{color:#c84e55}
+.conference-member-menu button.danger:hover{background:#fff1f2;color:#bd3f47}
+.conference-member-info{width:min(390px,calc(100vw - 32px));padding:0;border:0;border-radius:14px;background:#fff;color:#2b333e;box-shadow:0 22px 65px rgba(15,37,65,.24)}
+.conference-member-info::backdrop{background:rgba(18,30,46,.38);backdrop-filter:blur(3px)}
+.conference-member-info>div{padding:20px}
+.conference-member-info h2{margin:0;color:#202c3a;font-size:16px}
+.conference-member-info dl{display:grid;grid-template-columns:76px minmax(0,1fr);gap:10px 14px;margin:17px 0;color:#34475c;font-size:11px}
+.conference-member-info dt{color:#8b98a8}.conference-member-info dd{margin:0;overflow-wrap:anywhere}
+.conference-member-info footer{display:flex;justify-content:flex-end;padding-top:3px}
+.conference-member-info button{min-height:31px;padding:5px 15px;border:0;border-radius:7px;background:#087ff2;color:#fff;font-size:11px}
 .conference-toolbar{height:78px;flex:0 0 78px;display:flex;align-items:center;justify-content:center;gap:10px;padding:7px 18px;border-top:1px solid #e8ebef;background:#fff}
 .conference-toolbar button{width:74px;min-height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;border:0;border-radius:8px;background:transparent;color:#657382}
 .conference-toolbar button:hover{background:#edf6ff;color:#087ff2}
+.conference-toolbar button:disabled{opacity:.68;cursor:wait;background:#f2f5f8;color:#8795a5}
 .conference-toolbar button[aria-pressed="true"]{background:transparent;color:#087ff2}
 .conference-toolbar button[aria-pressed="false"] svg{color:#e75e64}
 .conference-toolbar button svg{width:23px;height:23px}
@@ -55,8 +83,10 @@
 .conference-live main,.conference-live .content,.conference-live #pane-meeting{width:100%;height:100%;max-width:none;padding:0;margin:0}
 .conference-live #meetingLobby{display:none}
 .conference-live .conference-room{border:0;border-radius:0;box-shadow:none}
-.conference-fullscreen .conference-head{display:none}
+.conference-room:fullscreen{width:100vw;height:100vh;border:0;border-radius:0}
 .conference-fullscreen .conference-toolbar{height:72px;flex-basis:72px}
+.conference-fullscreen .conference-head{height:48px;flex-basis:48px;background:rgba(255,255,255,.97)}
+.conference-fullscreen .conference-head-button{border-color:#b9d8f5;background:#edf6ff;color:#087ff2}
 .conference-live .notice{top:68px;bottom:auto;z-index:30;pointer-events:none;border:1px solid #d8e7fa;background:rgba(247,251,255,.96);color:#44617f}
 @media(max-width:680px){#pane-meeting .meeting-grid{gap:9px}.conference-grid{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));padding:9px;gap:8px}.conference-members{width:188px;flex-basis:188px}.conference-toolbar{gap:3px;padding-right:8px;padding-left:8px}.conference-toolbar button{width:62px}}
 @media(max-width:500px){#pane-meeting .meeting-grid{grid-template-columns:1fr 1fr}#pane-meeting .meeting-card{padding:10px}#pane-meeting .meeting-card-head p{display:none}#pane-meeting .meeting-media-options{flex-direction:column;align-items:flex-start;gap:3px}.conference-stage{position:relative}.conference-members{position:absolute;z-index:4;top:0;right:0;bottom:0;width:195px}.conference-head{gap:7px;padding:0 10px}.conference-connection{display:none}.conference-toolbar{justify-content:space-around;gap:0}.conference-toolbar button{width:54px}.conference-toolbar .conference-danger{width:70px;margin-left:2px}}

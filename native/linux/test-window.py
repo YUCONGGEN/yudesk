@@ -104,6 +104,19 @@ def run(test_binary, production_binary, output):
         time.sleep(.35)
         state=p.state(); assert state['width']==860 and state['height']==600,state
         print('PASS fixed 860x600 undecorated shell rejects window-manager resize',flush=True)
+        p.send('enter-fullscreen')
+        for _ in range(50):
+            state=p.state()
+            if state['width']==1280 and state['height']==800: break
+            time.sleep(.1)
+        assert state['width']==1280 and state['height']==800,state
+        p.send('exit-fullscreen')
+        for _ in range(50):
+            state=p.state()
+            if state['width']==860 and state['height']==600: break
+            time.sleep(.1)
+        assert state['width']==860 and state['height']==600,state
+        print('PASS native fullscreen occupies the virtual monitor and restores fixed bounds',flush=True)
         value=None
         for _ in range(30):
             value=p.evaluate('window.featureResult')

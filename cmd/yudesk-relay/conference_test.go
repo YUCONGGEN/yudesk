@@ -129,6 +129,42 @@ func TestConferenceSignalingJoinsTransfersHostAndEnds(t *testing.T) {
 		t.Fatalf("stale peer signal disconnected sender: %+v", pong)
 	}
 
+	removedPublic, removedPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	removedDevice := secureconn.DeviceID(removedPublic)
+	if err := store.RegisterLicensedDevice(removedDevice, removedPublic); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GrantDeviceLicense(removedDevice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := relay.DialConference(ctx, listener.Addr().String(), options, removedDevice, removedPrivate, meeting.Code, "待移出成员", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removedDecoder := json.NewDecoder(removed)
+	removedJoinedHost := readConferenceMessage(t, host, hostDecoder)
+	removedJoinedGuest := readConferenceMessage(t, guest, guestDecoder)
+	removedWelcome := readConferenceMessage(t, removed, removedDecoder)
+	if removedJoinedHost.Type != "peer-joined" || removedJoinedHost.JoinedAt == 0 || removedJoinedGuest.Type != "peer-joined" || removedWelcome.JoinedAt == 0 {
+		t.Fatalf("removed participant did not join with metadata: host=%+v guest=%+v welcome=%+v", removedJoinedHost, removedJoinedGuest, removedWelcome)
+	}
+	if err := hostEncoder.Encode(relay.ConferenceMessage{Type: "kick", To: removedWelcome.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if kicked := readConferenceMessage(t, removed, removedDecoder); kicked.Type != "removed" || kicked.Message == "" {
+		t.Fatalf("participant did not receive removal reason: %+v", kicked)
+	}
+	if left := readConferenceMessage(t, host, hostDecoder); left.Type != "peer-left" || left.ID != removedWelcome.ID {
+		t.Fatalf("host did not see removed participant leave: %+v", left)
+	}
+	if left := readConferenceMessage(t, guest, guestDecoder); left.Type != "peer-left" || left.ID != removedWelcome.ID {
+		t.Fatalf("guest did not see removed participant leave: %+v", left)
+	}
+	_ = removed.Close()
+	if _, err := relay.DialConference(ctx, listener.Addr().String(), options, removedDevice, removedPrivate, meeting.Code, "尝试重新加入", false); relay.RejectionCode(err) != "DENIED" {
+		t.Fatalf("removed device rejoined the same meeting: %v", err)
+	}
+
 	if err := guestEncoder.Encode(relay.ConferenceMessage{Type: "signal", To: hostWelcome.ID, Signal: "offer", SDP: "v=0\r\n"}); err != nil {
 		t.Fatal(err)
 	}

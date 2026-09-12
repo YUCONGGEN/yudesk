@@ -17,6 +17,7 @@ import (
 
 type conferenceRoom struct {
 	participants map[string]*conferenceParticipant
+	removed      map[string]struct{}
 	hostID       string
 }
 
@@ -27,6 +28,7 @@ type conferenceParticipant struct {
 	done               chan struct{}
 	closeOnce          sync.Once
 	joined             uint64
+	joinedAt           int64
 	microphone         bool
 	camera             bool
 	screen             bool
@@ -34,7 +36,7 @@ type conferenceParticipant struct {
 }
 
 func (p *conferenceParticipant) peer(host string) relay.ConferencePeer {
-	return relay.ConferencePeer{ID: p.id, Name: p.name, Host: p.id == host, Microphone: p.microphone, Camera: p.camera, Screen: p.screen, Recording: p.recording}
+	return relay.ConferencePeer{ID: p.id, Name: p.name, JoinedAt: p.joinedAt, Host: p.id == host, Microphone: p.microphone, Camera: p.camera, Screen: p.screen, Recording: p.recording}
 }
 
 func (p *conferenceParticipant) close() {
@@ -84,8 +86,10 @@ func (b *broker) handleConference(c net.Conn, reader *bufio.Reader, hello relay.
 	conferenceReady := hello.Action == "host" || room.conference != nil && room.conference.hostID != ""
 	participantCount := 0
 	duplicateDevice := false
+	removedDevice := false
 	if room.conference != nil {
 		participantCount = len(room.conference.participants)
+		_, removedDevice = room.conference.removed[hello.ID]
 		for _, participant := range room.conference.participants {
 			if participant.deviceID == hello.ID {
 				duplicateDevice = true
@@ -113,6 +117,10 @@ func (b *broker) handleConference(c net.Conn, reader *bufio.Reader, hello relay.
 		stop("BUSY", "this device is already in the meeting")
 		return
 	}
+	if removedDevice {
+		stop("DENIED", "this device was removed from the meeting")
+		return
+	}
 	if participantCount >= relay.MaxConferenceParticipants {
 		stop("BUSY", "meeting is full")
 		return
@@ -136,7 +144,7 @@ func (b *broker) handleConference(c net.Conn, reader *bufio.Reader, hello relay.
 	if err != nil {
 		return
 	}
-	p := &conferenceParticipant{id: participantID, deviceID: hello.ID, name: hello.Name, conn: c, send: make(chan relay.ConferenceMessage, 64), done: make(chan struct{})}
+	p := &conferenceParticipant{id: participantID, deviceID: hello.ID, name: hello.Name, joinedAt: time.Now().UnixMilli(), conn: c, send: make(chan relay.ConferenceMessage, 64), done: make(chan struct{})}
 	b.Lock()
 	room, exists = b.meetings[hello.Room]
 	if !exists || !room.expires.After(time.Now()) {
@@ -150,7 +158,7 @@ func (b *broker) handleConference(c net.Conn, reader *bufio.Reader, hello relay.
 			p.close()
 			return
 		}
-		room.conference = &conferenceRoom{participants: make(map[string]*conferenceParticipant)}
+		room.conference = &conferenceRoom{participants: make(map[string]*conferenceParticipant), removed: make(map[string]struct{})}
 	}
 	if len(room.conference.participants) >= relay.MaxConferenceParticipants || (hello.Action == "host" && room.deviceID != hello.ID) || (hello.Action == "join" && room.conference.hostID == "") {
 		b.Unlock()
@@ -164,6 +172,11 @@ func (b *broker) handleConference(c net.Conn, reader *bufio.Reader, hello relay.
 			return
 		}
 	}
+	if _, removed := room.conference.removed[hello.ID]; removed {
+		b.Unlock()
+		p.close()
+		return
+	}
 	b.conferenceSeq++
 	p.joined = b.conferenceSeq
 	peers := make([]relay.ConferencePeer, 0, len(room.conference.participants))
@@ -176,8 +189,8 @@ func (b *broker) handleConference(c net.Conn, reader *bufio.Reader, hello relay.
 	}
 	b.meetings[hello.Room] = room
 	hostID := room.conference.hostID
-	b.broadcastConferenceLocked(room.conference, relay.ConferenceMessage{Type: "peer-joined", ID: p.id, Name: p.name, Host: hostID}, p.id)
-	welcome := relay.ConferenceMessage{Type: "welcome", ID: p.id, Name: p.name, Host: hostID, Peers: peers}
+	b.broadcastConferenceLocked(room.conference, relay.ConferenceMessage{Type: "peer-joined", ID: p.id, Name: p.name, JoinedAt: p.joinedAt, Host: hostID}, p.id)
+	welcome := relay.ConferenceMessage{Type: "welcome", ID: p.id, Name: p.name, JoinedAt: p.joinedAt, Host: hostID, Peers: peers}
 	if b.conferenceTURN != nil {
 		welcome.RTC = b.conferenceTURN.policy(hello.Room, p.id, room.expires, b.conferenceSTUN, b.conferenceDirectTimeoutMS)
 	} else if b.conferenceSTUN != "" {
@@ -291,6 +304,22 @@ func (b *broker) applyConferenceMessage(code string, p *conferenceParticipant, m
 		b.broadcastConferenceLocked(conference, relay.ConferenceMessage{Type: "state", ID: p.id, Microphone: p.microphone, Camera: p.camera}, "")
 		conference.hostID = message.To
 		b.broadcastConferenceLocked(conference, relay.ConferenceMessage{Type: "host", Host: conference.hostID}, "")
+	case "kick":
+		if conference.hostID != p.id || message.To == p.id {
+			return false
+		}
+		target := conference.participants[message.To]
+		if target == nil {
+			return true
+		}
+		if conference.removed == nil {
+			conference.removed = make(map[string]struct{})
+		}
+		conference.removed[target.deviceID] = struct{}{}
+		b.queueConferenceLocked(target, relay.ConferenceMessage{Type: "removed", Message: "你已被主持人移出本次会议"})
+		// Let the participant's single writer flush the styled reason before the
+		// connection is closed. leaveConference then broadcasts peer-left.
+		time.AfterFunc(300*time.Millisecond, target.close)
 	case "end":
 		if conference.hostID != p.id {
 			return false

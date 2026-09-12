@@ -2,6 +2,7 @@ package viewerapp
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -91,6 +92,27 @@ func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHo
 			}
 			if err = h.window.SetDragRegions(regions); err != nil {
 				http.Error(w, err.Error(), 503)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path == "/api/ui/fullscreen" {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			var command struct {
+				Enabled bool `json:"enabled"`
+			}
+			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&command) != nil || decoder.Decode(&struct{}{}) != io.EOF {
+				http.Error(w, "invalid fullscreen command", http.StatusBadRequest)
+				return
+			}
+			if err := h.window.Fullscreen(command.Enabled); err != nil {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
 				return
 			}
 			w.WriteHeader(http.StatusNoContent)

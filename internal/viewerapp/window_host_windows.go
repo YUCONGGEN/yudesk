@@ -32,6 +32,7 @@ const (
 	nativeHide               = 0x8006
 	nativeDrag               = 0x8007
 	nativeDragRegionsChanged = 0x8008
+	nativeFullscreen         = 0x8009
 )
 
 var nativeGetRect = windowUser32.NewProc("GetWindowRect")
@@ -48,10 +49,17 @@ var nativeEnumChildren = windowUser32.NewProc("EnumChildWindows")
 var nativeGetDPIContext = windowUser32.NewProc("GetWindowDpiAwarenessContext")
 var nativeSetDPIContext = windowUser32.NewProc("SetThreadDpiAwarenessContext")
 var nativePostThreadMessage = windowUser32.NewProc("PostThreadMessageW")
+var nativeMonitorFromWindow = windowUser32.NewProc("MonitorFromWindow")
+var nativeGetMonitorInfo = windowUser32.NewProc("GetMonitorInfoW")
 
 type nativeRect struct{ Left, Top, Right, Bottom int32 }
 type nativePoint struct{ X, Y int32 }
 type nativeMinMaxInfo struct{ Reserved, MaxSize, MaxPosition, MinTrackSize, MaxTrackSize nativePoint }
+type nativeMonitorInfo struct {
+	Size          uint32
+	Monitor, Work nativeRect
+	Flags         uint32
+}
 
 // Chromium's --app caption is also drawn INSIDE its Win32 client area. Changing
 // WS_CAPTION alone cannot remove it. A fixed-size, captionless window owned by Go
@@ -75,6 +83,8 @@ type nativeAppWindow struct {
 	dragRegions    atomic.Pointer[windowDragRegions]
 	dragChildren   []uintptr          // host GUI thread only
 	lastDragLayout *windowDragRegions // geometry only; lease is read separately
+	fullscreen     bool
+	restoreRect    nativeRect
 }
 
 var nativeWindows sync.Map
@@ -146,6 +156,9 @@ var nativeWindowProc = syscall.NewCallback(func(hwnd uintptr, msg uint32, wp, lp
 			return 0
 		case nativeDragRegionsChanged:
 			n.layoutDragRegions()
+			return 0
+		case nativeFullscreen:
+			n.setFullscreen(wp != 0)
 			return 0
 		case 0x02e0: // WM_DPICHANGED: retain the suggested bounds on the new monitor
 			var r nativeRect
@@ -242,6 +255,49 @@ func (n *nativeAppWindow) show() {
 	}
 	nativeShowWindow.Call(n.hwnd.Load(), command)
 	trayForeground.Call(n.hwnd.Load())
+}
+
+// Runs on the native host thread. The ordinary shell remains fixed-size, but
+// an explicit in-session fullscreen request may temporarily use the complete
+// monitor and then restore the exact previous bounds.
+func (n *nativeAppWindow) setFullscreen(enabled bool) {
+	if enabled == n.fullscreen {
+		return
+	}
+	hwnd := n.hwnd.Load()
+	if hwnd == 0 {
+		return
+	}
+	if enabled {
+		var restore nativeRect
+		if ok, _, _ := nativeGetRect.Call(hwnd, uintptr(unsafe.Pointer(&restore))); ok == 0 {
+			return
+		}
+		monitor, _, _ := nativeMonitorFromWindow.Call(hwnd, 2)
+		info := nativeMonitorInfo{Size: uint32(unsafe.Sizeof(nativeMonitorInfo{}))}
+		if monitor == 0 {
+			return
+		}
+		if ok, _, _ := nativeGetMonitorInfo.Call(monitor, uintptr(unsafe.Pointer(&info))); ok == 0 {
+			return
+		}
+		n.restoreRect = restore
+		n.fullscreen = true
+		n.fixedWidth.Store(info.Monitor.Right - info.Monitor.Left)
+		n.fixedHeight.Store(info.Monitor.Bottom - info.Monitor.Top)
+		setAppWindowPos.Call(hwnd, 0, uintptr(info.Monitor.Left), uintptr(info.Monitor.Top), uintptr(info.Monitor.Right-info.Monitor.Left), uintptr(info.Monitor.Bottom-info.Monitor.Top), windowFrameChanged|windowNoZOrder)
+	} else {
+		restore := n.restoreRect
+		if restore.Right <= restore.Left || restore.Bottom <= restore.Top {
+			return
+		}
+		n.fullscreen = false
+		n.fixedWidth.Store(restore.Right - restore.Left)
+		n.fixedHeight.Store(restore.Bottom - restore.Top)
+		setAppWindowPos.Call(hwnd, 0, uintptr(restore.Left), uintptr(restore.Top), uintptr(restore.Right-restore.Left), uintptr(restore.Bottom-restore.Top), windowFrameChanged|windowNoZOrder)
+	}
+	_ = n.layout()
+	n.layoutDragRegions()
 }
 
 func (n *nativeAppWindow) run() {
@@ -532,6 +588,25 @@ func (b *appWindow) hideNativeWindow() (bool, error) {
 		return true, errors.New("YuDesk 窗口已关闭")
 	}
 	ok, _, err := postAppWindowMessage.Call(hwnd, nativeHide, 0, 0)
+	if ok == 0 {
+		return true, err
+	}
+	return true, nil
+}
+
+func (b *appWindow) fullscreenNativeWindow(enabled bool) (bool, error) {
+	if b.native == nil {
+		return false, nil
+	}
+	hwnd := b.native.ownedHandle()
+	if hwnd == 0 || b.native.closing.Load() {
+		return true, errors.New("YuDesk 窗口已关闭")
+	}
+	wparam := uintptr(0)
+	if enabled {
+		wparam = 1
+	}
+	ok, _, err := postAppWindowMessage.Call(hwnd, nativeFullscreen, wparam, 0)
 	if ok == 0 {
 		return true, err
 	}

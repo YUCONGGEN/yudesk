@@ -138,6 +138,8 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         case "show": guard window != nil else { emit("error", "not_open"); return }; show()
         case "hide": guard let window = window else { emit("error", "not_open"); return }; window.orderOut(nil); NSApp.setActivationPolicy(.accessory)
         case "minimize": guard let window = window else { emit("error", "not_open"); return }; NSApp.setActivationPolicy(.regular); window.miniaturize(nil)
+        case "enter-fullscreen": setFullscreen(true)
+        case "exit-fullscreen": setFullscreen(false)
         case "close": stop()
         default: emit("error", "invalid_command")
         }
@@ -162,6 +164,7 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         let win = ShellWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 600),
                               styleMask: [.borderless, .miniaturizable], backing: .buffered, defer: false)
         win.title = "YuDesk"; win.delegate = self; win.isReleasedWhenClosed = false
+        win.collectionBehavior.insert(.fullScreenPrimary)
         win.contentMinSize = NSSize(width: 860, height: 600)
         win.contentMaxSize = NSSize(width: 860, height: 600)
         win.hasShadow = true; win.backgroundColor = .windowBackgroundColor
@@ -181,6 +184,11 @@ final class Shell: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigati
         NSApp.setActivationPolicy(.regular)
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    }
+    private func setFullscreen(_ enabled: Bool) {
+        guard let window = window else { emit("error", "not_open"); return }
+        let active = window.styleMask.contains(.fullScreen)
+        if active != enabled { window.toggleFullScreen(nil) }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if !commandedClose { emit("closed"); commandedClose = true }
