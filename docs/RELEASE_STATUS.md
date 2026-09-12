@@ -1,6 +1,32 @@
 # 当前部署状态（2026-09-12）
 
-## 当前会议全屏恢复与真实声流：`meeting-fullscreen-audio-20260912.8`
+## 当前外网自适应延迟与 Windows 重启稳定：`low-latency-restart-20260912.9`
+
+桌面 **2.0.0** 与 Android **2.0.0-preview.15 / 2000015** 已于 **2026-09-12 23:34（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包均已更新；iOS 与原生鸿蒙继续暂停。
+
+- 远程区域流、兼容整帧流和 Android 被控端共用 RTT 自适应在途窗口：首次连接保守为 2 帧，随后按最低 ACK RTT 在 2～8 帧间调整；约 100 ms 链路可保留约 3 帧，低 RTT 不再维持固定 100 ms 积压。平滑 RTT 相对最低 RTT 的增长只触发退让，不会反向扩大窗口。
+- 自适应远控收到输入后，前 100 ms 在采集成本允许时最高 120 Hz 检查画面，之后保持到 350 ms、最高 60 Hz 的尾段，减少菜单、网页和动画延迟重绘被漏过的机会；输入、采集、编码和网络仍是独立有界链路，不积压无限旧帧。
+- 桌面浏览器和 Android 会议按参会连接数、ICE 候选链路 RTT 与 `availableOutgoingBitrate` 动态限制视频发送器；摄像头与共享屏幕采用独立预算，拥塞时优先保持帧连续性和语音。Android 同步启用低延迟音频、快速抖动缓冲追赶、DSCP 和 CPU 过载检测。
+- Windows 重复启动或渲染器退出后恢复时，原生宿主先隐藏并使用 DWM cloak 隔离 Chromium 顶层窗口，完成嵌入、样式确认和合成器刷新后再显示，避免用户看到独立浏览器窗口闪一下；失败路径仍会自动解除隐藏，防止窗口永久不可见。
+- Windows 原生窗口回归连续三轮通过，覆盖初次嵌入、渲染器退出后重启和样式等待；根模块全量 Go 测试、`go vet ./...` 及 `internal/viewerapp` 竞态测试通过。Android 四 ABI Go 核心、Java 单测、lint、APK v2 签名和 16 KiB 对齐通过。Linux revision 14 在 Ubuntu 22.04 构建；macOS revision 14 由真实 Mac SDK 重新打包并通过应用 ad-hoc strict/deep 验签。
+- 部署前连续两次确认参与连接和活动会话均为 0；发布事务备份数据库和旧制品后短暂重启，当前 PID **14894**。`/healthz`、未登录后台 401、SQLite `quick_check`、TCP 8233/8235/8254 与 UDP 8233/8254 监听均通过，最近日志没有 panic、fatal error 或 data race。
+- 服务器 TLS 指纹保持 `20FC953E48B6BEED7FB3A5F73BF177CC4E2557CF274C409FF4F0179E5FA0F836`。发布目录 `/Users/yu/bin/yudesk/releases/low-latency-restart-20260912.9`，可恢复备份 `/Users/yu/bin/yudesk/backups/low-latency-restart-20260912.9`；数据库账号 0、激活码 9、已授权设备 344，完整性为 `ok`。
+- 五个平台安装文件均从公网域名完整重新下载并与本地产物 SHA-256 一致，Android 1 MiB Range 请求返回 `206`。官网显示版本 2.0.0、发布日期 2026-09-12 23:34（北京时间）；发布后在线设备从 2 变化为 1、参与连接和活动会话均为 0，说明公开数量仍为实时状态。
+
+| 当前产物 | SHA-256 |
+| --- | --- |
+| Windows x64 一体化安装器 | `59e3dcb1b8a2f6a731eb570331dfac8f40ee6ff894414fe40c2aa21d148fba63` |
+| Linux x64 DEB revision 14 | `92efbd38d4585b29895c588eff1d9661cc9bad5341fe36a224a6c3a7af448950` |
+| macOS Intel PKG revision 14 | `6f1affec6e354e776d411211f9db46375aac5624481bf5dac20ac81ea93a68d4` |
+| macOS Apple Silicon PKG revision 14 | `32b36f1edc9ec2c0c76e9449713aa017746b9b1726d874f85b38addda96554ea` |
+| Android preview.15 APK | `ffdbc98b2fc7296ec4adbfb21fc3279bf8ba79d155755f8a2f615bd54bf65dd5` |
+| macOS 服务端 | `c3480d632ebbc384c888a9d3ecb503110b638a1a4bc2fa6d348e5dc00a43f371` |
+
+物理 RTT 仍由公网路由决定，本批次减少的是客户端排队、欠填充和迟到画面，不能承诺零延迟。Android 不同厂商物理手机、Linux/macOS 图形输入和长时间弱网仍需真机验收；macOS 外层 PKG 仍未 Developer ID 签名或公证，Android 仍为调试证书签名的预览版。
+
+完整变更见 [本次发布说明](RELEASE_NOTES_20260912.md)、[低延迟设计与验收](LOW_LATENCY.md)、[多人会议说明](CONFERENCE_20260911.md) 和 [Android 说明](ANDROID.md)。
+
+## 上一批会议全屏恢复与真实声流：`meeting-fullscreen-audio-20260912.8`
 
 桌面 **2.0.0** 与 Android **2.0.0-preview.15 / 2000015** 已于 **2026-09-12 21:14（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包均已更新；iOS 与原生鸿蒙继续暂停。
 

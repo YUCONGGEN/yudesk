@@ -1,9 +1,9 @@
-name: publish-installer-polish-20260911-6
+name: publish-low-latency-restart-20260912-9
 
 on:
   push:
     tags:
-      - 'v2.0.0-installer-polish-20260911.6'
+      - 'v2.0.0-low-latency-restart-20260912.9'
 
 permissions:
   contents: write
@@ -34,11 +34,11 @@ jobs:
             --output release/YuDesk-2.0.0-darwin-arm64.pkg
           curl --fail --location --retry 4 --silent --show-error \
             http://www.yucg.cn:8235/download/android/yudesk.apk \
-            --output release/YuDesk-2.0.0-android-preview.13.apk
+            --output release/YuDesk-2.0.0-android-preview.15.apk
           curl --fail --location --retry 4 --silent --show-error \
             http://www.yucg.cn:8235/THIRD_PARTY_NOTICES.txt \
             --output release/THIRD_PARTY_NOTICES.txt
-          cp docs/RELEASE_SHA256_20260911.txt release/SHA256SUMS.txt
+          cp docs/RELEASE_SHA256_20260912.txt release/SHA256SUMS.txt
           cd release
           sha256sum --check SHA256SUMS.txt
 
@@ -50,14 +50,14 @@ jobs:
           set -euo pipefail
           gh release create "$GITHUB_REF_NAME" release/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title 'YuDesk 2.0.0 一体化安装与 Android 界面优化' \
-            --notes-file docs/RELEASE_NOTES_20260911.md \
+            --title 'YuDesk 2.0.0 外网延迟与启动稳定性更新' \
+            --notes-file docs/RELEASE_NOTES_20260912.md \
             --verify-tag
           test "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" = '7'
           for name in \
             SHA256SUMS.txt \
             THIRD_PARTY_NOTICES.txt \
-            YuDesk-2.0.0-android-preview.13.apk \
+            YuDesk-2.0.0-android-preview.15.apk \
             YuDesk-2.0.0-darwin-amd64.pkg \
             YuDesk-2.0.0-darwin-arm64.pkg \
             YuDesk-2.0.0-linux-amd64.deb \

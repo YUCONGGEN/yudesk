@@ -1,6 +1,6 @@
 # YuDesk 2.0.0
 
-2026-09-12 **会议全屏与真实声流批次 `meeting-fullscreen-audio-20260912.8` 已部署**：修复原生全屏成功后又叠加网页全屏，造成 Esc 无法完全退出、结束会议后主窗口保持放大的问题；每次进入全屏现在都有对应恢复，macOS 也会协调尚未结束的全屏动画。桌面与 Android 会议新增来自真实麦克风/远端 WebRTC 音轨的动态声流和说话高亮，未检测到声音时不显示假动画。Android 当前版本为 **2.0.0-preview.15 / 2000015**。详情见 [本次发布说明](docs/RELEASE_NOTES_20260912.md)、[多人会议说明](docs/CONFERENCE_20260911.md)、[Android 说明](docs/ANDROID.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
+2026-09-12 **外网自适应延迟与 Windows 重启稳定批次 `low-latency-restart-20260912.9` 已部署**：远程画面按最低 ACK RTT 动态控制在途帧数，输入后的快速采集延长为“100 ms 高频 + 350 ms 尾段”，会议桌面与 Android 按连接人数、真实链路 RTT 和可用上行带宽动态分配摄像头/共享屏幕码率。Windows 再次打开或渲染器恢复时会在原生窗口完成嵌入和首帧合成后再显示，消除裸 Chromium 窗口闪现。Android 当前版本为 **2.0.0-preview.15 / 2000015**。详情见 [本次发布说明](docs/RELEASE_NOTES_20260912.md)、[低延迟设计与验收](docs/LOW_LATENCY.md)、[Android 说明](docs/ANDROID.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
 
 2026-09-10 **Android 厂商启动时序热修复 `2.0.0-preview.8`**：用户手机的可恢复故障页确认，部分 Android 11+ 厂商系统会在首个内容视图创建前让 `Window.getWindowInsetsController()` 访问空 `DecorView`；重启只是偶然改变初始化时序。系统栏调用现移到 `setContentView` 之后，并先确保 `DecorView` 已创建。四 ABI 通用 APK 继续保持约 19.2 MB、断点续传和 16 KiB 对齐。Android 8 x86_64 模拟器已完成覆盖安装、冷启动、原生 Go 核心上线和持续进程检查；真实故障手机仍需用新包复核。Windows 同批取消 YuDesk 安装二次确认和设置页闪跳，直接进入系统 UAC。详情见 [Android 说明](docs/ANDROID.md)、[启动修复记录](docs/ANDROID_STARTUP_20260910.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
 
