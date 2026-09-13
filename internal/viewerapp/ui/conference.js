@@ -176,9 +176,13 @@ $('conferenceShare').onclick=()=>{
       }):Promise.resolve();
       const capture=navigator.mediaDevices.getDisplayMedia({
         video:{frameRate:{ideal:30,max:30},width:{ideal:1920},height:{ideal:1080}},
-        audio:true
+        audio:true,
+        systemAudio:'include',
+        windowAudio:'system',
+        selfBrowserSurface:'exclude'
       }).then(stream=>({stream}),error=>({error}));
-      showConferenceToast('请在系统窗口中选择屏幕、窗口或标签页；取消不会退出会议','info',active);
+      const automaticScreenCapture=/Windows/i.test(navigator.userAgent);
+      showConferenceToast(automaticScreenCapture?'正在启动整个屏幕共享，请稍候':'请在系统窗口中选择屏幕、窗口或标签页；取消不会退出会议','info',active);
       await leaveFullscreen;
       const result=await capture;
       if(result.error)throw result.error;
@@ -210,7 +214,7 @@ $('conferenceShare').onclick=()=>{
       updateConferenceControls();
       updateConferenceSharing();
       const withAudio=screen.getAudioTracks().length>0;
-      showConferenceToast(failures.length?'画面已共享，个别成员正在重新连接':withAudio?'屏幕和系统声音正在共享':'屏幕正在共享；共享系统声音需在选择窗口勾选音频',failures.length?'warning':'success',active);
+      showConferenceToast(failures.length?'画面已共享，个别成员正在重新连接':withAudio?'屏幕和系统声音正在共享':automaticScreenCapture?'整个屏幕正在共享；会议语音继续使用麦克风':'屏幕正在共享；共享系统声音需在选择窗口勾选音频',failures.length?'warning':'success',active);
     }catch(error){
       if(conference===active&&active.screen)await stopConferenceShare(active,false).catch(()=>{});
       if(conference===active)showConferenceToast(conferenceShareFailure(error),error?.name==='NotAllowedError'||error?.name==='AbortError'?'info':'error',active);

@@ -96,6 +96,14 @@ func discardRendererProfile(root, profile string) {
 
 func browserProcessArgs(appURL, profile string, headless bool) []string {
 	args := []string{"--app=" + appURL, "--user-data-dir=" + profile, "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", "--no-first-run", "--disable-first-run-ui", "--no-default-browser-check", "--disable-background-mode", "--disable-session-crashed-bubble", "--hide-crash-restore-bubble", "--autoplay-policy=no-user-gesture-required", fmt.Sprintf("--window-size=%d,%d", appWindowWidth, appWindowHeight)}
+	// Edge's desktop-media chooser cannot reliably hit-test its source cards
+	// after the private app HWND is embedded in YuDesk's captionless Windows
+	// host. The browser profile can only reach YuDesk's token-protected loopback
+	// page, and capture is still started solely by the user's Share button, so
+	// select the current screen directly instead of leaving an unusable dialog.
+	if runtime.GOOS == "windows" && !headless {
+		args = append(args, "--auto-select-screen-capture-source")
+	}
 	if headless {
 		args = append(args, "--headless=new", "--disable-gpu")
 	}

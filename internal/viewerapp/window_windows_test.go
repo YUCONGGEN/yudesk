@@ -560,3 +560,65 @@ func TestNativeCaptionGeometry(t *testing.T) {
 	}
 	assertNativeContent(t, h.window)
 }
+
+// This opt-in regression opens only an isolated local fixture. It verifies
+// that Windows capture resolves instead of hanging in Edge's unclickable
+// embedded picker, then immediately stops every local capture track.
+func TestNativeScreenShareBypassesEmbeddedPicker(t *testing.T) {
+	if os.Getenv("YUDESK_NATIVE_SHARE_PICKER") != "1" {
+		t.Skip("opt-in native display-media capture regression")
+	}
+	h := nativeWindowFixture(t)
+	b := h.window
+	if err := b.Show(); err != nil {
+		t.Fatal(err)
+	}
+	c, err := b.connection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	id, err := b.target(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attached struct{ SessionID string }
+	if err := windowCommand(c, "Target.attachToTarget", map[string]any{"targetId": id, "flatten": true}, &attached); err != nil {
+		t.Fatal(err)
+	}
+	defer windowCommand(c, "Target.detachFromTarget", map[string]any{"sessionId": attached.SessionID}, nil)
+	if err := windowSessionCommand(c, attached.SessionID, "Runtime.evaluate", map[string]any{
+		"expression":    `window.__displayMediaResult = "pending"; window.__displayMedia = navigator.mediaDevices.getDisplayMedia({video:true,audio:true,systemAudio:"include",windowAudio:"system",selfBrowserSurface:"exclude"}).then(stream => { window.__displayMediaResult = "selected:" + stream.getVideoTracks().length + ":" + stream.getAudioTracks().length; for (const track of stream.getTracks()) track.stop(); }, error => { window.__displayMediaResult = error.name + ": " + error.message; })`,
+		"returnByValue": true,
+		"userGesture":   true,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var captureStatus string
+	deadline := time.Now().Add(5 * time.Second)
+	for captureStatus == "" || captureStatus == "pending" {
+		var status struct {
+			Result struct {
+				Value string `json:"value"`
+			} `json:"result"`
+		}
+		if err := windowSessionCommand(c, attached.SessionID, "Runtime.evaluate", map[string]any{
+			"expression":    `window.__displayMediaResult`,
+			"returnByValue": true,
+		}, &status); err != nil {
+			t.Fatal(err)
+		}
+		captureStatus = status.Result.Value
+		if captureStatus != "" && captureStatus != "pending" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("screen capture remained pending in Edge's embedded picker: %q", captureStatus)
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	if !strings.HasPrefix(captureStatus, "selected:1:") {
+		t.Fatalf("screen capture did not start: %q", captureStatus)
+	}
+	t.Logf("display-media result=%q", captureStatus)
+}
