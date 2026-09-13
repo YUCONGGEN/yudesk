@@ -24,7 +24,7 @@ after(async()=>{await browser?.close();});
 
 function markup(surface){
   let html=surface==='transition'
-    ?'<!doctype html><html><head><meta charset="utf-8"></head><body data-token="{{.Token}}"><p id="notice" hidden></p></body></html>'
+    ?'<!doctype html><html><head><meta charset="utf-8"><style>html,body{width:100%;height:100%;overflow:hidden}body{margin:0;display:grid;place-items:center}body>div{max-width:70vw;padding:28px 36px;border:1px solid #ddd;border-radius:12px;background:#fff;box-shadow:0 8px 35px #0001}</style></head><body data-token="{{.Token}}"><div class="transition-card">等待对方确认</div><p id="notice" hidden></p></body></html>'
     :read(surface+'.html').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'');
   // Render only inert template values. No dashboard/session script is run;
   // controls and styles still come from their real source templates.
@@ -444,13 +444,14 @@ test('Windows drag delegates to regions inserted after window-ui.js initialized'
 for(const [surface,hideSelector] of [['dashboard','#hideApp'],['transition','[data-window-action="hide"]']]){
   test(surface+': hide, minimize and close are ordered and minimize stays local',async t=>{
     const {page,state}=await fixture(t,{surface});
-    const selectors=[hideSelector,'[data-window-action="minimize"]','[aria-label="关闭应用"]'];
+    const minimizeSelector=surface==='dashboard'?'.topbar [data-window-action="minimize"]':'[data-window-action="minimize"]';
+    const selectors=[hideSelector,minimizeSelector,'[aria-label="关闭应用"]'];
     const domOrder=await page.evaluate(selectors=>{
       const nodes=selectors.map(selector=>document.querySelector(selector));
       return nodes.every((node,index)=>node&&(index===0||!!(nodes[index-1].compareDocumentPosition(node)&Node.DOCUMENT_POSITION_FOLLOWING)));
     },selectors);
     assert.equal(domOrder,true);
-    assert.equal(await page.locator('[data-window-action="minimize"]').count(),1,'do not add a duplicate transition toolbar');
+    assert.equal(await page.locator(minimizeSelector).count(),1,'the active window toolbar must expose one minimize action');
     const boxes=await Promise.all(selectors.map(selector=>page.locator(selector).boundingBox()));
     assert.ok(boxes.every(Boolean));
     assert.ok(boxes[0].x+boxes[0].width<=boxes[1].x+1&&boxes[1].x+boxes[1].width<=boxes[2].x+1,'minimize must be to the right of hide, not just later in the DOM');
@@ -466,6 +467,22 @@ for(const [surface,hideSelector] of [['dashboard','#hideApp'],['transition','[da
     assert.equal(await page.locator('#appConfirm').isVisible(),false);
   });
 }
+
+test('meeting room exposes a working local minimize control',async t=>{
+  const {page,state}=await fixture(t,{surface:'dashboard'});
+  await page.evaluate(()=>{
+    document.querySelector('#pane-meeting').hidden=false;
+    document.querySelector('#conferenceRoom').hidden=false;
+  });
+  const minimize=page.locator('#conferenceMinimize');
+  assert.equal(await minimize.count(),1);
+  assert.equal(await minimize.getAttribute('data-window-action'),'minimize');
+  assert.equal(await minimize.getAttribute('aria-label'),'最小化会议');
+  const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/ui/minimize');
+  await minimize.click();await response;
+  await page.waitForFunction(()=>!document.querySelector('#conferenceMinimize').disabled);
+  assert.deepEqual(state.requests.filter(r=>r.method==='POST').map(({path,body,token})=>({path,body,token})),[{path:'/api/ui/minimize',body:{},token}]);
+});
 
 test('session starts with settings collapsed and exposes only its minimize window action',async t=>{
   const {page,state}=await fixture(t,{surface:'session'});

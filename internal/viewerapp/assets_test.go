@@ -35,7 +35,7 @@ func TestDashboardContainsMultipartyMeetingFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := output.String() + dashboardJS + dashboardCSS + conferenceCSS
-	for _, expected := range []string{"data-tab=\"meeting\"", "快速会议", "9 位会议号", "请输入姓名", "自己立即进入", "/api/local/meeting/start", "/api/local/meeting/end", "/api/local/meeting/resolve", "/api/local/conference", "RTCPeerConnection", "getUserMedia", "getDisplayMedia", "MediaRecorder", "转让主持人", "移出会议", "conferenceMemberSearch", "conference-grid-focused", "conferenceToast", "conferenceShareFailure", "preferredConferenceSharer", "transient user activation"} {
+	for _, expected := range []string{"data-tab=\"meeting\"", "快速会议", "9 位会议号", "请输入姓名", "自己立即进入", "/api/local/meeting/start", "/api/local/meeting/end", "/api/local/meeting/resolve", "/api/local/conference", "RTCPeerConnection", "getUserMedia", "getDisplayMedia", "MediaRecorder", "转让主持人", "移出会议", "conferenceMemberSearch", "conference-grid-focused", "conferenceToast", "conferenceShareFailure", "preferredConferenceSharer", "transient user activation", `id="conferenceMinimize"`, `aria-label="最小化会议"`} {
 		if !strings.Contains(page, expected) {
 			t.Errorf("meeting dashboard does not contain %q", expected)
 		}

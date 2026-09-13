@@ -336,10 +336,13 @@ func TestViewerTransitionPageFollowsLocalMode(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	serveViewerTransitionPage(recorder, "正在连接远程电脑", "请稍候。", "test-token", "session")
 	body := recorder.Body.String()
-	for _, expected := range []string{"/api/ui/mode?access_token=", "location.replace(target)", `data-mode="session"`, "test-token"} {
+	for _, expected := range []string{"/api/ui/mode?access_token=", "location.replace(target)", `data-mode="session"`, "test-token", `class="transition-card"`, ".transition-card{"} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("transition page does not contain %q", expected)
 		}
+	}
+	if strings.Contains(body, "body>div{") {
+		t.Fatal("transition card styles can leak into the full-width window controls")
 	}
 }
 

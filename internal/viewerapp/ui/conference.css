@@ -21,6 +21,7 @@
 .conference-recording{color:#e45d64;font-size:11px}
 .conference-head-button{min-height:29px;padding:4px 10px;border:1px solid #dce3eb;border-radius:6px;background:#fff;color:#607083;font-size:11px}
 .conference-head-button:hover{border-color:#bcd7f4;background:#edf6ff;color:#087ff2}
+.conference-minimize{width:31px;min-width:31px;padding:1px 0;font-size:18px;line-height:1}
 .conference-stage{flex:1;min-height:0;display:flex;background:#f5f6f7}
 .conference-grid{flex:1;min-width:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));grid-auto-rows:minmax(150px,1fr);gap:12px;padding:14px;overflow:auto;background:#f5f6f7}
 .conference-tile{position:relative;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid #e1e7ee;border-radius:10px;background:#fff;box-shadow:0 1px 4px rgba(36,52,74,.045);transition:border-color .12s ease,box-shadow .12s ease}
