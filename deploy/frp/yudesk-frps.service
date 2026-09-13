@@ -1,0 +1,22 @@
+[Unit]
+Description=YuDesk managed FRP server
+After=network-online.target yudesk-relay.service
+Wants=network-online.target
+Requires=yudesk-relay.service
+
+[Service]
+Type=simple
+User=yudesk
+Group=yudesk
+ExecStart=/opt/yudesk/frp/frps -c /opt/yudesk/frp/frps.toml
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/yudesk/frp
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

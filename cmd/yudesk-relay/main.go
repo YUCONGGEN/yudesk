@@ -68,6 +68,12 @@ type broker struct {
 	conferenceTURN            *conferenceTURN
 	conferenceSTUN            string
 	conferenceDirectTimeoutMS int
+	portMaps                  map[string]*serverPortMap
+	portByNumber              map[int]string
+	portMapServer             string
+	portMapCertificate        string
+	portMapHook               string
+	portMapHookMu             sync.Mutex
 }
 
 type adminFlash struct {
@@ -99,6 +105,10 @@ func main() {
 	conferenceTURNRelayMin := flag.Int("conference-turn-relay-min-port", 20200, "first conference TURN UDP relay port")
 	conferenceTURNRelayMax := flag.Int("conference-turn-relay-max-port", 20295, "last conference TURN UDP relay port")
 	conferenceDirectTimeout := flag.Int("conference-direct-timeout-ms", 3000, "P2P conference timeout before TURN fallback")
+	frpPublic := flag.String("frp-public", "", "public FRP control address; empty disables managed port mappings")
+	frpPluginHTTP := flag.String("frp-plugin-http", "127.0.0.1:8236", "loopback HTTP address used only by the local frps authorization plugin")
+	frpCertFile := flag.String("frp-cert", "", "PEM certificate used by frps; required with -frp-public")
+	frpPortHook := flag.String("frp-port-hook", "", "optional absolute helper path for opening and closing NAT ports")
 	flag.Parse()
 	if *downloadHTTP != "" && *publicAccount == "" {
 		log.Fatal("-public-account is required with -download-http")
@@ -111,6 +121,19 @@ func main() {
 	}
 	if *conferenceTURNListen != "" && (*conferenceTURNPublic == "" || *conferenceTURNSecret == "") {
 		log.Fatal("-conference-turn-public and -conference-turn-secret-file are required with -conference-turn")
+	}
+	if *frpPublic != "" {
+		if _, _, splitErr := net.SplitHostPort(*frpPublic); splitErr != nil {
+			log.Fatal("-frp-public must be host:port")
+		}
+		if *frpCertFile == "" {
+			log.Fatal("-frp-cert is required with -frp-public")
+		}
+		if *frpPortHook != "" && !filepath.IsAbs(*frpPortHook) {
+			log.Fatal("-frp-port-hook must be an absolute path")
+		}
+	} else if *frpPortHook != "" {
+		log.Fatal("-frp-port-hook requires -frp-public")
 	}
 	adminKey := ""
 	if *adminKeyFile != "" {
@@ -168,7 +191,31 @@ func main() {
 	if *publicRelay != "" {
 		conferenceSTUN = "stun:" + *publicRelay
 	}
-	b := &broker{devices: map[string]waiting{}, active: map[string]activeSession{}, stopRequests: map[string]string{}, token: *token, accounts: store, deviceLicenses: *deviceLicenses, autoActivate: autoActivate, conferenceSTUN: conferenceSTUN, conferenceDirectTimeoutMS: *conferenceDirectTimeout}
+	portMapCertificate := ""
+	if *frpPublic != "" {
+		certificate, certificateErr := os.ReadFile(*frpCertFile)
+		if certificateErr != nil || !strings.Contains(string(certificate), "BEGIN CERTIFICATE") {
+			log.Fatal("cannot read a valid -frp-cert PEM file")
+		}
+		portMapCertificate = string(certificate)
+	}
+	b := &broker{devices: map[string]waiting{}, active: map[string]activeSession{}, stopRequests: map[string]string{}, token: *token, accounts: store, deviceLicenses: *deviceLicenses, autoActivate: autoActivate, conferenceSTUN: conferenceSTUN, conferenceDirectTimeoutMS: *conferenceDirectTimeout, portMaps: map[string]*serverPortMap{}, portByNumber: map[int]string{}, portMapServer: *frpPublic, portMapCertificate: portMapCertificate, portMapHook: *frpPortHook}
+	if *frpPublic != "" {
+		if cleanupErr := b.cleanupPortMapPorts(); cleanupErr != nil {
+			log.Printf("cannot clean every stale managed port; FRP authorization still rejects them: %v", cleanupErr)
+		}
+		defer func() {
+			if cleanupErr := b.cleanupPortMapPorts(); cleanupErr != nil {
+				log.Printf("cannot clean managed ports during shutdown: %v", cleanupErr)
+			}
+		}()
+		pluginServer, pluginErr := startFRPPluginServer(b, *frpPluginHTTP)
+		if pluginErr != nil {
+			log.Fatal(pluginErr)
+		}
+		defer pluginServer.Close()
+		log.Printf("managed FRP plugin listening on %s; public TCP pool %d-%d via %s", *frpPluginHTTP, portMapMin, portMapMax, *frpPublic)
+	}
 	if *conferenceTURNListen != "" {
 		media, mediaErr := startConferenceTURN(b, conferenceTURNConfig{Listen: *conferenceTURNListen, PublicAddress: *conferenceTURNPublic, SecretFile: *conferenceTURNSecret, Realm: *conferenceTURNRealm, RelayMinPort: *conferenceTURNRelayMin, RelayMaxPort: *conferenceTURNRelayMax})
 		if mediaErr != nil {
@@ -1056,6 +1103,20 @@ func registerStandaloneDeviceRoutes(mux *http.ServeMux, b *broker, adminKey stri
 		b.accounts.Audit(account.AuditEntry{Action: "admin_device_disconnected", DeviceID: deviceID, RemoteAddr: r.RemoteAddr})
 		redirectAdmin(w, r, "设备连接已强制断开，被控端进程终止指令已发送")
 	}))
+	mux.HandleFunc("/admin/port-map/close", admin(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Redirect(w, r, "/admin#port-maps", http.StatusSeeOther)
+			return
+		}
+		mapID := strings.TrimSpace(r.FormValue("map_id"))
+		mapping := b.closePortMapByAdmin(mapID)
+		if mapping == nil {
+			redirectAdmin(w, r, "端口映射不存在或已经关闭")
+			return
+		}
+		b.accounts.Audit(account.AuditEntry{Action: "admin_port_map_closed", DeviceID: mapping.DeviceID, RemoteAddr: r.RemoteAddr, Detail: mapping.PublicAddress})
+		redirectAdmin(w, r, "已关闭 "+mapping.PublicAddress+"，新的公网连接已立即拒绝")
+	}))
 	mux.HandleFunc("/admin/delete", admin(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Redirect(w, r, "/admin", http.StatusSeeOther)
@@ -1263,6 +1324,7 @@ func serveAdminPage(w http.ResponseWriter, r *http.Request, b *broker, generated
 	keyQuery := strings.TrimSpace(queryValues.Get("kq"))
 	keyState := adminAllowedFilter(queryValues.Get("ks"), "available", "used", "expired", "revoked")
 	auditQuery := strings.TrimSpace(queryValues.Get("aq"))
+	portMapQuery := strings.TrimSpace(queryValues.Get("pq"))
 
 	devices, err := b.accounts.ListLicensedDevices(5000)
 	if err != nil {
@@ -1366,6 +1428,16 @@ func serveAdminPage(w http.ResponseWriter, r *http.Request, b *broker, generated
 		filteredDevices = append(filteredDevices, device)
 	}
 	devicePage, devicePager := paginateAdmin(filteredDevices, adminPageNumber(queryValues.Get("dp")), 20, "dp", queryValues)
+	portMapViews := b.adminPortMaps()
+	filteredPortMaps := make([]adminPortMapView, 0, len(portMapViews))
+	portMapNeedle := strings.ToLower(portMapQuery)
+	for _, mapping := range portMapViews {
+		haystack := mapping.DeviceName + " " + mapping.DeviceCode + " " + mapping.DeviceID + " " + mapping.Name + " " + mapping.PublicAddress + " " + strconv.Itoa(mapping.LocalPort)
+		if portMapNeedle == "" || strings.Contains(strings.ToLower(haystack), portMapNeedle) {
+			filteredPortMaps = append(filteredPortMaps, mapping)
+		}
+	}
+	portMapPage, portMapPager := paginateAdmin(filteredPortMaps, adminPageNumber(queryValues.Get("pp")), 20, "pp", queryValues)
 
 	keys, err := b.accounts.ListActivationKeys(5000)
 	if err != nil {
@@ -1434,16 +1506,18 @@ func serveAdminPage(w http.ResponseWriter, r *http.Request, b *broker, generated
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = adminPage.Execute(w, map[string]any{
-		"Devices": devicePage, "Keys": keyPage, "Generated": generated, "Message": message, "Audits": auditPage,
+		"Devices": devicePage, "Keys": keyPage, "Generated": generated, "Message": message, "Audits": auditPage, "PortMaps": portMapPage,
 		"OnlineCount": onlineCount, "ConnectedCount": connectedCount, "IdleCount": idleCount, "OfflineCount": offlineCount,
 		"TotalCount": len(deviceViews), "ActiveLicenseCount": activeLicenseCount, "ExpiredCount": expiredCount,
 		"RevokedCount": revokedCount, "UnlicensedCount": unlicensedCount, "AttentionCount": expiredCount + revokedCount + unlicensedCount,
 		"AvailableKeyCount": availableKeyCount, "UsedKeyCount": usedKeyCount, "InvalidKeyCount": invalidKeyCount,
+		"PortMapCount": len(portMapViews), "PortMapQuery": portMapQuery, "PortMapPager": portMapPager,
 		"UpdatedAt": formatAdminTime(now), "CSRF": csrfToken, "ReturnURL": returnURL, "AutoActivate": b.automaticDeviceActivation(),
 		"DeviceQuery": deviceQuery, "DeviceState": deviceState, "DeviceLicense": deviceLicense, "DevicePager": devicePager,
 		"KeyQuery": keyQuery, "KeyState": keyState, "KeyPager": keyPager, "AuditQuery": auditQuery, "AuditPager": auditPager,
 		"DeviceClearURL": adminClearURL(queryValues, "dq", "ds", "dl", "dp"),
 		"KeyClearURL":    adminClearURL(queryValues, "kq", "ks", "kp"), "AuditClearURL": adminClearURL(queryValues, "aq", "ap"),
+		"PortMapClearURL": adminClearURL(queryValues, "pq", "pp"),
 	})
 }
 
@@ -1546,6 +1620,9 @@ func adminAuditLabel(action string) string {
 		"relay_auth_failed":              "中转身份校验失败",
 		"admin_auto_activation_enabled":  "开启免激活",
 		"admin_auto_activation_disabled": "关闭免激活",
+		"port_map_created":               "创建端口映射",
+		"port_map_closed":                "关闭端口映射",
+		"admin_port_map_closed":          "管理员关闭端口映射",
 	}
 	if label := labels[action]; label != "" {
 		return label
@@ -1658,6 +1735,7 @@ func (b *broker) terminateDevice(owner, deviceID, reason string) bool {
 	deviceID = strings.ToUpper(deviceID)
 	var directStop net.Conn
 	var connections []net.Conn
+	var removedPortMaps []*serverPortMap
 	found := false
 	b.Lock()
 	control := b.controls[deviceID]
@@ -1704,7 +1782,15 @@ func (b *broker) terminateDevice(owner, deviceID, reason string) bool {
 		b.stopRequests[deviceID] = reason
 		found = true
 	}
+	for mapID, mapping := range b.portMaps {
+		if mapping.DeviceID == deviceID {
+			if closed := b.removePortMapLocked(mapID); closed != nil {
+				removedPortMaps = append(removedPortMaps, closed)
+			}
+		}
+	}
 	b.Unlock()
+	b.closePortMapHooks(removedPortMaps)
 	if directStop != nil {
 		if writeRelayRejection(directStop, "STOP", reason) == nil {
 			b.clearStopRequest(deviceID, reason)
@@ -1980,7 +2066,7 @@ var adminPage = template.Must(template.New("admin").Parse(`<!doctype html>
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#07111f;color:#eaf2ff;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}a{color:inherit}.topbar{position:sticky;top:0;z-index:20;border-bottom:1px solid #20344c;background:#081422ed;backdrop-filter:blur(14px)}.topbar-inner{max-width:1500px;margin:auto;min-height:62px;padding:10px 22px;display:flex;align-items:center;gap:18px}.brand{font-size:21px;font-weight:800;text-decoration:none;letter-spacing:.2px}.brand span{color:#67a7ff}.nav{display:flex;gap:5px;overflow:auto}.nav a,.top-action{padding:8px 11px;border-radius:8px;text-decoration:none;color:#9db0c8;white-space:nowrap}.nav a:hover,.top-action:hover{background:#12263b;color:#fff}.top-actions{margin-left:auto;display:flex;align-items:center;gap:8px}.refresh-state{color:#72869f;font-size:12px}.top-action{border:1px solid #2c425d;background:#0e1d2d;cursor:pointer}main{max-width:1500px;margin:auto;padding:28px 22px 70px}.hero{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:18px}.hero h1{font-size:34px;line-height:1.15;margin:0 0 7px}.hero p{margin:0;color:#8fa4bf}.updated{color:#70849e;text-align:right;font-size:12px}.stats{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:12px;margin:18px 0}.stat{position:relative;overflow:hidden;min-height:112px;padding:16px 17px;background:linear-gradient(145deg,#112135,#0d1928);border:1px solid #243953;border-radius:14px}.stat:after{content:"";position:absolute;width:70px;height:70px;right:-28px;top:-30px;border-radius:50%;background:var(--accent,#67a7ff);opacity:.12}.stat-label{color:#8fa4bf;font-size:13px}.stat-value{display:block;margin-top:5px;font-size:30px;line-height:1;font-weight:800}.stat-note{display:block;margin-top:8px;color:#71859e;font-size:12px}.stat.online-card{--accent:#55d99c}.stat.connected-card{--accent:#ffcb67}.stat.warning-card{--accent:#ff7d8c}.message{display:flex;align-items:center;gap:10px;margin:14px 0;padding:12px 15px;border:1px solid #285174;border-radius:10px;background:#0e2a42;color:#a9d6ff}.message:before{content:"✓";display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:#216cae;color:white;font-weight:800}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.panel{background:#0e1b2b;border:1px solid #243953;border-radius:15px;margin:14px 0;box-shadow:0 16px 35px #0002}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:17px 19px;border-bottom:1px solid #20344c}.panel-head h2{margin:0;font-size:19px}.panel-head p{margin:3px 0 0;color:#8196b0;font-size:13px}.panel-body{padding:18px}.count-pills{display:flex;gap:7px;flex-wrap:wrap}.count-pill{padding:5px 9px;border-radius:99px;background:#13253a;color:#9eb1c8;font-size:12px}.form-grid{display:grid;grid-template-columns:repeat(4,minmax(90px,1fr));gap:10px;align-items:end}.form-grid.grant{grid-template-columns:minmax(170px,2fr) 1fr 1fr auto}.field{display:flex;flex-direction:column;gap:5px;color:#93a7c0;font-size:12px}input,select,button{font:inherit}input,select{width:100%;min-height:39px;border-radius:8px;border:1px solid #304963;padding:8px 10px;background:#081422;color:#edf5ff;outline:none}input:focus,select:focus{border-color:#4f99ef;box-shadow:0 0 0 3px #2f7dce2c}button,.button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:36px;border:0;border-radius:8px;padding:8px 12px;background:#2878e8;color:white;text-decoration:none;cursor:pointer;white-space:nowrap}button:hover,.button:hover{filter:brightness(1.1)}button.secondary,.button.secondary{background:#1a3048;color:#c6d7e9;border:1px solid #304963}button.warning{background:#95641e}button.danger{background:#a43b49}button.ghost{min-height:30px;padding:5px 8px;background:transparent;border:1px solid #334b67;color:#a9bed5;font-size:12px}.generated{border-color:#2c7258;background:linear-gradient(145deg,#102b2a,#0e1b2b)}.generated-list{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:9px}.generated-key{display:flex;align-items:center;gap:8px;padding:11px 12px;border-radius:9px;background:#071821;border:1px solid #275445}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:#7ce0ad;word-break:break-all}.generated-key code{flex:1}.toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:13px 18px;border-bottom:1px solid #20344c}.toolbar .search{flex:1 1 230px}.toolbar select{width:auto;min-width:145px}.visible-count{margin-left:auto;color:#7f94ad;font-size:12px}.table-wrap{overflow:auto;max-height:610px}table{width:100%;border-collapse:separate;border-spacing:0}th,td{text-align:left;padding:11px 12px;border-bottom:1px solid #1e3248;white-space:nowrap;vertical-align:middle}th{position:sticky;top:0;z-index:2;background:#102035;color:#8fa4bf;font-size:12px;font-weight:650}tbody tr:hover{background:#11243a}tbody tr[hidden]{display:none}.device-name-form{display:flex;gap:6px;min-width:225px}.device-name-form input{min-width:130px;min-height:34px}.device-name-form button{min-height:34px;padding:7px 9px}.code-cell{display:flex;align-items:center;gap:7px}.badge{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border-radius:99px;font-size:12px;font-weight:650;background:#182b41;color:#a9bdd3}.badge:before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}.badge.online,.badge.active,.badge.available{color:#6fe0a8;background:#12372f}.badge.connected{color:#ffd071;background:#3d3219}.badge.offline,.badge.used{color:#8da1b8;background:#172638}.badge.expired,.badge.unlicensed{color:#f0ba69;background:#3b2c17}.badge.revoked{color:#ff8d9a;background:#3d2029}.actions{display:flex;align-items:center;gap:6px}.actions form{margin:0}.actions button{min-height:32px;padding:6px 9px;font-size:12px}.empty{padding:36px!important;text-align:center;color:#71869f}.audit-action{color:#b7cbe1}.muted{color:#71869f}.detail-cell{max-width:360px;overflow:hidden;text-overflow:ellipsis}.footnote{margin-top:13px;color:#6f839b;font-size:12px}.no-results{display:none;padding:28px;text-align:center;color:#8297b0}.no-results.visible{display:block}.pagination{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap;padding:13px 18px;border-top:1px solid #20344c}.pagination-info{margin-right:auto;color:#8297af;font-size:12px}.page-link{display:grid;place-items:center;min-width:34px;height:34px;padding:0 9px;border:1px solid #304963;border-radius:8px;background:#102238;color:#b8cbe0;text-decoration:none}.page-link:hover{border-color:#5799e6;color:#fff}.page-link.current{border-color:#2878e8;background:#2878e8;color:#fff}.page-link.disabled{opacity:.4;pointer-events:none}.setting-row{display:flex;align-items:center;gap:18px;justify-content:space-between}.setting-copy{max-width:800px}.setting-copy strong{display:block;font-size:16px;margin-bottom:4px}.setting-copy span{color:#8297b0}.setting-state{display:flex;align-items:center;gap:10px;white-space:nowrap}
 @media(max-width:1250px){.stats{grid-template-columns:repeat(3,1fr)}}@media(max-width:900px){.grid{grid-template-columns:1fr}.generated-list{grid-template-columns:1fr}.form-grid,.form-grid.grant{grid-template-columns:1fr 1fr}.nav{display:none}}@media(max-width:620px){.topbar-inner{padding:9px 12px}.refresh-state{display:none}main{padding:20px 11px 55px}.hero,.setting-row{align-items:flex-start;flex-direction:column}.setting-state{white-space:normal}.hero h1{font-size:27px}.updated{text-align:left}.stats{grid-template-columns:1fr 1fr;gap:8px}.stat{min-height:96px;padding:13px}.stat-value{font-size:25px}.form-grid,.form-grid.grant{grid-template-columns:1fr}.panel-head{align-items:flex-start;flex-direction:column}.toolbar select{width:100%}.visible-count{margin-left:0}.pagination{justify-content:flex-start}.pagination-info{width:100%}}
 </style></head>
-<body data-generated="{{if .Generated}}1{{else}}0{{end}}" data-return="{{.ReturnURL}}"><header class="topbar"><div class="topbar-inner"><a class="brand" href="/admin"><span>Yu</span>Desk 管理</a><nav class="nav"><a href="#settings">服务器设置</a><a href="#devices">设备</a><a href="#licenses">授权码</a><a href="#audits">审计记录</a><a href="/">软件下载</a></nav><div class="top-actions"><span class="refresh-state" id="refresh-state">30 秒后异步刷新</span><a class="top-action" id="refresh-now" href="{{.ReturnURL}}">立即刷新</a></div></div></header>
+<body data-generated="{{if .Generated}}1{{else}}0{{end}}" data-return="{{.ReturnURL}}"><header class="topbar"><div class="topbar-inner"><a class="brand" href="/admin"><span>Yu</span>Desk 管理</a><nav class="nav"><a href="#settings">服务器设置</a><a href="#devices">设备</a><a href="#port-maps">端口映射</a><a href="#licenses">授权码</a><a href="#audits">审计记录</a><a href="/">软件下载</a></nav><div class="top-actions"><span class="refresh-state" id="refresh-state">30 秒后异步刷新</span><a class="top-action" id="refresh-now" href="{{.ReturnURL}}">立即刷新</a></div></div></header>
 <main><section class="hero"><div><h1>服务器管理中心</h1><p>管理在线设备、连接状态、使用授权和安全操作。所有时间均为北京时间（UTC+8），最后在线为设备最近一次已确认响应时间。</p></div><div class="updated">数据更新时间 · 北京时间<br><strong>{{.UpdatedAt}}</strong></div></section>
 {{if .Message}}<div class="message" role="status">{{.Message}}</div>{{end}}
 <section class="stats" aria-label="状态总览"><article class="stat"><span class="stat-label">设备总数</span><strong class="stat-value">{{.TotalCount}}</strong><span class="stat-note">已登记的被控端</span></article><article class="stat online-card"><span class="stat-label">当前在线</span><strong class="stat-value">{{.OnlineCount}}</strong><span class="stat-note">含连接中设备</span></article><article class="stat connected-card"><span class="stat-label">连接中</span><strong class="stat-value">{{.ConnectedCount}}</strong><span class="stat-note">正在远程控制</span></article><article class="stat"><span class="stat-label">在线待连接</span><strong class="stat-value">{{.IdleCount}}</strong><span class="stat-note">在线 · 未被连接</span></article><article class="stat"><span class="stat-label">离线</span><strong class="stat-value">{{.OfflineCount}}</strong><span class="stat-note">当前未连接服务器</span></article><article class="stat warning-card"><span class="stat-label">授权需处理</span><strong class="stat-value">{{.AttentionCount}}</strong><span class="stat-note">未授权 / 过期 / 禁用</span></article></section>
@@ -1991,6 +2077,7 @@ var adminPage = template.Must(template.New("admin").Parse(`<!doctype html>
 <section class="panel" id="devices"><div class="panel-head"><div><h2>设备管理</h2><p>每页 20 台，可按名称、设备码、PIN、连接状态和授权状态查询。</p></div><div class="count-pills"><span class="count-pill">有效授权 {{.ActiveLicenseCount}}</span><span class="count-pill">已过期 {{.ExpiredCount}}</span><span class="count-pill">已禁用 {{.RevokedCount}}</span><span class="count-pill">未授权 {{.UnlicensedCount}}</span></div></div><form class="toolbar" method="get" action="/admin"><input type="hidden" name="kq" value="{{.KeyQuery}}"><input type="hidden" name="ks" value="{{.KeyState}}"><input type="hidden" name="kp" value="{{.KeyPager.Page}}"><input type="hidden" name="aq" value="{{.AuditQuery}}"><input type="hidden" name="ap" value="{{.AuditPager.Page}}"><input class="search" id="device-search" name="dq" value="{{.DeviceQuery}}" type="search" placeholder="搜索设备名称、设备码或 PIN"><select id="device-state" name="ds"><option value="">全部连接状态</option><option value="connected" {{if eq .DeviceState "connected"}}selected{{end}}>连接中</option><option value="online" {{if eq .DeviceState "online"}}selected{{end}}>在线待连接</option><option value="offline" {{if eq .DeviceState "offline"}}selected{{end}}>离线</option></select><select id="device-license" name="dl"><option value="">全部授权状态</option><option value="active" {{if eq .DeviceLicense "active"}}selected{{end}}>授权有效</option><option value="unlicensed" {{if eq .DeviceLicense "unlicensed"}}selected{{end}}>未授权</option><option value="expired" {{if eq .DeviceLicense "expired"}}selected{{end}}>已过期</option><option value="revoked" {{if eq .DeviceLicense "revoked"}}selected{{end}}>已禁用</option></select><button type="submit">查询</button><a class="button secondary" href="{{.DeviceClearURL}}#devices">清空</a><span class="visible-count" id="device-visible">本页 {{len .Devices}} 台</span></form><div class="table-wrap"><table><thead><tr><th>设备名称</th><th>设备码</th><th>PIN</th><th>连接状态</th><th>授权状态</th><th>授权有效期</th><th>最后在线</th><th>管理操作</th></tr></thead><tbody id="device-rows">{{range .Devices}}<tr data-row data-state="{{.ConnectionClass}}" data-license="{{.LicenseClass}}"><td><form class="device-name-form" method="post" action="/admin/name"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><input name="name" value="{{.Name}}" maxlength="80" required aria-label="设备名称"><button class="secondary" type="submit">保存</button></form></td><td><div class="code-cell"><code class="mono">{{if .ShortCode}}{{.ShortCode}}{{else}}{{.ID}}{{end}}</code><button type="button" class="ghost" data-copy="{{if .ShortCode}}{{.ShortCode}}{{else}}{{.ID}}{{end}}">复制</button></div></td><td>{{if .PINAvailable}}<div class="code-cell"><code class="mono">{{.PIN}}</code><button type="button" class="ghost" data-copy="{{.PIN}}">复制</button></div>{{else}}<span class="muted">未上报</span>{{end}}</td><td><span class="badge {{.ConnectionClass}}">{{.ConnectionLabel}}</span></td><td><span class="badge {{.LicenseClass}}">{{.Status}}</span></td><td>{{.ActiveUntil}}</td><td>{{.LastSeen}}</td><td><div class="actions">{{if .Permanent}}<span class="badge active">永久</span>{{else}}<form method="post" action="/admin/grant"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><input type="hidden" name="days" value="30"><input type="hidden" name="hours" value="0"><button type="submit">授权30天</button></form>{{end}}<form method="post" action="/admin/disconnect" data-confirm="确定强制断开并退出设备 {{.Name}} 吗？"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button class="secondary" type="submit">断开并退出</button></form>{{if eq .LicenseClass "revoked"}}<form method="post" action="/admin/unrevoke"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button type="submit">解禁</button></form>{{else}}<form method="post" action="/admin/revoke" data-confirm="确定禁用 {{.Name}} 吗？设备会退出，并且下次无法连接。"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button class="warning" type="submit">禁用</button></form>{{end}}<form method="post" action="/admin/delete" data-confirm="确定永久删除 {{.Name}} 吗？删除后需要重新登记和授权。"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="device_id" value="{{.ID}}"><button class="danger" type="submit">删除</button></form></div></td></tr>{{else}}<tr><td colspan="8" class="empty">没有符合查询条件的设备。请调整条件，或先运行一次被控端。</td></tr>{{end}}</tbody></table><div class="no-results" id="device-empty">当前页没有符合即时筛选条件的设备</div></div>{{with .DevicePager}}<div class="pagination"><span class="pagination-info">第 {{.Start}}–{{.End}} 台，共 {{.Total}} 台 · 第 {{.Page}} / {{.TotalPages}} 页</span>{{if .HasPrev}}<a class="page-link" href="{{.PrevURL}}#devices">上一页</a>{{else}}<span class="page-link disabled">上一页</span>{{end}}{{range .Links}}<a class="page-link {{if .Current}}current{{end}}" href="{{.URL}}#devices">{{.Number}}</a>{{end}}{{if .HasNext}}<a class="page-link" href="{{.NextURL}}#devices">下一页</a>{{else}}<span class="page-link disabled">下一页</span>{{end}}</div>{{end}}<div class="panel-body footnote">“断开并退出”用于立即停止当前进程；“禁用”还会阻止设备下次连接；“解禁”恢复设备资格；“删除”会移除服务器记录。</div></section>
 <section class="panel" id="licenses"><div class="panel-head"><div><h2>授权码管理</h2><p>每页 20 个，可查询最近 5000 个记录；完整密钥仅在刚生成时显示。</p></div><div class="count-pills"><span class="count-pill">未使用 {{.AvailableKeyCount}}</span><span class="count-pill">已使用 {{.UsedKeyCount}}</span><span class="count-pill">失效 {{.InvalidKeyCount}}</span></div></div><form class="toolbar" method="get" action="/admin"><input type="hidden" name="dq" value="{{.DeviceQuery}}"><input type="hidden" name="ds" value="{{.DeviceState}}"><input type="hidden" name="dl" value="{{.DeviceLicense}}"><input type="hidden" name="dp" value="{{.DevicePager.Page}}"><input type="hidden" name="aq" value="{{.AuditQuery}}"><input type="hidden" name="ap" value="{{.AuditPager.Page}}"><input class="search" id="key-search" name="kq" value="{{.KeyQuery}}" type="search" placeholder="搜索授权码指纹、状态或设备码"><select id="key-state" name="ks"><option value="">全部状态</option><option value="available" {{if eq .KeyState "available"}}selected{{end}}>未使用</option><option value="used" {{if eq .KeyState "used"}}selected{{end}}>已使用</option><option value="expired" {{if eq .KeyState "expired"}}selected{{end}}>兑换期已过</option><option value="revoked" {{if eq .KeyState "revoked"}}selected{{end}}>已吊销</option></select><button type="submit">查询</button><a class="button secondary" href="{{.KeyClearURL}}#licenses">清空</a><span class="visible-count" id="key-visible">本页 {{len .Keys}} 条</span></form><div class="table-wrap"><table><thead><tr><th>授权码指纹</th><th>授权时长</th><th>当前状态</th><th>兑换截止</th><th>管理操作</th></tr></thead><tbody id="key-rows">{{range .Keys}}<tr data-row data-state="{{.StatusClass}}"><td><div class="code-cell"><code class="mono">{{.Fingerprint}}</code><button type="button" class="ghost" data-copy="{{.Fingerprint}}">复制</button></div></td><td>{{.Duration}}</td><td><span class="badge {{.StatusClass}}">{{.Status}}</span></td><td>{{.RedeemBy}}</td><td>{{if .Revocable}}<form method="post" action="/admin/revoke-key" data-confirm="确定吊销这个未使用的授权码吗？"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="fingerprint" value="{{.Fingerprint}}"><button class="danger" type="submit">吊销授权码</button></form>{{else}}<span class="muted">不可操作</span>{{end}}</td></tr>{{else}}<tr><td colspan="5" class="empty">没有符合查询条件的授权码</td></tr>{{end}}</tbody></table><div class="no-results" id="key-empty">当前页没有符合即时筛选条件的授权码</div></div>{{with .KeyPager}}<div class="pagination"><span class="pagination-info">第 {{.Start}}–{{.End}} 条，共 {{.Total}} 条 · 第 {{.Page}} / {{.TotalPages}} 页</span>{{if .HasPrev}}<a class="page-link" href="{{.PrevURL}}#licenses">上一页</a>{{else}}<span class="page-link disabled">上一页</span>{{end}}{{range .Links}}<a class="page-link {{if .Current}}current{{end}}" href="{{.URL}}#licenses">{{.Number}}</a>{{end}}{{if .HasNext}}<a class="page-link" href="{{.NextURL}}#licenses">下一页</a>{{else}}<span class="page-link disabled">下一页</span>{{end}}</div>{{end}}</section>
 <section class="panel" id="audits"><div class="panel-head"><div><h2>安全审计记录</h2><p>每页 30 条，可查询最近 1000 条设备、授权和连接操作。</p></div></div><form class="toolbar" method="get" action="/admin"><input type="hidden" name="dq" value="{{.DeviceQuery}}"><input type="hidden" name="ds" value="{{.DeviceState}}"><input type="hidden" name="dl" value="{{.DeviceLicense}}"><input type="hidden" name="dp" value="{{.DevicePager.Page}}"><input type="hidden" name="kq" value="{{.KeyQuery}}"><input type="hidden" name="ks" value="{{.KeyState}}"><input type="hidden" name="kp" value="{{.KeyPager.Page}}"><input class="search" id="audit-search" name="aq" value="{{.AuditQuery}}" type="search" placeholder="搜索操作、设备码、来源地址或详情"><button type="submit">查询</button><a class="button secondary" href="{{.AuditClearURL}}#audits">清空</a><span class="visible-count" id="audit-visible">本页 {{len .Audits}} 条</span></form><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作</th><th>设备码</th><th>来源地址</th><th>详情</th></tr></thead><tbody id="audit-rows">{{range .Audits}}<tr data-row><td>{{.At}}</td><td><span class="audit-action" title="{{.Action}}">{{.ActionLabel}}</span></td><td><code class="mono">{{if .DeviceID}}{{.DeviceID}}{{else}}-{{end}}</code></td><td>{{if .RemoteAddr}}{{.RemoteAddr}}{{else}}-{{end}}</td><td class="detail-cell" title="{{.Detail}}">{{if .Detail}}{{.Detail}}{{else}}-{{end}}</td></tr>{{else}}<tr><td colspan="5" class="empty">没有符合查询条件的审计记录</td></tr>{{end}}</tbody></table><div class="no-results" id="audit-empty">当前页没有符合即时搜索条件的记录</div></div>{{with .AuditPager}}<div class="pagination"><span class="pagination-info">第 {{.Start}}–{{.End}} 条，共 {{.Total}} 条 · 第 {{.Page}} / {{.TotalPages}} 页</span>{{if .HasPrev}}<a class="page-link" href="{{.PrevURL}}#audits">上一页</a>{{else}}<span class="page-link disabled">上一页</span>{{end}}{{range .Links}}<a class="page-link {{if .Current}}current{{end}}" href="{{.URL}}#audits">{{.Number}}</a>{{end}}{{if .HasNext}}<a class="page-link" href="{{.NextURL}}#audits">下一页</a>{{else}}<span class="page-link disabled">下一页</span>{{end}}</div>{{end}}</section>
+<section class="panel" id="port-maps"><div class="panel-head"><div><h2>端口映射管理</h2><p>Mac mini / Linux FRPS 统一管理；公网端口仅在 9000–9500 随机分配，每台设备最多 5 个。</p></div><div class="count-pills"><span class="count-pill">当前映射 {{.PortMapCount}}</span><span class="count-pill">TCP</span></div></div><form class="toolbar" method="get" action="/admin"><input class="search" id="port-map-search" name="pq" value="{{.PortMapQuery}}" type="search" placeholder="搜索设备、备注、本地端口或公网地址"><button type="submit">查询</button><a class="button secondary" href="{{.PortMapClearURL}}#port-maps">清空</a><span class="visible-count" id="port-map-visible">本页 {{len .PortMaps}} 条</span></form><div class="table-wrap"><table><thead><tr><th>设备</th><th>备注</th><th>本地服务</th><th>公网地址</th><th>协议</th><th>状态</th><th>创建时间</th><th>最后活动</th><th>管理操作</th></tr></thead><tbody id="port-map-rows">{{range .PortMaps}}<tr data-row><td><strong>{{.DeviceName}}</strong><br><code class="mono">{{if .DeviceCode}}{{.DeviceCode}}{{else}}{{.DeviceID}}{{end}}</code></td><td>{{.Name}}</td><td><code>127.0.0.1:{{.LocalPort}}</code></td><td><div class="code-cell"><code class="mono">{{.PublicAddress}}</code><button type="button" class="ghost" data-copy="{{.PublicAddress}}">复制</button></div></td><td>{{.Protocol}}</td><td><span class="badge {{.StatusClass}}">{{.Status}}</span></td><td>{{.CreatedAt}}</td><td>{{.Seen}}</td><td><form method="post" action="/admin/port-map/close" data-confirm="确定关闭 {{.PublicAddress}} 吗？新的公网连接会立即被拒绝。"><input type="hidden" name="_csrf" value="{{$.CSRF}}"><input type="hidden" name="_return" value="{{$.ReturnURL}}"><input type="hidden" name="map_id" value="{{.ID}}"><button class="danger" type="submit">关闭映射</button></form></td></tr>{{else}}<tr><td colspan="9" class="empty">当前没有设备开启端口映射</td></tr>{{end}}</tbody></table><div class="no-results" id="port-map-empty">当前页没有符合即时搜索条件的映射</div></div>{{with .PortMapPager}}<div class="pagination"><span class="pagination-info">第 {{.Start}}–{{.End}} 条，共 {{.Total}} 条 · 第 {{.Page}} / {{.TotalPages}} 页</span>{{if .HasPrev}}<a class="page-link" href="{{.PrevURL}}#port-maps">上一页</a>{{else}}<span class="page-link disabled">上一页</span>{{end}}{{range .Links}}<a class="page-link {{if .Current}}current{{end}}" href="{{.URL}}#port-maps">{{.Number}}</a>{{end}}{{if .HasNext}}<a class="page-link" href="{{.NextURL}}#port-maps">下一页</a>{{else}}<span class="page-link disabled">下一页</span>{{end}}</div>{{end}}<div class="panel-body footnote">仅允许合法用途。管理员关闭、设备退出、掉线、禁用、删除或授权到期时，映射凭据立即失效。</div></section>
 </main><script src="/admin/app.js" defer></script></body></html>`))
 
 const adminScript = `(() => {
@@ -2110,6 +2197,20 @@ const adminScript = `(() => {
   };
   $('#audit-search')?.addEventListener('input', filterAudits);
 
+  const filterPortMaps = () => {
+    const portRows = rows('#port-map-rows');
+    const query = ($('#port-map-search')?.value || '').trim().toLowerCase();
+    let visible = 0;
+    portRows.forEach((row) => {
+      const show = !query || row.textContent.toLowerCase().includes(query);
+      row.hidden = !show;
+      if (show) visible++;
+    });
+    if ($('#port-map-visible')) $('#port-map-visible').textContent = '显示 ' + visible + ' 条';
+    $('#port-map-empty')?.classList.toggle('visible', portRows.length > 0 && visible === 0);
+  };
+  $('#port-map-search')?.addEventListener('input', filterPortMaps);
+
   function replaceOptionalPagination(sectionID, nextDocument) {
     const section = document.querySelector(sectionID);
     const current = section?.querySelector('.pagination');
@@ -2131,7 +2232,7 @@ const adminScript = `(() => {
     if (status) status.textContent = '正在异步刷新…';
     const scroll = {x: window.scrollX, y: window.scrollY};
     const tableScroll = {};
-    ['#devices', '#licenses', '#audits'].forEach((selector) => {
+    ['#devices', '#licenses', '#audits', '#port-maps'].forEach((selector) => {
       const table = document.querySelector(selector + ' .table-wrap');
       if (table) tableScroll[selector] = {left: table.scrollLeft, top: table.scrollTop};
     });
@@ -2148,7 +2249,7 @@ const adminScript = `(() => {
       const currentUpdated = document.querySelector('.updated strong');
       const nextUpdated = nextDocument.querySelector('.updated strong');
       if (currentUpdated && nextUpdated) currentUpdated.textContent = nextUpdated.textContent;
-      for (const selector of ['#devices .count-pills', '#licenses .count-pills', '#device-rows', '#key-rows', '#audit-rows']) {
+      for (const selector of ['#devices .count-pills', '#licenses .count-pills', '#port-maps .count-pills', '#device-rows', '#key-rows', '#audit-rows', '#port-map-rows']) {
         const current = document.querySelector(selector);
         const next = nextDocument.querySelector(selector);
         if (current && next) current.replaceChildren(...Array.from(next.childNodes).map((node) => node.cloneNode(true)));
@@ -2156,10 +2257,12 @@ const adminScript = `(() => {
       replaceOptionalPagination('#devices', nextDocument);
       replaceOptionalPagination('#licenses', nextDocument);
       replaceOptionalPagination('#audits', nextDocument);
+      replaceOptionalPagination('#port-maps', nextDocument);
       bindInteractive();
       filterDevices();
       filterKeys();
       filterAudits();
+      filterPortMaps();
       for (const [selector, position] of Object.entries(tableScroll)) {
         const table = document.querySelector(selector + ' .table-wrap');
         if (table) { table.scrollLeft = position.left; table.scrollTop = position.top; }

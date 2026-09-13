@@ -198,6 +198,14 @@ node --test scripts/input.test.cjs scripts/frames.test.cjs scripts/presence.test
 ├── start.sh
 ├── stop.sh
 └── status.sh
+
+~/bin/frp/
+├── frps
+├── frps.toml
+├── frps.crt
+├── frps.key
+├── frp-control.sh
+└── yudesk-port-hook.sh
 ```
 
 公网服务：
@@ -206,8 +214,12 @@ node --test scripts/input.test.cjs scripts/frames.test.cjs scripts/presence.test
 - `http://www.yucg.cn:8235/admin`：管理员后台；
 - `www.yucg.cn:8233`（TCP）：远程桌面中转、信令及管理连接；
 - `www.yucg.cn:8233`（UDP，待部署验证）：开发版 P2P 的 STUN 绑定发现，需要单独开放/映射 UDP。
+- `www.yucg.cn:8232`（TCP）：受管 FRP 控制连接，只接受 YuDesk 在线设备的短期凭据；
+- `www.yucg.cn:9000–9500`（TCP，按需）：端口映射随机公网端口。每台设备最多同时 5 个，设备退出、掉线、禁用或管理员关闭后自动撤销。
 
-服务器端只运行 `yudesk-relay`。普通用户下载目录不包含账号工具、命令行管理工具或更新工具。
+端口映射启用后，服务器运行 `yudesk-relay` 与 `frps`；FRPS 的管理插件仅监听 `127.0.0.1:8236`，不能暴露到公网。Mac mini 通过现有 `upnpc` 仅开放活动映射，Linux 公网服务器可由防火墙开放端口池，位于 NAT 后的 Linux 也可使用部署目录中的 UPnP 钩子。普通用户下载目录不包含账号工具、命令行管理工具或更新工具。
+
+统一客户端的“端口映射”页面只允许选择本机 TCP 端口，公网端口由服务器随机分配并保证不重复。该功能禁止用于攻击、扫描、未授权访问、诈骗或传播违法内容；被映射的应用仍应自行配置密码、TLS 和访问控制。完整的 macOS/Linux 配置见 `deploy/frp/README.md`。
 
 ## 当前限制
 

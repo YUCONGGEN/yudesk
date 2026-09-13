@@ -2,6 +2,8 @@ module github.com/yudesk/yudesk/mobile
 
 go 1.26.0
 
+replace github.com/fatedier/frp => ../third_party/frp
+
 require (
 	github.com/yudesk/yudesk v0.0.0
 	golang.org/x/mobile v0.0.0-20260821190718-4776eadac327

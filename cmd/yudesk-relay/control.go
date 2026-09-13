@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -20,6 +21,27 @@ type deviceControl struct {
 	stopping bool         // protected by broker.Mutex
 	lastSeen atomic.Int64 // last authenticated incoming heartbeat, Unix seconds
 	pin      atomic.Value // last PIN successfully committed to the server database
+
+	portMapSession string
+	portMapMu      sync.Mutex
+	portMapResult  *relay.PortMapResult
+}
+
+func (c *deviceControl) setPortMapResult(result relay.PortMapResult) {
+	if result.RequestID == "" {
+		return
+	}
+	c.portMapMu.Lock()
+	c.portMapResult = &result
+	c.portMapMu.Unlock()
+}
+
+func (c *deviceControl) takePortMapResult() *relay.PortMapResult {
+	c.portMapMu.Lock()
+	defer c.portMapMu.Unlock()
+	result := c.portMapResult
+	c.portMapResult = nil
+	return result
 }
 
 func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hello) {
@@ -74,7 +96,12 @@ func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hel
 		stop("DENIED", "automatic device activation failed")
 		return
 	}
-	control := &deviceControl{conn: c, stop: make(chan string, 1)}
+	portMapSession, err := randomURLToken(32)
+	if err != nil {
+		stop("DENIED", "cannot create device management session")
+		return
+	}
+	control := &deviceControl{conn: c, stop: make(chan string, 1), portMapSession: portMapSession}
 	control.lastSeen.Store(time.Now().Unix())
 	control.pin.Store(hello.PIN)
 	b.Lock()
@@ -90,6 +117,7 @@ func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hel
 	b.Unlock()
 	defer func() {
 		b.disconnectDevice("device:"+hello.ID, hello.ID)
+		b.closeDevicePortMaps(hello.ID)
 		b.Lock()
 		if b.controls[hello.ID] == control {
 			delete(b.controls, hello.ID)
@@ -123,6 +151,9 @@ func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hel
 					return
 				}
 				control.pin.Store(reply.PIN)
+			}
+			if reply.PortMapCommand != nil {
+				control.setPortMapResult(b.processPortMapCommand(hello.ID, control.portMapSession, reply.PortMapCommand))
 			}
 			// The admin view reads live memory. Bound database writes during
 			// long sessions while limiting crash loss to about 15 seconds.
@@ -164,7 +195,11 @@ func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hel
 			}
 			b.Unlock()
 		}
-		if send(relay.ControlMessage{Type: "status", Active: active, ActiveUntil: expiry, DeviceCode: deviceCode, PIN: control.pin.Load().(string)}) != nil {
+		if send(relay.ControlMessage{
+			Type: "status", Active: active, ActiveUntil: expiry, DeviceCode: deviceCode, PIN: control.pin.Load().(string),
+			PortMaps: b.portMapStatus(hello.ID, control.portMapSession), PortMapResult: control.takePortMapResult(),
+			PortMapServer: b.portMapServer, PortMapSession: control.portMapSession, PortMapCertificate: b.portMapCertificate,
+		}) != nil {
 			return
 		}
 		select {

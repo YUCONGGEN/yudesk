@@ -41,25 +41,28 @@ type Device struct {
 }
 
 type DeviceStatus struct {
-	Pending       *approval.Pending `json:"pending,omitempty"`
-	ID            string            `json:"id"`
-	Code          string            `json:"code"`
-	PIN           string            `json:"pin"`
-	PINSynced     bool              `json:"pinSynced"`
-	PINRevision   uint64            `json:"pinRevision"`
-	Name          string            `json:"name"`
-	Status        string            `json:"status"`
-	Message       string            `json:"message"`
-	Online        bool              `json:"online"`
-	Connected     bool              `json:"connected"`
-	Receiving     bool              `json:"receiving"`
-	Active        bool              `json:"active"`
-	ActiveUntil   string            `json:"activeUntil"`
-	Files         bool              `json:"files"`
-	FileDirectory string            `json:"fileDirectory"`
-	Meeting       bool              `json:"meeting"`
-	MeetingCode   string            `json:"meetingCode,omitempty"`
-	MeetingUntil  time.Time         `json:"meetingUntil,omitempty"`
+	Pending          *approval.Pending `json:"pending,omitempty"`
+	ID               string            `json:"id"`
+	Code             string            `json:"code"`
+	PIN              string            `json:"pin"`
+	PINSynced        bool              `json:"pinSynced"`
+	PINRevision      uint64            `json:"pinRevision"`
+	Name             string            `json:"name"`
+	Status           string            `json:"status"`
+	Message          string            `json:"message"`
+	Online           bool              `json:"online"`
+	Connected        bool              `json:"connected"`
+	Receiving        bool              `json:"receiving"`
+	Active           bool              `json:"active"`
+	ActiveUntil      string            `json:"activeUntil"`
+	Files            bool              `json:"files"`
+	FileDirectory    string            `json:"fileDirectory"`
+	Meeting          bool              `json:"meeting"`
+	MeetingCode      string            `json:"meetingCode,omitempty"`
+	MeetingUntil     time.Time         `json:"meetingUntil,omitempty"`
+	PortMapAvailable bool              `json:"portMapAvailable"`
+	PortMaps         []relay.PortMap   `json:"portMaps,omitempty"`
+	PortMapError     string            `json:"portMapError,omitempty"`
 }
 
 func StartEmbedded(parent context.Context, o EmbeddedOptions) (*Device, error) {
@@ -108,7 +111,9 @@ func StartEmbedded(parent context.Context, o EmbeddedOptions) (*Device, error) {
 		o.Relay = defaultRelayAddress
 	}
 	a := &agent{id: id.ID, pin: id.PIN, name: o.Name, privateKey: id.PrivateKey, allowControl: true, quit: make(chan struct{}), managed: true, relayStatus: "正在连接服务器", approvals: approval.New()}
+	a.portMaps = newManagedPortMaps(o.Directory)
 	if err := a.configureFilePermission(o.Directory); err != nil {
+		a.portMaps.close()
 		lock.Close()
 		return nil, err
 	}
@@ -211,10 +216,25 @@ func (d *Device) Status() DeviceStatus {
 	if a.approvals != nil {
 		s.Pending = a.approvals.Pending()
 	}
+	if a.portMaps != nil {
+		s.PortMapAvailable, s.PortMaps, s.PortMapError = a.portMaps.status()
+	}
 	if !s.Receiving {
 		s.Status = "已暂停被远程连接"
 	}
 	return s
+}
+
+func (d *Device) CreatePortMap(ctx context.Context, localPort int, name string) error {
+	requestContext, cancel := portMapRequestContext(ctx)
+	defer cancel()
+	return d.a.createPortMap(requestContext, localPort, name)
+}
+
+func (d *Device) DeletePortMap(ctx context.Context, mapID string) error {
+	requestContext, cancel := portMapRequestContext(ctx)
+	defer cancel()
+	return d.a.deletePortMap(requestContext, mapID)
 }
 func (d *Device) SetReceiving(enabled bool) {
 	d.receiving.Store(enabled)

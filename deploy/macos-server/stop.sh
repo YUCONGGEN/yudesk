@@ -3,7 +3,18 @@ set -eu
 
 ROOT_DIR="${YUDESK_ROOT:-$HOME/bin/yudesk}"
 PID_FILE="$ROOT_DIR/run/yudesk-relay.pid"
+source "$ROOT_DIR/server.conf"
+
+cleanup_frp() {
+  if [[ -x "${FRP_ROOT:-}/frp-control.sh" ]]; then
+    "$FRP_ROOT/frp-control.sh" stop >/dev/null 2>&1 || true
+  fi
+  if [[ -x "${FRP_PORT_HOOK:-}" ]]; then
+    "$FRP_PORT_HOOK" cleanup >/dev/null 2>&1 || true
+  fi
+}
 if [[ ! -f "$PID_FILE" ]]; then
+  cleanup_frp
   echo "YuDesk is not running"
   exit 0
 fi
@@ -13,6 +24,7 @@ if [[ -z "$pid" ]]; then
   exit 1
 fi
 if ! kill -0 "$pid" 2>/dev/null; then
+  cleanup_frp
   rm -f "$PID_FILE"
   echo "YuDesk is not running; stale PID file removed"
   exit 0
@@ -23,6 +35,7 @@ case "$command_line" in
   *) echo "PID $pid does not belong to YuDesk; refusing to stop it" >&2; exit 1 ;;
 esac
 
+cleanup_frp
 kill "$pid"
 for _ in {1..20}; do
   if ! kill -0 "$pid" 2>/dev/null; then

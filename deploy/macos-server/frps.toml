@@ -1,0 +1,34 @@
+bindAddr = "192.168.1.220"
+proxyBindAddr = "192.168.1.220"
+bindPort = 8232
+
+transport.heartbeatTimeout = 15
+transport.maxPoolCount = 5
+transport.tcpMux = false
+transport.tcpKeepalive = 30
+transport.tls.force = true
+transport.tls.certFile = "/Users/yu/bin/frp/frps.crt"
+transport.tls.keyFile = "/Users/yu/bin/frp/frps.key"
+
+allowPorts = [
+  { start = 9000, end = 9500 }
+]
+maxPortsPerClient = 5
+detailedErrorsToClient = false
+
+# The local YuDesk plugin authorizes every login, proxy and public connection.
+# FRPS and the embedded client intentionally share an empty built-in token;
+# the real short-lived secret is issued by YuDesk over its authenticated channel.
+auth.method = "token"
+auth.token = ""
+
+log.to = "/Users/yu/bin/frp/frps.log"
+log.level = "info"
+log.maxDays = 7
+log.disablePrintColor = true
+
+[[httpPlugins]]
+name = "yudesk-manager"
+addr = "127.0.0.1:8236"
+path = "/frp"
+ops = ["Login", "NewProxy", "CloseProxy", "Ping", "NewWorkConn", "NewUserConn"]

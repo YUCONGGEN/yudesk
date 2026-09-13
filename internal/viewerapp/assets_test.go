@@ -50,6 +50,19 @@ func TestDashboardContainsMultipartyMeetingFlow(t *testing.T) {
 	}
 }
 
+func TestDashboardContainsManagedPortMapping(t *testing.T) {
+	var output bytes.Buffer
+	if err := dashboardPage.Execute(&output, map[string]any{"Token": "test-token", "Version": "2.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	page := output.String() + dashboardJS + portMapCSS
+	for _, expected := range []string{"dataset.tab='ports'", "端口映射", "9000–9500", "最多同时开启 5 个", "禁止非法行为", "/api/local/port-map/create", "/api/local/port-map/delete"} {
+		if !strings.Contains(page, expected) {
+			t.Errorf("port mapping dashboard does not contain %q", expected)
+		}
+	}
+}
+
 func TestDashboardUsesNativeCloseToTrayOnWindows(t *testing.T) {
 	var windowsPage bytes.Buffer
 	if err := dashboardPage.Execute(&windowsPage, map[string]any{"Token": "test-token", "Windows": true}); err != nil {

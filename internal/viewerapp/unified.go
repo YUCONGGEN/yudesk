@@ -31,6 +31,9 @@ var dashboardCSS string
 //go:embed ui/conference.css
 var conferenceCSS string
 
+//go:embed ui/portmap.css
+var portMapCSS string
+
 //go:embed ui/dashboard.js
 var dashboardJS string
 
@@ -119,7 +122,7 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		serveViewerExitPage(w, "YuDesk 已停止："+s.Status)
 		return true
 	}
-	if path == "/assets/dashboard.css" || path == "/assets/conference.css" || path == "/assets/dashboard.js" {
+	if path == "/assets/dashboard.css" || path == "/assets/conference.css" || path == "/assets/portmap.css" || path == "/assets/dashboard.js" {
 		w.Header().Set("Cache-Control", "no-store")
 		if path == "/assets/dashboard.css" {
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
@@ -127,6 +130,9 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		} else if path == "/assets/conference.css" {
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
 			_, _ = w.Write([]byte(conferenceCSS))
+		} else if path == "/assets/portmap.css" {
+			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+			_, _ = w.Write([]byte(portMapCSS))
 		} else {
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 			_, _ = w.Write([]byte(dashboardJS))
@@ -185,6 +191,8 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		Key       string `json:"key"`
 		Code      string `json:"code"`
 		Name      string `json:"name"`
+		MapID     string `json:"mapID"`
+		LocalPort int    `json:"localPort"`
 	}
 	if !decodeJSON(w, r, &p, 8192) {
 		return true
@@ -227,6 +235,10 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		}
 	case "/api/local/device/remove":
 		err = updateHistory(d.directory, connectionRecord{DeviceID: p.Code}, true)
+	case "/api/local/port-map/create":
+		err = d.device.CreatePortMap(r.Context(), p.LocalPort, p.Name)
+	case "/api/local/port-map/delete":
+		err = d.device.DeletePortMap(r.Context(), p.MapID)
 	case "/api/local/hide":
 		err = d.host.hideWindow()
 	default:

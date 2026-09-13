@@ -88,6 +88,7 @@ type agent struct {
 	meetingGeneration       uint64
 	meetingSession          bool
 	terminationMu           sync.Mutex
+	portMaps                *managedPortMaps
 }
 
 func Main() {
@@ -163,6 +164,9 @@ func Main() {
 	a := &agent{id: id.ID, pin: id.PIN, name: strings.TrimSpace(*deviceName), shareDir: *share, allowControl: *control, privateKey: id.PrivateKey, quit: make(chan struct{}), managed: *relayAddr != "" && *relayAuth == "" && *relayToken == "", allowBrowserUI: *openUI}
 	if err := a.configureFilePermission(identityDir); err != nil {
 		log.Fatal(err)
+	}
+	if a.managed {
+		a.portMaps = newManagedPortMaps(identityDir)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -329,6 +333,9 @@ func (a *agent) requestExit() {
 		a.approvals.Cancel()
 	}
 	a.quitOnce.Do(func() { close(a.quit) })
+	if a.portMaps != nil {
+		a.portMaps.close()
+	}
 	a.connectionMu.Lock()
 	connection := a.relayConnection
 	a.relayConnection = nil
@@ -577,8 +584,11 @@ func (a *agent) waitForActiveLicense(serverURL string) bool {
 func (a *agent) monitorManagement(ctx context.Context, addr string, options relay.DialOptions) {
 	backoff := time.Second
 	for {
-		err := relay.WatchDeviceWithPIN(ctx, addr, options, relay.Hello{ID: a.id, Name: a.name, PIN: a.currentPIN(), PublicKey: a.privateKey.Public().(ed25519.PublicKey)}, a.privateKey, a.currentPIN, func(m relay.ControlMessage) {
+		err := relay.WatchManagedDevice(ctx, addr, options, relay.Hello{ID: a.id, Name: a.name, PIN: a.currentPIN(), PublicKey: a.privateKey.Public().(ed25519.PublicKey)}, a.privateKey, a.managementReply, func(m relay.ControlMessage) {
 			backoff = time.Second
+			if a.portMaps != nil {
+				a.portMaps.apply(a.id, m)
+			}
 			a.statusMu.Lock()
 			a.managementOnline = true
 			a.reportedPIN = m.PIN
@@ -594,6 +604,9 @@ func (a *agent) monitorManagement(ctx context.Context, addr string, options rela
 		a.statusMu.Lock()
 		a.managementOnline = false
 		a.statusMu.Unlock()
+		if a.portMaps != nil {
+			a.portMaps.offline(a.id)
+		}
 		if a.quitting() || ctx.Err() != nil {
 			return
 		}

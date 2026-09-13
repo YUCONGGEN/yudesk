@@ -13,6 +13,11 @@ if [[ -f "$PID_FILE" ]]; then
   if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
     echo "YuDesk is running (PID $pid)"
     echo "Relay: $PUBLIC_HOST:$RELAY_PORT"
+    if [[ -x "${FRP_ROOT:-}/frp-control.sh" ]] && "$FRP_ROOT/frp-control.sh" status >/dev/null 2>&1; then
+      echo "Port mapping: $PUBLIC_HOST:$FRP_CONTROL_PORT (TCP 9000-9500 managed on demand)"
+    else
+      echo "Port mapping: FRPS is not running"
+    fi
     echo "Website: $public_web_url/ (router TCP $PUBLIC_HTTP_PORT -> local $WEB_PORT)"
     echo "Admin: $public_web_url/admin"
     exit 0

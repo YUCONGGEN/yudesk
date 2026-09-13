@@ -1,0 +1,31 @@
+bindAddr = "0.0.0.0"
+proxyBindAddr = "0.0.0.0"
+bindPort = 8232
+
+transport.heartbeatTimeout = 15
+transport.maxPoolCount = 5
+transport.tcpMux = false
+transport.tcpKeepalive = 30
+transport.tls.force = true
+transport.tls.certFile = "/opt/yudesk/frp/frps.crt"
+transport.tls.keyFile = "/opt/yudesk/frp/frps.key"
+
+allowPorts = [
+  { start = 9000, end = 9500 }
+]
+maxPortsPerClient = 5
+detailedErrorsToClient = false
+
+auth.method = "token"
+auth.token = ""
+
+log.to = "/opt/yudesk/frp/frps.log"
+log.level = "info"
+log.maxDays = 7
+log.disablePrintColor = true
+
+[[httpPlugins]]
+name = "yudesk-manager"
+addr = "127.0.0.1:8236"
+path = "/frp"
+ops = ["Login", "NewProxy", "CloseProxy", "Ping", "NewWorkConn", "NewUserConn"]

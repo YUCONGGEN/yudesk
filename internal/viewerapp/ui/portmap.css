@@ -1,0 +1,64 @@
+.port-map-notice {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 13px 15px;
+  margin: 8px 0 15px;
+  background: #f3f8ff;
+  border: 1px solid #dbeaff;
+  border-radius: 11px;
+  color: #315477;
+}
+.port-map-notice svg { color: var(--blue); margin-top: 1px; }
+.port-map-notice strong { color: #1f3550; }
+.port-map-notice p { margin: 3px 0 0; line-height: 1.55; }
+.port-map-form {
+  display: grid;
+  grid-template-columns: 160px minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+.port-map-form label { display: grid; gap: 6px; color: #68758a; }
+.port-map-form input { width: 100%; }
+.port-map-table { border: 1px solid #e1e7f0; border-radius: 10px; overflow: hidden; }
+.port-map-heading,
+.port-map-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.1fr) minmax(210px, 1.4fr) 82px 72px;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 13px;
+}
+.port-map-heading { background: #f7f9fc; color: #7c8799; font-size: 12px; border-bottom: 1px solid #e7ebf2; }
+.port-map-row + .port-map-row { border-top: 1px solid #edf0f5; }
+.port-map-row > div { display: grid; gap: 2px; }
+.port-map-row small { color: var(--muted); }
+.port-map-address {
+  justify-content: flex-start;
+  padding: 5px 7px;
+  color: #1478f7;
+  background: #f2f7ff;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.port-map-table > .empty { margin: 0; padding: 24px; text-align: center; }
+.port-map-warning {
+  margin: 13px 0 0;
+  padding: 10px 13px;
+  border-left: 3px solid #e2a52b;
+  background: #fffaf0;
+  color: #7a6538;
+  border-radius: 4px 8px 8px 4px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+@media (max-width: 720px) {
+  .port-map-form { grid-template-columns: 1fr 1fr; }
+  .port-map-form button { grid-column: 1 / -1; }
+  .port-map-heading { display: none; }
+  .port-map-row { grid-template-columns: 1fr auto; }
+  .port-map-row .port-map-address { grid-column: 1 / -1; grid-row: 2; }
+  .port-map-row .badge { grid-column: 2; grid-row: 1; }
+}

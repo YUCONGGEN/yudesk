@@ -11,15 +11,50 @@ import (
 )
 
 type ControlMessage struct {
-	Type        string    `json:"type"`
-	Nonce       []byte    `json:"nonce,omitempty"`
-	Signature   []byte    `json:"signature,omitempty"`
-	Active      bool      `json:"active"`
-	ActiveUntil time.Time `json:"activeUntil,omitempty"`
-	Code        string    `json:"code,omitempty"`
-	Message     string    `json:"message,omitempty"`
-	DeviceCode  string    `json:"deviceCode,omitempty"`
-	PIN         string    `json:"pin,omitempty"`
+	Type               string          `json:"type"`
+	Nonce              []byte          `json:"nonce,omitempty"`
+	Signature          []byte          `json:"signature,omitempty"`
+	Active             bool            `json:"active"`
+	ActiveUntil        time.Time       `json:"activeUntil,omitempty"`
+	Code               string          `json:"code,omitempty"`
+	Message            string          `json:"message,omitempty"`
+	DeviceCode         string          `json:"deviceCode,omitempty"`
+	PIN                string          `json:"pin,omitempty"`
+	PortMaps           []PortMap       `json:"portMaps,omitempty"`
+	PortMapCommand     *PortMapCommand `json:"portMapCommand,omitempty"`
+	PortMapResult      *PortMapResult  `json:"portMapResult,omitempty"`
+	PortMapServer      string          `json:"portMapServer,omitempty"`
+	PortMapSession     string          `json:"portMapSession,omitempty"`
+	PortMapCertificate string          `json:"portMapCertificate,omitempty"`
+}
+
+// PortMap is a server-issued TCP mapping. The public port is never selected by
+// the client, which lets the relay enforce global uniqueness and per-device
+// limits atomically.
+type PortMap struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Protocol      string    `json:"protocol"`
+	LocalPort     int       `json:"localPort"`
+	RemotePort    int       `json:"remotePort"`
+	PublicAddress string    `json:"publicAddress"`
+	Secret        string    `json:"secret,omitempty"`
+	Online        bool      `json:"online"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+type PortMapCommand struct {
+	RequestID string `json:"requestID"`
+	Action    string `json:"action"`
+	MapID     string `json:"mapID,omitempty"`
+	Name      string `json:"name,omitempty"`
+	LocalPort int    `json:"localPort,omitempty"`
+}
+
+type PortMapResult struct {
+	RequestID string `json:"requestID"`
+	OK        bool   `json:"ok"`
+	Message   string `json:"message,omitempty"`
 }
 
 func ControlProof(deviceID string, nonce []byte) []byte {
@@ -36,6 +71,19 @@ func WatchDevice(ctx context.Context, addr string, options DialOptions, hello He
 // The live PIN travels only over the authenticated management connection. A
 // change does not close that connection or interrupt an established desktop.
 func WatchDeviceWithPIN(ctx context.Context, addr string, options DialOptions, hello Hello, key ed25519.PrivateKey, currentPIN func() string, status func(ControlMessage)) error {
+	return WatchManagedDevice(ctx, addr, options, hello, key, func() ControlMessage {
+		reply := ControlMessage{Type: "pong"}
+		if currentPIN != nil {
+			reply.PIN = currentPIN()
+		}
+		return reply
+	}, status)
+}
+
+// WatchManagedDevice carries device state and small control commands. It is
+// intentionally separate from desktop/video traffic and remains protected by
+// the relay certificate plus the device's Ed25519 identity.
+func WatchManagedDevice(ctx context.Context, addr string, options DialOptions, hello Hello, key ed25519.PrivateKey, replyState func() ControlMessage, status func(ControlMessage)) error {
 	c, err := dialTransport(ctx, addr, options)
 	if err != nil {
 		return err
@@ -91,8 +139,9 @@ func WatchDeviceWithPIN(ctx context.Context, addr string, options DialOptions, h
 		}
 		status(m)
 		reply := ControlMessage{Type: "pong"}
-		if currentPIN != nil {
-			reply.PIN = currentPIN()
+		if replyState != nil {
+			reply = replyState()
+			reply.Type = "pong"
 		}
 		if err := json.NewEncoder(c).Encode(reply); err != nil {
 			return err
