@@ -67,14 +67,15 @@
 .conference-member-menu button:hover{background:#edf6ff;color:#087ff2}
 .conference-member-menu button.danger{color:#c84e55}
 .conference-member-menu button.danger:hover{background:#fff1f2;color:#bd3f47}
-.conference-member-info{width:min(390px,calc(100vw - 32px));padding:0;border:0;border-radius:14px;background:#fff;color:#2b333e;box-shadow:0 22px 65px rgba(15,37,65,.24)}
-.conference-member-info::backdrop{background:rgba(18,30,46,.38);backdrop-filter:blur(3px)}
-.conference-member-info>div{padding:20px}
-.conference-member-info h2{margin:0;color:#202c3a;font-size:16px}
+.conference-member-info{width:min(390px,calc(100vw - 32px));padding:0;overflow:hidden;border:1px solid rgba(219,228,240,.96);border-radius:18px;background:linear-gradient(180deg,#fff,#fbfdff);color:#2b333e;box-shadow:0 28px 90px rgba(15,37,65,.25),0 2px 8px rgba(15,37,65,.08);animation:conference-dialog-in .16s cubic-bezier(.2,.8,.2,1)}
+.conference-member-info::backdrop{background:rgba(18,30,46,.45);backdrop-filter:blur(5px)}
+.conference-info-accent{height:4px;background:linear-gradient(90deg,#087ff2,#58b4ff)}.conference-info-body{padding:21px 23px 22px}.conference-info-body>header{display:flex;align-items:center;gap:12px}.conference-info-mark{width:38px;height:38px;display:grid;place-items:center;border-radius:11px;background:linear-gradient(145deg,#2d91ff,#1168ec);color:#fff;font-size:16px;font-weight:750;box-shadow:0 8px 20px rgba(20,120,247,.22)}
+.conference-member-info h2{margin:0;color:#202c3a;font-size:16px}.conference-member-info header p{margin:3px 0 0;color:#8995a4;font-size:10px}
 .conference-member-info dl{display:grid;grid-template-columns:76px minmax(0,1fr);gap:10px 14px;margin:17px 0;color:#34475c;font-size:11px}
 .conference-member-info dt{color:#8b98a8}.conference-member-info dd{margin:0;overflow-wrap:anywhere}
-.conference-member-info footer{display:flex;justify-content:flex-end;padding-top:3px}
+.conference-member-info footer{display:flex;justify-content:flex-end;padding-top:14px;border-top:1px solid #edf1f6}
 .conference-member-info button{min-height:31px;padding:5px 15px;border:0;border-radius:7px;background:#087ff2;color:#fff;font-size:11px}
+@keyframes conference-dialog-in{from{opacity:0;transform:translateY(7px) scale(.985)}to{opacity:1;transform:none}}@media(prefers-reduced-motion:reduce){.conference-member-info{animation:none}}
 .conference-toolbar{height:78px;flex:0 0 78px;display:flex;align-items:center;justify-content:center;gap:10px;padding:7px 18px;border-top:1px solid #e8ebef;background:#fff}
 .conference-toolbar button{width:74px;min-height:58px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;border:0;border-radius:8px;background:transparent;color:#657382}
 .conference-toolbar button:hover{background:#edf6ff;color:#087ff2}

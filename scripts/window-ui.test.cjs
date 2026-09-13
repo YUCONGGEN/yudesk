@@ -546,7 +546,7 @@ for(const accept of [false,true]){
     // Exercise the actual stylesheet: compact, centered modal within viewport.
     const box=await page.locator('#incomingApproval').boundingBox();
     assert.ok(box.width<=340&&box.x>=0&&box.y>=0&&box.x+box.width<=1280&&box.y+box.height<=800);
-    assert.equal(await page.locator('#incomingApproval').evaluate(dialog=>getComputedStyle(dialog).borderRadius),'14px');
+    assert.equal(await page.locator('#incomingApproval').evaluate(dialog=>getComputedStyle(dialog).borderRadius),'18px');
     await page.locator(accept?'#allowConnection':'#denyConnection').click();
     await page.locator('#incomingApproval').waitFor({state:'hidden'});
     assert.equal(state.posts.length,1);

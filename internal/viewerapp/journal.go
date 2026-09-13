@@ -73,7 +73,7 @@ func (j *lifecycleJournal) record(event string, err error) {
 	case "app_started", "app_stopped", "window_closed", "exit_clicked", "tray_exit", "device_stopped", "service_restart",
 		"session_disconnected", "session_ended", "session_connect_failed", "window_monitor_lost", "window_monitor_restored",
 		"window_target_closed", "window_process_exited", "local_server_stopped", "browser_watch_closed",
-		"window_closed_to_tray", "window_close_to_tray_failed":
+		"window_closed_to_tray", "window_close_to_tray_failed", "window_recovered", "window_recovery_failed", "app_panic":
 	default:
 		event = "unknown_event"
 	}

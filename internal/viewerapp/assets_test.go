@@ -29,6 +29,21 @@ func TestFooterPresentAndOfflineAssets(t *testing.T) {
 	}
 }
 
+func TestApplicationDialogsAreCustomStyled(t *testing.T) {
+	scripts := dashboardJS + string(windowUI) + sessionJS
+	for _, forbidden := range []string{"alert(", "confirm(", "prompt("} {
+		if strings.Contains(scripts, forbidden) {
+			t.Fatalf("application UI contains browser-native dialog call %q", forbidden)
+		}
+	}
+	styles := dashboardCSS + string(windowStyle) + sessionCSS + conferenceCSS
+	for _, expected := range []string{".yu-dialog-danger", ".app-form-dialog", ".dialog-error", ".session-dialog", ".conference-member-info", ".conference-info-mark", "backdrop-filter"} {
+		if !strings.Contains(styles, expected) {
+			t.Errorf("custom dialog styling missing %q", expected)
+		}
+	}
+}
+
 func TestDashboardContainsMultipartyMeetingFlow(t *testing.T) {
 	var output bytes.Buffer
 	if err := dashboardPage.Execute(&output, map[string]any{"Token": "test-token", "Version": "2.0.0"}); err != nil {

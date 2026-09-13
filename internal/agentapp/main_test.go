@@ -199,10 +199,13 @@ func TestAgentPageOffersOneClickCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := output.String()
-	for _, expected := range []string{"复制设备码", "复制 PIN", "一键复制设备码和 PIN", "隐藏到后台", "退出被控端", "直接关闭窗口", "/api/ui/watch", `data-device-id="ABCDEF0123456789ABCDEF01"`, `data-pin="12345678"`, "navigator.clipboard", "设备码："} {
+	for _, expected := range []string{"复制设备码", "复制 PIN", "一键复制设备码和 PIN", "隐藏到后台", "退出被控端", "直接关闭窗口", "/api/ui/watch", `data-device-id="ABCDEF0123456789ABCDEF01"`, `data-pin="12345678"`, "navigator.clipboard", "设备码：", `id="legacy-exit-dialog"`, "确认退出 YuDesk", "showModal"} {
 		if !strings.Contains(page, expected) {
 			t.Errorf("agent page does not contain %q", expected)
 		}
+	}
+	if strings.Contains(page, "confirm(") || strings.Contains(page, "alert(") || strings.Contains(page, "prompt(") {
+		t.Fatal("agent page must not use browser-native dialogs")
 	}
 }
 

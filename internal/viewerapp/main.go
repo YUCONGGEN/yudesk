@@ -315,6 +315,8 @@ type viewerSessionOutcome struct {
 func Main()        { main(false) }
 func UnifiedMain() { main(true) }
 
+const defaultViewerWebAddress = "127.0.0.1:9348"
+
 func main(unified bool) {
 	addr := flag.String("addr", "127.0.0.1:9347", "agent address")
 	pin := flag.String("pin", "", "agent pairing PIN")
@@ -327,7 +329,7 @@ func main(unified bool) {
 	relayCA := flag.String("relay-ca", "", "trusted relay CA/certificate PEM file")
 	relayFingerprint := flag.String("relay-fingerprint", defaultRelayFingerprint, "expected relay TLS SHA-256 fingerprint")
 	relayInsecure := flag.Bool("relay-insecure", false, "disable relay certificate verification (unsafe)")
-	web := flag.String("web", "127.0.0.1:9348", "local visual console address")
+	web := flag.String("web", defaultViewerWebAddress, "local visual console address")
 	once := flag.String("once", "", "save one screenshot and exit")
 	fps := flag.Int("fps", 30, "requested stream frames per second (1-60; actual rate depends on hardware and network)")
 	quality := flag.Int("quality", 70, "JPEG stream quality (30-90)")
@@ -347,7 +349,9 @@ func main(unified bool) {
 		control: !*viewOnly, audio: *audio,
 	}
 	if err := runViewer(config); err != nil {
-		log.Fatal(err)
+		// log.Fatal calls os.Exit and skips cleanup/diagnostic defers. The GUI
+		// build has no console, so a normal return is both safer and observable.
+		log.Printf("YuDesk stopped: %v", err)
 	}
 }
 
@@ -391,6 +395,10 @@ func runViewer(config viewerConfig) (resultErr error) {
 	}
 	journal.record("app_started", nil)
 	defer func() {
+		if recovered := recover(); recovered != nil {
+			resultErr = errors.New("YuDesk 内部异常已被安全拦截")
+			journal.record("app_panic", resultErr)
+		}
 		journal.record("app_stopped", resultErr)
 		journal.Close()
 	}()

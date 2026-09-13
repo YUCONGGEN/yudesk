@@ -5,20 +5,25 @@
   const style=document.createElement('link');style.rel='stylesheet';style.href=endpoint('/assets/window-ui.css');document.head.append(style);
   function node(tag,cls,text){const n=document.createElement(tag);if(cls)n.className=cls;if(text)n.textContent=text;return n;}
   function dialog(id,title){
-    const d=node('dialog','yu-dialog');d.id=id;
+    const d=node('dialog','yu-dialog');d.id=id;d.setAttribute('aria-modal','true');
     const mark=node('div','yu-dialog-mark','Yu'),h=node('h2','',title),p=node('p'),buttons=node('div','yu-dialog-actions');
+    h.id=id+'Title';d.setAttribute('aria-labelledby',h.id);
     d.append(mark,h,p,buttons);document.body.append(d);return {d,h,p,buttons};
   }
   const confirmUI=dialog('appConfirm','请确认操作');
   const cancelConfirm=node('button','secondary','取消'),acceptConfirm=node('button','primary','继续');
   cancelConfirm.id='confirmCancel';acceptConfirm.id='confirmAccept';confirmUI.buttons.append(cancelConfirm,acceptConfirm);
-  window.yudeskConfirm=message=>new Promise(resolve=>{
+  window.yudeskConfirm=(message,options={})=>new Promise(resolve=>{
     if(confirmUI.d.open){resolve(false);return;}
+    const destructive=options.danger??/(退出|结束|移出|删除|卸载|关闭|终止)/.test(String(message));
+    confirmUI.d.classList.toggle('yu-dialog-danger',destructive);
+    confirmUI.h.textContent=options.title||(destructive?'确认执行此操作？':'请确认操作');
     confirmUI.p.textContent=message;
+    acceptConfirm.textContent=options.accept||(destructive?'确认操作':'继续');
     const finish=value=>{confirmUI.d.close();resolve(value);};
     cancelConfirm.onclick=()=>finish(false);acceptConfirm.onclick=()=>finish(true);
     confirmUI.d.oncancel=event=>{event.preventDefault();finish(false);};
-    confirmUI.d.showModal();cancelConfirm.focus();
+    confirmUI.d.showModal();cancelConfirm.focus({preventScroll:true});
   });
   // Connecting/return pages also need controls when the system caption is gone.
   if(!document.querySelector('[data-window-action="minimize"]')){

@@ -3,6 +3,7 @@ package viewerapp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -18,28 +19,34 @@ import (
 // including relay dialing and failed attempts. Only the active page handler
 // changes. Closing a connecting window therefore cancels the dial as well.
 type viewerHost struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	listener net.Listener
-	server   *http.Server
-	mu       sync.RWMutex
-	windowMu sync.Mutex // serializes show/hide/exit together with tray state
-	page     *viewerPageListener
-	handler  http.Handler
-	desk     *unifiedDesk
-	version  atomic.Value
-	tracker  *uilifecycle.Tracker
-	window   *appWindow
-	tray     *appTray
-	openUI   bool
-	journal  *lifecycleJournal
-	lastShow time.Time
+	ctx        context.Context
+	cancel     context.CancelFunc
+	listener   net.Listener
+	server     *http.Server
+	mu         sync.RWMutex
+	windowMu   sync.Mutex // serializes show/hide/exit together with tray state
+	page       *viewerPageListener
+	handler    http.Handler
+	desk       *unifiedDesk
+	version    atomic.Value
+	tracker    *uilifecycle.Tracker
+	window     *appWindow
+	tray       *appTray
+	openUI     bool
+	journal    *lifecycleJournal
+	lastShow   time.Time
+	recovering atomic.Bool
 }
 
 const duplicateShowWindow = 2 * time.Second
 
 func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHost, error) {
 	l, err := net.Listen("tcp", addr)
+	if err != nil && addr == defaultViewerWebAddress {
+		// A stale helper or unrelated local program must not make the GUI flash
+		// and exit. State files already publish the listener's actual address.
+		l, err = net.Listen("tcp", "127.0.0.1:0")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -234,14 +241,59 @@ func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHo
 func (h *viewerHost) handleWindowClosed() {
 	if runtime.GOOS == "windows" && h.window != nil && !h.window.headless && h.window.managed.Load() {
 		h.journal.record("window_monitor_lost", nil)
-		if err := h.closeToTray(); err != nil {
-			h.journal.record("window_close_to_tray_failed", err)
-			h.setDeskHidden(true)
-			h.setTrayVisible(true)
-		}
+		h.setDeskHidden(true)
+		h.setTrayVisible(true)
+		h.recoverWindow()
 		return
 	}
 	h.requestExit("window_closed")
+}
+
+// A private Edge/Chromium renderer failure is not user intent to exit. Rebuild
+// it in-process with a bounded retry budget. WM_CLOSE uses onUserClose and does
+// not enter this path, so closing to the tray keeps its existing semantics.
+func (h *viewerHost) recoverWindow() {
+	if !h.recovering.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer func() {
+			if recover() != nil {
+				// A recovery failure must never take down the long-lived agent.
+				h.journal.record("app_panic", errors.New("window recovery panic"))
+				h.setDeskHidden(true)
+				h.setTrayVisible(true)
+			}
+			h.recovering.Store(false)
+		}()
+		for _, delay := range []time.Duration{150 * time.Millisecond, 500 * time.Millisecond, 1500 * time.Millisecond} {
+			timer := time.NewTimer(delay)
+			select {
+			case <-h.ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			h.windowMu.Lock()
+			h.lastShow = time.Time{}
+			err := h.window.Show()
+			if err == nil {
+				h.lastShow = time.Now()
+			}
+			h.windowMu.Unlock()
+			if err == nil {
+				h.setDeskHidden(false)
+				h.setTrayVisible(true)
+				h.journal.record("window_recovered", nil)
+				return
+			}
+			h.journal.record("window_recovery_failed", err)
+		}
+		// Keep the singleton/tray alive. A later desktop/tray launch retries Show.
+		if err := h.closeToTray(); err != nil {
+			h.journal.record("window_close_to_tray_failed", err)
+		}
+	}()
 }
 
 func (h *viewerHost) requestExit(reason string) {

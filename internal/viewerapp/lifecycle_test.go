@@ -32,6 +32,21 @@ func TestWindowsManagedRendererLossKeepsSingletonAlive(t *testing.T) {
 	}
 }
 
+func TestDefaultViewerPortFallsBackWhenOccupied(t *testing.T) {
+	occupied, err := net.Listen("tcp", defaultViewerWebAddress)
+	if err == nil {
+		defer occupied.Close()
+	}
+	h, err := newViewerHost(defaultViewerWebAddress, "port-fallback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	if h.listener.Addr().String() == defaultViewerWebAddress {
+		t.Fatal("viewer host reused the occupied default port")
+	}
+}
+
 func TestWindowsManagedWatchDropDoesNotExitHost(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows native lifecycle")
