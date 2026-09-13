@@ -59,8 +59,46 @@ func (b *appWindow) initProfile() error {
 		return err
 	}
 	hash := sha256.Sum256([]byte(b.url))
-	b.profile = filepath.Join(root, "YuDesk", "browser", "app-"+hex.EncodeToString(hash[:8]))
-	return os.MkdirAll(b.profile, 0700)
+	b.profileRoot = filepath.Join(root, "YuDesk", "browser", "app-"+hex.EncodeToString(hash[:8]))
+	if err := os.MkdirAll(b.profileRoot, 0700); err != nil {
+		return err
+	}
+	// Chromium records an unclean exit in its profile. If YuDesk is ended from
+	// Task Manager and that profile is reused, Edge briefly restores its own
+	// crash UI before the app window is embedded. UI settings and device history
+	// live in Go, so every cold start can safely use a fresh renderer profile.
+	b.profile, err = freshRendererProfile(b.profileRoot)
+	return err
+}
+
+func freshRendererProfile(root string) (string, error) {
+	// The single-instance lock is acquired before this function is reached, so
+	// renderer-* directories here can only belong to an earlier stopped/crashed
+	// YuDesk process. Best-effort removal prevents repeated forced exits from
+	// accumulating complete browser caches on disk.
+	entries, _ := os.ReadDir(root)
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "renderer-") {
+			_ = os.RemoveAll(filepath.Join(root, entry.Name()))
+		}
+	}
+	return os.MkdirTemp(root, "renderer-")
+}
+
+func discardRendererProfile(root, profile string) {
+	root, profile = filepath.Clean(root), filepath.Clean(profile)
+	if root == "." || profile == "." || filepath.Dir(profile) != root || !strings.HasPrefix(filepath.Base(profile), "renderer-") {
+		return
+	}
+	_ = os.RemoveAll(profile)
+}
+
+func browserProcessArgs(appURL, profile string, headless bool) []string {
+	args := []string{"--app=" + appURL, "--user-data-dir=" + profile, "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", "--no-first-run", "--disable-first-run-ui", "--no-default-browser-check", "--disable-background-mode", "--disable-session-crashed-bubble", "--hide-crash-restore-bubble", "--autoplay-policy=no-user-gesture-required", fmt.Sprintf("--window-size=%d,%d", appWindowWidth, appWindowHeight)}
+	if headless {
+		args = append(args, "--headless=new", "--disable-gpu")
+	}
+	return args
 }
 
 func (b *appWindow) connection() (*websocket.Conn, error) {
@@ -113,6 +151,68 @@ func windowCommand(c *websocket.Conn, method string, params any, output any) err
 	}
 }
 
+func windowSessionCommand(c *websocket.Conn, sessionID, method string, params any, output any) error {
+	_ = c.SetWriteDeadline(time.Now().Add(2 * time.Second))
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := c.WriteJSON(map[string]any{"id": 2, "method": method, "params": params, "sessionId": sessionID}); err != nil {
+		return err
+	}
+	for {
+		var response struct {
+			ID        int
+			SessionID string `json:"sessionId"`
+			Result    json.RawMessage
+			Error     *struct{ Message string }
+		}
+		if err := c.ReadJSON(&response); err != nil {
+			return err
+		}
+		if response.ID != 2 || (response.SessionID != "" && response.SessionID != sessionID) {
+			continue
+		}
+		if response.Error != nil {
+			return errors.New(response.Error.Message)
+		}
+		if output != nil {
+			return json.Unmarshal(response.Result, output)
+		}
+		return nil
+	}
+}
+
+// Chromium creates its renderer HWND before stylesheets and fonts are ready.
+// Keep the native host hidden until the complete document is drawable, or a
+// cold/crash restart can expose one unstyled white frame.
+func waitWindowDocumentReady(c *websocket.Conn, targetID string) error {
+	var attached struct{ SessionID string }
+	if err := windowCommand(c, "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}, &attached); err != nil {
+		return err
+	}
+	if attached.SessionID == "" {
+		return errors.New("missing app browser session")
+	}
+	defer func() {
+		_ = windowCommand(c, "Target.detachFromTarget", map[string]any{"sessionId": attached.SessionID}, nil)
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var result struct {
+			Result struct{ Value bool }
+		}
+		if err := windowSessionCommand(c, attached.SessionID, "Runtime.evaluate", map[string]any{
+			"expression":    `document.readyState === "complete" && Array.from(document.querySelectorAll('link[rel~="stylesheet"]')).every(link => !!link.sheet)`,
+			"returnByValue": true,
+		}, &result); err != nil {
+			return err
+		}
+		if result.Result.Value {
+			return nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return errors.New("YuDesk 页面资源加载超时")
+}
+
 type windowTarget struct{ TargetID, Type, URL string }
 
 func (b *appWindow) target(c *websocket.Conn) (string, error) {
@@ -151,6 +251,9 @@ func (b *appWindow) Show() error {
 				}
 			}
 			err = windowCommand(c, "Target.activateTarget", map[string]any{"targetId": id}, nil)
+			if err == nil {
+				err = waitWindowDocumentReady(c, id)
+			}
 			c.Close()
 			if err != nil {
 				return err
@@ -190,7 +293,7 @@ func (b *appWindow) Show() error {
 			}
 			b.stopBrowser = nil
 		}
-		fresh, err := os.MkdirTemp(b.profileRoot, "renderer-")
+		fresh, err := freshRendererProfile(b.profileRoot)
 		if err != nil {
 			return err
 		}
@@ -201,10 +304,7 @@ func (b *appWindow) Show() error {
 		if err != nil {
 			continue
 		}
-		args := []string{"--app=" + b.url, "--user-data-dir=" + b.profile, "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", "--no-first-run", "--disable-first-run-ui", "--no-default-browser-check", "--disable-background-mode", "--autoplay-policy=no-user-gesture-required", fmt.Sprintf("--window-size=%d,%d", appWindowWidth, appWindowHeight)}
-		if b.headless {
-			args = append(args, "--headless=new", "--disable-gpu")
-		}
+		args := browserProcessArgs(b.url, b.profile, b.headless)
 		pid, done, guard, err := startBrowserProcess(resolved, args)
 		if err != nil {
 			continue
@@ -238,8 +338,11 @@ func (b *appWindow) Show() error {
 					}
 					_ = windowCommand(c, "Browser.setWindowBounds", map[string]any{"windowId": result.WindowID, "bounds": map[string]any{"width": appWindowWidth, "height": appWindowHeight}}, nil)
 				}
-				c.Close()
-				return b.finishShow(id)
+				if err = waitWindowDocumentReady(c, id); err == nil {
+					c.Close()
+					return b.finishShow(id)
+				}
+				startupErr = err
 			}
 			startupErr = err
 			c.Close()
@@ -378,6 +481,7 @@ func (b *appWindow) Close() (result error) {
 			result = errors.Join(result, b.stopBrowser())
 			b.stopBrowser = nil
 		}
+		discardRendererProfile(b.profileRoot, b.profile)
 	}()
 	if b.profile == "" {
 		return nativeErr

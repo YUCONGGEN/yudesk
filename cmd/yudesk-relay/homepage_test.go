@@ -56,7 +56,7 @@ func TestHomepageContentAndDownloads(t *testing.T) {
 		"真实客户端界面，设备信息为演示数据", "非实测截图", "尚未实现系统声音采集",
 		"Android 文件传输暂不支持，系统声音采集尚未实现", "真实锁屏场景尚未主动测试", "管理员可查看设备上报的 PIN", "不受 HTTPS 保护",
 		"低延迟高响应", `class="icp-link"`, homepageAssetURL("beian.svg"),
-		"设计者：郁从根", "17739798184", "皖ICP备20003241号-3", `href="https://beian.miit.gov.cn/"`,
+		"遇到问题联系", "17739798184", "皖ICP备20003241号-3", `href="https://beian.miit.gov.cn/"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("homepage missing %q", want)

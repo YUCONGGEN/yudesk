@@ -3,9 +3,58 @@ package viewerapp
 import (
 	"net/http"
 	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestColdStartUsesFreshRendererProfile(t *testing.T) {
+	root := t.TempDir()
+	first, err := freshRendererProfile(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := freshRendererProfile(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || filepath.Dir(first) != root || filepath.Dir(second) != root {
+		t.Fatalf("renderer profiles must be distinct children: first=%q second=%q", first, second)
+	}
+	if !strings.HasPrefix(filepath.Base(first), "renderer-") || !strings.HasPrefix(filepath.Base(second), "renderer-") {
+		t.Fatalf("unexpected renderer profile names: %q %q", first, second)
+	}
+	if _, err := os.Stat(first); !os.IsNotExist(err) {
+		t.Fatalf("stale renderer profile survived the next cold start: %v", err)
+	}
+	discardRendererProfile(root, second)
+	if _, err := os.Stat(second); !os.IsNotExist(err) {
+		t.Fatalf("renderer profile survived normal close cleanup: %v", err)
+	}
+}
+
+func TestDiscardRendererProfileRejectsUnrelatedDirectories(t *testing.T) {
+	root := t.TempDir()
+	unrelated := filepath.Join(root, "settings")
+	if err := os.Mkdir(unrelated, 0700); err != nil {
+		t.Fatal(err)
+	}
+	discardRendererProfile(root, unrelated)
+	if _, err := os.Stat(unrelated); err != nil {
+		t.Fatalf("unrelated application data was removed: %v", err)
+	}
+}
+
+func TestBrowserProcessArgsSuppressUncleanRestartUI(t *testing.T) {
+	args := browserProcessArgs("http://127.0.0.1/app", filepath.Join(t.TempDir(), "profile"), false)
+	for _, want := range []string{"--disable-session-crashed-bubble", "--hide-crash-restore-bubble"} {
+		if !slices.Contains(args, want) {
+			t.Fatalf("missing cold-start guard %q in %q", want, args)
+		}
+	}
+}
 
 func TestNativeManagedWindowHideReopenAndClose(t *testing.T) {
 	browser := os.Getenv("YUDESK_TEST_BROWSER")

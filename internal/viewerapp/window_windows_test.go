@@ -324,14 +324,12 @@ func TestNativeColdStartWaitsForPageStylesBeforeShowing(t *testing.T) {
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		visible := false
-		nativeWindows.Range(func(_, value any) bool {
-			n := value.(*nativeAppWindow)
-			if hwnd := n.ownedHandle(); hwnd != 0 {
+		if b.native != nil {
+			if hwnd := b.native.ownedHandle(); hwnd != 0 {
 				state, _, _ := appWindowVisible.Call(hwnd)
 				visible = state != 0
 			}
-			return !visible
-		})
+		}
 		if visible {
 			close(releaseCSS)
 			t.Fatal("YuDesk host became visible while page styles were still loading")

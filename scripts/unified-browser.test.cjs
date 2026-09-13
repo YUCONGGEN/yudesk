@@ -12,7 +12,7 @@ const {chromium}=require('playwright');
     const left=await context.newPage(),right=await context.newPage();
     const noPageScroll=async page=>{assert.deepEqual(await page.evaluate(()=>{window.scrollTo(100,100);return [window.scrollX,window.scrollY,document.documentElement.scrollWidth<=innerWidth,document.documentElement.scrollHeight<=innerHeight];}),[0,0,true,true]);};
     const checkFooter=async page=>{
-      assert.match(await page.locator('.designer-credit').textContent(),/郁从根.*17739798184/);
+      assert.match(await page.locator('.designer-credit').textContent(),/遇到问题联系.*17739798184/);
       assert.equal(await page.locator('.product-motto').textContent(),'低延迟高响应');
       assert.equal(await page.locator('.icp-link').getAttribute('href'),'https://beian.miit.gov.cn/');
       assert.equal(await page.locator('.icp-link').getAttribute('rel'),'noopener noreferrer');

@@ -637,7 +637,7 @@ final class DashboardUi {
         body.addView(permissions, new LinearLayout.LayoutParams(-1, -2));
         detail(body, "当前支持", "多人语音和视频会议、9 位会议号、主持人转让与共享屏幕、本地录屏、横屏全屏远控、点击与拖动、常用按键、中文文本输入。");
         detail(body, "系统限制", "Android 会议录制保存会议画面；受系统和应用版权保护的内部声音或画面可能无法录制或共享。");
-        detail(body, "关于 YuDesk", version() + " · Android 预览版\n设计者 郁从根 · 17739798184");
+        detail(body, "关于 YuDesk", version() + " · Android 预览版\n遇到问题联系 17739798184");
         box.addView(scroll, new LinearLayout.LayoutParams(-1, -2));
         dialog.setContentView(box);
         styleDialog(activity, dialog);
