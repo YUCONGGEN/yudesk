@@ -1,5 +1,33 @@
 # 当前部署状态（2026-09-13）
 
+## 当前会议扩容与全屏共享修复：`meeting-scale-share-20260913.12`
+
+桌面 **2.0.0** 与 Android **2.0.0-preview.18 / 2000018** 已于 **2026-09-13 09:46（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包均已更新；iOS 与原生鸿蒙继续暂停。
+
+- Relay 已移除会议 8 人的应用层硬限制，主持人与更多参会者可加入同一会议；服务器和界面不再显示固定人数上限。当前会议媒体仍为端到端 WebRTC 网状连接，实际可用人数取决于主持端、各参会端 CPU、上行带宽和公网链路，不能把“无固定硬限制”理解为无限容量。
+- 桌面会议全屏时始终保留可见的“退出全屏”入口；在原生全屏中发起共享会先暂时恢复窗口以调起系统屏幕选择器，授权完成或取消后自动恢复全屏，避免共享按钮永久变灰。
+- 共享授权等待状态继续使用可点击的蓝色应用按钮和中文说明；Android 重复点击会显示应用内提示。系统提供的屏幕/窗口选择器属于操作系统界面，其内部样式不能由 YuDesk 修改。
+- Android 参会画面改为可滚动的自适应网格，隐藏的视频块不再占位；较多成员时每行自动排布并保持最小可视高度。APK 已升级为 `preview.18`。
+- 根模块 `go test -short ./...`、`go vet ./...`、Relay 无固定人数回归、42 项窗口/自定义弹窗测试及 Windows 两客户端真实原生集成均通过；集成实际覆盖会议音频、转让主持人、全屏退出、全屏共享授权、系统音频轨、录制和结束会议。Android Java 单测、lint、四 ABI 构建、APK v2 签名与 16 KiB 对齐通过。
+- Linux revision 17 在 Ubuntu 24.04 构建并通过桌面入口及依赖检查；macOS Intel 与 Apple Silicon revision 17 在真实 Mac 上构建，最低 macOS 13，包展开、架构和应用 ad-hoc strict/deep 验签通过。
+- 发布前多次确认参与连接和活动会话为 0。首次备份校验与一次过早的冷启动健康检查均在替换完成前或自动回滚路径中安全停止，旧版服务恢复正常；延长健康等待后完成带数据库、配置、证书、程序和下载目录备份的原子部署。当前 PID **5668**。
+- `/healthz`、未登录后台 401、SQLite `quick_check`、TCP 8233/8235/8254 与 UDP 8233/8254 监听均通过，最近日志没有 panic、fatal error 或 data race。配置 SHA-256 保持 `86fb7368c75b0c14ffa5bbff8f015531f79546c8216e962fde741f3f448407a2`，TLS 指纹保持 `20FC953E48B6BEED7FB3A5F73BF177CC4E2557CF274C409FF4F0179E5FA0F836`。
+- 发布目录 `/Users/yu/bin/yudesk/releases/meeting-scale-share-20260913.12`，可恢复备份 `/Users/yu/bin/yudesk/backups/meeting-scale-share-20260913.12`。数据库账号 0、激活码 9、已授权设备 386，完整性为 `ok`；数量会随设备登记动态变化。
+- 五个平台安装包均从公网域名完整重新下载并与本地产物 SHA-256 一致；Android Range 请求返回 `206` 和正确范围。官网显示版本 2.0.0、发布日期 2026-09-13 09:29（北京时间）；发布验收时在线设备、参与连接和活动会话均为 0，这些数量为实时状态。
+
+| 当前产物 | SHA-256 |
+| --- | --- |
+| Windows x64 一体化安装器 | `551b4fe1ce451cf14fa227ba5757de2d49a67b13cff85608f9cc63a795167f8e` |
+| Linux x64 DEB revision 17 | `5e14a7db8335bc63ae1fd3c517a6c45d592304c3c550e63fb7b224b9ee06963d` |
+| macOS Intel PKG revision 17 | `0a6a2848ba306c4f2e12163625a338822a334c41a1413d43fc29c0626b3c11c7` |
+| macOS Apple Silicon PKG revision 17 | `3a2dd2191e5f3dcb369ec1c4a645cea34cfa09eff07d21fd459e97b37e3784e3` |
+| Android preview.18 APK | `b7b4405f9f5e38a5579ab8e31287800d51e2305ce1935ba114780db3dc08226f` |
+| macOS 服务端 | `8c9adfa726dfd933df978cce45c76c194a2671ba084e6563bd7041606fe05dec` |
+
+macOS 外层 PKG 仍未 Developer ID 签名或公证，Android 仍为调试证书签名的预览版；不同厂商物理 Android 手机、Linux/macOS 图形输入和长时间多人弱网仍需真机验收。
+
+完整变更见 [本次发布说明](RELEASE_NOTES_20260913.md)、[多人会议说明](CONFERENCE_20260911.md) 和 [Android 说明](ANDROID.md)。
+
 ## 当前冷启动稳定与联系方式更新：`cold-start-20260913.11`
 
 桌面 **2.0.0** 与 Android **2.0.0-preview.17 / 2000017** 已于 **2026-09-13 07:58（北京时间）**部署到官网。Windows、Linux、macOS Intel、macOS Apple Silicon 和 Android 五个平台安装包均已更新；iOS 与原生鸿蒙继续暂停。

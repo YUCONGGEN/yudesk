@@ -20,8 +20,8 @@ android {
         applicationId 'cn.yucg.yudesk.preview'
         minSdk 26
         targetSdk 35
-        versionCode 2000017
-        versionName '2.0.0-preview.17'
+        versionCode 2000018
+        versionName '2.0.0-preview.18'
         testInstrumentationRunner 'android.test.InstrumentationTestRunner'
     }
     compileOptions {

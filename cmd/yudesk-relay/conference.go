@@ -84,11 +84,9 @@ func (b *broker) handleConference(c net.Conn, reader *bufio.Reader, hello relay.
 	room, exists := b.meetings[hello.Room]
 	validHost := hello.Action != "host" || room.deviceID == hello.ID
 	conferenceReady := hello.Action == "host" || room.conference != nil && room.conference.hostID != ""
-	participantCount := 0
 	duplicateDevice := false
 	removedDevice := false
 	if room.conference != nil {
-		participantCount = len(room.conference.participants)
 		_, removedDevice = room.conference.removed[hello.ID]
 		for _, participant := range room.conference.participants {
 			if participant.deviceID == hello.ID {
@@ -119,10 +117,6 @@ func (b *broker) handleConference(c net.Conn, reader *bufio.Reader, hello relay.
 	}
 	if removedDevice {
 		stop("DENIED", "this device was removed from the meeting")
-		return
-	}
-	if participantCount >= relay.MaxConferenceParticipants {
-		stop("BUSY", "meeting is full")
 		return
 	}
 	if expiry, licenseErr := b.accounts.DeviceLicenseExpiry(hello.ID); licenseErr != nil || !expiry.After(now) {
@@ -160,7 +154,7 @@ func (b *broker) handleConference(c net.Conn, reader *bufio.Reader, hello relay.
 		}
 		room.conference = &conferenceRoom{participants: make(map[string]*conferenceParticipant), removed: make(map[string]struct{})}
 	}
-	if len(room.conference.participants) >= relay.MaxConferenceParticipants || (hello.Action == "host" && room.deviceID != hello.ID) || (hello.Action == "join" && room.conference.hostID == "") {
+	if (hello.Action == "host" && room.deviceID != hello.ID) || (hello.Action == "join" && room.conference.hostID == "") {
 		b.Unlock()
 		p.close()
 		return

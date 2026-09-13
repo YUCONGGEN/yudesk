@@ -264,6 +264,87 @@ func TestConferenceRejectsForgedHostAndJoinBeforeHost(t *testing.T) {
 	}
 }
 
+func TestConferenceHasNoStaticParticipantLimit(t *testing.T) {
+	store, err := account.Open(filepath.Join(t.TempDir(), "conference-unlimited.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	hostPublic, hostPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	hostDevice := secureconn.DeviceID(hostPublic)
+	if err := store.RegisterLicensedDevice(hostDevice, hostPublic); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GrantDeviceLicense(hostDevice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	control := &deviceControl{}
+	control.lastSeen.Store(time.Now().Unix())
+	b := &broker{accounts: store, deviceLicenses: true, devices: map[string]waiting{}, active: map[string]activeSession{}, controls: map[string]*deviceControl{hostDevice: control}}
+	certificate, fingerprint, err := security.LoadOrCreateServerConfig(filepath.Join(t.TempDir(), "cert"), filepath.Join(t.TempDir(), "key"), "localhost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", certificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			connection, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go b.handle(connection)
+		}
+	}()
+	options := relay.DialOptions{TLS: true, Fingerprint: fingerprint}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	meeting, err := relay.OpenMeeting(ctx, listener.Addr().String(), options, hostDevice, hostPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := relay.DialConference(ctx, listener.Addr().String(), options, hostDevice, hostPrivate, meeting.Code, "主持人", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Close()
+	if welcome := readConferenceMessage(t, host, json.NewDecoder(host)); welcome.Type != "welcome" {
+		t.Fatalf("unexpected host welcome: %+v", welcome)
+	}
+
+	// Nine guests plus the host crosses the former eight-participant product
+	// cap. The signaling room now admits every authenticated, licensed device;
+	// practical media capacity is governed by endpoint and network resources.
+	guests := make([]net.Conn, 0, 9)
+	defer func() {
+		for _, guest := range guests {
+			_ = guest.Close()
+		}
+	}()
+	for index := 0; index < 9; index++ {
+		publicKey, privateKey, _ := ed25519.GenerateKey(rand.Reader)
+		deviceID := secureconn.DeviceID(publicKey)
+		if err := store.RegisterLicensedDevice(deviceID, publicKey); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.GrantDeviceLicense(deviceID, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		guest, dialErr := relay.DialConference(ctx, listener.Addr().String(), options, deviceID, privateKey, meeting.Code, "参会者", false)
+		if dialErr != nil {
+			t.Fatalf("guest %d was rejected: %v", index+1, dialErr)
+		}
+		guests = append(guests, guest)
+		welcome := readConferenceMessage(t, guest, json.NewDecoder(guest))
+		if welcome.Type != "welcome" || len(welcome.Peers) != index+1 {
+			t.Fatalf("guest %d received unexpected welcome: %+v", index+1, welcome)
+		}
+	}
+}
+
 func readConferenceMessage(t *testing.T, conn net.Conn, decoder *json.Decoder) relay.ConferenceMessage {
 	t.Helper()
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))

@@ -21,6 +21,7 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import org.webrtc.EglBase;
 import org.webrtc.RendererCommon;
@@ -59,6 +60,7 @@ final class ConferenceUi {
     private final Actions actions;
     private final EglBase.Context eglContext;
     private final TileGrid grid;
+    private final ScrollView gridScroll;
     private final LinearLayout memberList, memberPanel, topBar;
     private final HorizontalScrollView toolbarBar;
     private final TextView connection, count, recordingBadge, sharingBadge, shareFocusBadge;
@@ -74,7 +76,8 @@ final class ConferenceUi {
         root=new FrameLayout(activity);root.setBackgroundColor(0xfff5f6f7);
 
         grid=new TileGrid(activity);grid.setPadding(dp(8),dp(58),dp(8),dp(82));
-        root.addView(grid,new FrameLayout.LayoutParams(-1,-1));
+        gridScroll=new ScrollView(activity);gridScroll.setFillViewport(true);gridScroll.setVerticalScrollBarEnabled(false);gridScroll.setClipToPadding(false);gridScroll.addView(grid,new ScrollView.LayoutParams(-1,-2));
+        root.addView(gridScroll,new FrameLayout.LayoutParams(-1,-1));
 
         topBar=row();topBar.setPadding(dp(18),dp(8),dp(12),dp(8));topBar.setBackground(fade(0xffffffff,0xffffffff));
         LinearLayout heading=column();TextView title=text("YuDesk 会议",15,0xff22262b);title.setTypeface(Typeface.DEFAULT_BOLD);heading.addView(title,new LinearLayout.LayoutParams(-1,dp(22)));TextView roomNumber=text(DashboardUi.groupCode(code),12,0xff8995a4);heading.addView(roomNumber,new LinearLayout.LayoutParams(-1,dp(20)));topBar.addView(heading,new LinearLayout.LayoutParams(0,dp(42),1));
@@ -147,7 +150,7 @@ final class ConferenceUi {
     }
 
     void setControls(boolean microphone,boolean speakerEnabled,boolean cameraEnabled,boolean screen,boolean recording,boolean host,boolean sharePending) {
-        mic.setActive(microphone,microphone?"静音":"解除静音");speaker.setActive(speakerEnabled,speakerEnabled?"关闭声音":"播放声音");camera.setActive(cameraEnabled,cameraEnabled?"关闭视频":"开启视频");switchCamera.root.setVisibility(cameraEnabled?View.VISIBLE:View.GONE);share.root.setVisibility(host?View.VISIBLE:View.GONE);record.root.setVisibility(host?View.VISIBLE:View.GONE);share.setActive(screen,sharePending?"选择屏幕…":screen?"停止共享":"共享屏幕");share.setEnabled(!sharePending);record.setActive(recording,recording?"停止录制":"录制");leave.label.setText(host?"结束会议":"离开会议");
+        mic.setActive(microphone,microphone?"静音":"解除静音");speaker.setActive(speakerEnabled,speakerEnabled?"关闭声音":"播放声音");camera.setActive(cameraEnabled,cameraEnabled?"关闭视频":"开启视频");switchCamera.root.setVisibility(cameraEnabled?View.VISIBLE:View.GONE);share.root.setVisibility(host?View.VISIBLE:View.GONE);record.root.setVisibility(host?View.VISIBLE:View.GONE);share.setActive(screen,sharePending?"等待授权…":screen?"停止共享":"共享屏幕");share.setEnabled(host);record.setActive(recording,recording?"停止录制":"录制");leave.label.setText(host?"结束会议":"离开会议");
     }
 
     void setMembersOpen(boolean open){memberPanelOpen=open;memberPanel.setVisibility(open?View.VISIBLE:View.GONE);members.setActive(open,"成员");}
@@ -175,8 +178,17 @@ final class ConferenceUi {
 
     private static final class TileGrid extends ViewGroup {
         TileGrid(Context context){super(context);setClipToPadding(false);}
-        @Override protected void onMeasure(int widthMeasureSpec,int heightMeasureSpec){int width=MeasureSpec.getSize(widthMeasureSpec),height=MeasureSpec.getSize(heightMeasureSpec);int innerW=Math.max(0,width-getPaddingLeft()-getPaddingRight()),innerH=Math.max(0,height-getPaddingTop()-getPaddingBottom()),count=getChildCount(),columns=count<=1?1:count<=4?2:count<=6?3:4,rows=Math.max(1,(count+columns-1)/columns),gap=dp(getContext(),8),cellW=Math.max(0,(innerW-gap*(columns-1))/columns),cellH=Math.max(0,(innerH-gap*(rows-1))/rows);for(int i=0;i<count;i++)getChildAt(i).measure(MeasureSpec.makeMeasureSpec(cellW,MeasureSpec.EXACTLY),MeasureSpec.makeMeasureSpec(cellH,MeasureSpec.EXACTLY));setMeasuredDimension(width,height);}
-        @Override protected void onLayout(boolean changed,int left,int top,int right,int bottom){int count=getChildCount(),columns=count<=1?1:count<=4?2:count<=6?3:4,rows=Math.max(1,(count+columns-1)/columns),gap=dp(getContext(),8),innerW=getWidth()-getPaddingLeft()-getPaddingRight(),innerH=getHeight()-getPaddingTop()-getPaddingBottom(),cellW=(innerW-gap*(columns-1))/columns,cellH=(innerH-gap*(rows-1))/rows;for(int i=0;i<count;i++){int col=i%columns,row=i/columns,x=getPaddingLeft()+col*(cellW+gap),y=getPaddingTop()+row*(cellH+gap);getChildAt(i).layout(x,y,x+cellW,y+cellH);}}
+        private int visibleCount(){int count=0;for(int i=0;i<getChildCount();i++)if(getChildAt(i).getVisibility()!=View.GONE)count++;return count;}
+        private int columns(int count){return count<=1?1:count<=4?2:count<=6?3:4;}
+        @Override protected void onMeasure(int widthMeasureSpec,int heightMeasureSpec){
+            int width=MeasureSpec.getSize(widthMeasureSpec),count=Math.max(1,visibleCount()),columns=columns(count),rows=Math.max(1,(count+columns-1)/columns),gap=dp(getContext(),8),innerW=Math.max(0,width-getPaddingLeft()-getPaddingRight()),cellW=Math.max(0,(innerW-gap*(columns-1))/columns),desired=getPaddingTop()+getPaddingBottom()+rows*dp(getContext(),150)+gap*(rows-1),heightMode=MeasureSpec.getMode(heightMeasureSpec),heightSize=MeasureSpec.getSize(heightMeasureSpec),height=heightMode==MeasureSpec.EXACTLY?Math.max(heightSize,desired):desired,innerH=Math.max(0,height-getPaddingTop()-getPaddingBottom()),cellH=Math.max(dp(getContext(),150),(innerH-gap*(rows-1))/rows);
+            for(int i=0;i<getChildCount();i++){View child=getChildAt(i);if(child.getVisibility()==View.GONE){child.measure(MeasureSpec.makeMeasureSpec(0,MeasureSpec.EXACTLY),MeasureSpec.makeMeasureSpec(0,MeasureSpec.EXACTLY));continue;}child.measure(MeasureSpec.makeMeasureSpec(cellW,MeasureSpec.EXACTLY),MeasureSpec.makeMeasureSpec(cellH,MeasureSpec.EXACTLY));}
+            setMeasuredDimension(width,height);
+        }
+        @Override protected void onLayout(boolean changed,int left,int top,int right,int bottom){
+            int count=Math.max(1,visibleCount()),columns=columns(count),rows=Math.max(1,(count+columns-1)/columns),gap=dp(getContext(),8),innerW=getWidth()-getPaddingLeft()-getPaddingRight(),innerH=getHeight()-getPaddingTop()-getPaddingBottom(),cellW=Math.max(0,(innerW-gap*(columns-1))/columns),cellH=Math.max(dp(getContext(),150),(innerH-gap*(rows-1))/rows),visible=0;
+            for(int i=0;i<getChildCount();i++){View child=getChildAt(i);if(child.getVisibility()==View.GONE){child.layout(0,0,0,0);continue;}int col=visible%columns,row=visible/columns,x=getPaddingLeft()+col*(cellW+gap),y=getPaddingTop()+row*(cellH+gap);child.layout(x,y,x+cellW,y+cellH);visible++;}
+        }
     }
 
     private final class Tool {final LinearLayout root;final MeetingIcon glyph;final TextView label;Tool(String title,Runnable action){root=column();root.setGravity(Gravity.CENTER);root.setBackground(ripple(Color.TRANSPARENT,10));glyph=new MeetingIcon(activity,title);label=text(title,11,0xff657382);label.setGravity(Gravity.CENTER);root.addView(glyph,new LinearLayout.LayoutParams(dp(24),dp(24)));root.addView(label,new LinearLayout.LayoutParams(-1,dp(30)));root.setOnClickListener(v->action.run());root.setContentDescription(title);}void setActive(boolean active,String title){glyph.active=active;glyph.invalidate();label.setText(title);label.setTextColor(active?0xff0099ff:0xff657382);root.setContentDescription(title);}void setEnabled(boolean enabled){root.setEnabled(enabled);root.setAlpha(enabled?1f:.55f);}}

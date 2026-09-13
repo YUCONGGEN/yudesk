@@ -15,8 +15,7 @@ import (
 )
 
 const (
-	MaxConferenceParticipants = 8
-	MaxConferenceMessageSize  = 64 << 10
+	MaxConferenceMessageSize = 64 << 10
 )
 
 var ErrConferenceMessageTooLarge = errors.New("conference signaling message is too large")
