@@ -6,7 +6,15 @@ set -eu
 ROOT=/Users/yu/bin/frp
 original="${SSH_ORIGINAL_COMMAND:-}"
 if [[ -z "$original" ]]; then
-  exec "$ROOT/upnpc-refresh.sh"
+  # The scheduled loopback refresh is the owner of YuDesk's public ingress.
+  # Keep UDP STUN next to the relay's TCP mapping so a router reboot cannot
+  # silently force every desktop session back through the TCP relay.
+  export YUDESK_STUN_PORT="${YUDESK_STUN_PORT:-8233}"
+  "$ROOT/upnpc-refresh.sh"
+  # TURN needs both its signaling port and the advertised UDP allocation
+  # range. Keep these mappings in the same restricted scheduled refresh so
+  # meetings continue to carry audio/video after a router reboot.
+  exec /usr/bin/python3 /Users/yu/bin/yudesk/upnpc-conference-turn.py
 fi
 
 set -- ${(z)original}

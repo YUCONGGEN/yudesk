@@ -5,11 +5,98 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/yudesk/yudesk/internal/relay"
 )
+
+func TestWindowsManagedRendererLossKeepsSingletonAlive(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows native lifecycle")
+	}
+	h, err := newViewerHost("127.0.0.1:0", "renderer-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	h.window.managed.Store(true)
+	h.window.headless = false
+	h.handleWindowClosed()
+	select {
+	case <-h.ctx.Done():
+		t.Fatal("private renderer loss terminated the main process")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestWindowsManagedWatchDropDoesNotExitHost(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows native lifecycle")
+	}
+	h, err := newViewerHost("127.0.0.1:0", "watch-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	h.window.managed.Store(true)
+	h.window.headless = false
+	ctx, cancel := context.WithCancel(context.Background())
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+h.listener.Addr().String()+"/api/ui/watch?access_token=watch-recovery", nil)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	response.Body.Close()
+	// Wait beyond the tracker's close grace. Losing only the loopback page
+	// stream during a remote-network transition must not stop the singleton.
+	time.Sleep(850 * time.Millisecond)
+	select {
+	case <-h.ctx.Done():
+		t.Fatal("managed page/watch loss terminated the main process")
+	default:
+	}
+}
+
+func TestConcurrentWindowWakeIsCoalesced(t *testing.T) {
+	h, err := newViewerHost("127.0.0.1:0", "wake-coalesce")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	h.window.headless = true
+	h.window.candidates = nil
+	// Seed the successful-show debounce without opening a real browser. All
+	// duplicate launcher requests in this interval must return without a second
+	// renderer start attempt.
+	h.lastShow = time.Now()
+	var failures atomic.Int32
+	client := &http.Client{Timeout: time.Second}
+	defer client.CloseIdleConnections()
+	done := make(chan struct{}, 12)
+	for range 12 {
+		go func() {
+			request, _ := http.NewRequest(http.MethodPost, "http://"+h.listener.Addr().String()+"/api/ui/show?access_token=wake-coalesce", nil)
+			response, requestErr := client.Do(request)
+			if requestErr != nil || response.StatusCode != http.StatusOK {
+				failures.Add(1)
+			}
+			if response != nil {
+				response.Body.Close()
+			}
+			done <- struct{}{}
+		}()
+	}
+	for range 12 {
+		<-done
+	}
+	if failures.Load() != 0 {
+		t.Fatalf("duplicate launch requests were not coalesced: %d failures", failures.Load())
+	}
+}
 
 func TestViewerCloseDuringConnectingCancelsDial(t *testing.T) {
 	h, err := newViewerHost("127.0.0.1:0", "test-token")

@@ -17,6 +17,7 @@ import cn.yucg.bridge.core.Frame;
 import cn.yucg.bridge.core.Session;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 // Created only with a live authenticated Session; never inflated from XML.
@@ -38,6 +39,7 @@ final class RemoteView extends View {
     private int scrollA=-1,scrollB=-1;
     private long lastError;
     private Runnable inputChanged=()->{};
+    private final AtomicBoolean terminalDelivered=new AtomicBoolean();
 
     RemoteView(Context context,Session value,Consumer<String> errors){
         super(context);session=value;error=errors;setBackgroundColor(0xff0c1420);
@@ -45,7 +47,7 @@ final class RemoteView extends View {
             @Override public void send(PointerController.Event... events)throws Exception{
                 JSONArray batch=new JSONArray();for(PointerController.Event e:events)batch.put(new JSONObject().put("type",e.type).put("x",e.x).put("y",e.y).put("button",e.button).put("deltaY",e.deltaY));RemoteView.this.send(batch);
             }
-            @Override public void release(){session.releaseInput();}
+            @Override public void release(){FailureBoundary.runQuietly(session::releaseInput);}
         },ViewConfiguration.get(context).getScaledTouchSlop());
         arrow.moveTo(0,0);arrow.lineTo(0,20);arrow.lineTo(5,15);arrow.lineTo(9,23);arrow.lineTo(13,21);arrow.lineTo(9,13);arrow.lineTo(16,13);arrow.close();
         setContentDescription("远程鼠标：单指移动，轻点左击，双指上下滚动；工具栏可右击或拖动");
@@ -56,7 +58,7 @@ final class RemoteView extends View {
             // At most one pending bitmap and one UI callback. A stalled UI
             // receives the newest completed decode when it resumes.
             if(frames.offer(decoded)&&!post(this::publishFrame)){frames.close();break;}
-        }catch(Exception ex){if(!stopped)post(()->notice(ex.getMessage()));break;}}
+        }catch(Throwable failure){if(!FailureBoundary.recoverable(failure))throw (Error)failure;if(!stopped&&terminalDelivered.compareAndSet(false,true)){String message=FailureBoundary.message(failure,"远程连接已断开");post(()->{if(!stopped)error.accept(message);});}break;}}
     },"YuDesk-render");decoder.start();}
     private void publishFrame(){if(stopped||!frames.publishPending())return;Bitmap bitmap=frames.current();mapping=new ScreenMapping(getWidth(),getHeight(),bitmap.getWidth(),bitmap.getHeight());pointer.geometry(mapping);ready=true;invalidate();}
     void stop(){if(stopped)return;cancelInput();stopped=true;ready=false;if(decoder!=null)decoder.interrupt();frames.close();invalidate();}

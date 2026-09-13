@@ -290,6 +290,37 @@ func TestNativeRestartAfterRendererExitDoesNotFlash(t *testing.T) {
 	assertNativeContent(t, restarted)
 }
 
+func TestNativeRendererCrashRecoversInSameProcess(t *testing.T) {
+	h := nativeWindowFixture(t)
+	b := h.window
+	showWithoutRawChromium(t, b)
+	oldNative, oldPID := b.native, b.browserPID
+	b.mu.Lock()
+	stop := b.stopBrowser
+	b.mu.Unlock()
+	if stop == nil {
+		t.Fatal("native browser has no process guard")
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitNative(t, "renderer failure did not hide recoverable host", func() bool {
+		visible, _, _ := appWindowVisible.Call(oldNative.ownedHandle())
+		return visible == 0
+	})
+	if h.ctx.Err() != nil {
+		t.Fatal("renderer failure terminated YuDesk singleton")
+	}
+	showWithoutRawChromium(t, b)
+	if b.browserPID == 0 || b.browserPID == oldPID {
+		t.Fatalf("renderer was not replaced: old=%d new=%d", oldPID, b.browserPID)
+	}
+	if b.native == nil || b.native == oldNative {
+		t.Fatal("stale native host was reused for replacement renderer")
+	}
+	assertNativeContent(t, b)
+}
+
 func TestNativeColdStartWaitsForPageStylesBeforeShowing(t *testing.T) {
 	h := nativeWindowFixture(t)
 	b := h.window

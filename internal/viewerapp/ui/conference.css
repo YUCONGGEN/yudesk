@@ -8,7 +8,7 @@
 #pane-meeting .meeting-input input{border-color:#dfe5ed;background:#fbfcfe}
 #pane-meeting .meeting-input input:focus{border-color:#4a9df0;background:#fff}
 #pane-meeting .meeting-security{border:1px solid #e4eefb;background:#f5f9ff}
-.conference-room{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden;border:1px solid #e4e9ef;border-radius:10px;background:#f5f6f7;color:#22262b;box-shadow:0 8px 30px rgba(27,48,78,.10)}
+.conference-room{position:relative;height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden;border:1px solid #e4e9ef;border-radius:10px;background:#f5f6f7;color:#22262b;box-shadow:0 8px 30px rgba(27,48,78,.10)}
 .conference-room[hidden]{display:none}
 .conference-head{height:58px;flex:0 0 58px;display:flex;align-items:center;gap:18px;padding:0 20px;border-bottom:1px solid #e8ebef;background:#fff}
 .conference-head>div{display:flex;align-items:center;gap:11px;min-width:0}
@@ -86,6 +86,12 @@
 .conference-toolbar .conference-danger{width:92px;margin-left:12px;border:1px solid #f0d0d2;background:#fff6f6;color:#d85259}
 .conference-toolbar .conference-danger:hover{border-color:#e6aeb2;background:#fff0f0;color:#c94048}
 .conference-toolbar .conference-danger svg{color:inherit}
+.conference-toast{position:absolute;z-index:70;top:70px;left:50%;width:min(520px,calc(100% - 32px));display:flex;align-items:flex-start;gap:10px;padding:11px 14px;transform:translateX(-50%);border:1px solid #cfe2f7;border-radius:10px;background:rgba(248,252,255,.98);color:#34536f;font-size:11px;line-height:1.55;box-shadow:0 12px 36px rgba(25,66,108,.16);backdrop-filter:blur(12px);pointer-events:none}
+.conference-toast[hidden]{display:none}
+.conference-toast-icon{width:8px;height:8px;flex:0 0 8px;margin-top:5px;border-radius:50%;background:#1688ef;box-shadow:0 0 0 4px rgba(22,136,239,.12)}
+.conference-toast-success{border-color:#c8ead9;background:rgba(245,253,249,.98);color:#287453}.conference-toast-success .conference-toast-icon{background:#2bb876;box-shadow:0 0 0 4px rgba(43,184,118,.12)}
+.conference-toast-warning{border-color:#f0dfad;background:rgba(255,252,242,.98);color:#81651d}.conference-toast-warning .conference-toast-icon{background:#e3a91f;box-shadow:0 0 0 4px rgba(227,169,31,.13)}
+.conference-toast-error{border-color:#f0c9cc;background:rgba(255,248,248,.98);color:#a54249}.conference-toast-error .conference-toast-icon{background:#dc5961;box-shadow:0 0 0 4px rgba(220,89,97,.12)}
 .conference-live{grid-template-columns:1fr;grid-template-rows:1fr}
 .conference-live>.sidebar,.conference-live .topbar,.conference-live>.app-footer{display:none}
 .conference-live main,.conference-live .content,.conference-live #pane-meeting{width:100%;height:100%;max-width:none;padding:0;margin:0}

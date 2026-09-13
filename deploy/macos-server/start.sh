@@ -25,7 +25,7 @@ source "$CONFIG_FILE"
 : "${FRP_CERT:?FRP_CERT is required}"
 : "${FRP_PORT_HOOK:?FRP_PORT_HOOK is required}"
 
-for required_file in "$FRP_CERT" "$FRP_PORT_HOOK" "$FRP_ROOT/yudesk-port-direct.sh" "$FRP_ROOT/upnpc-dispatch.sh" "$FRP_ROOT/frps" "$FRP_ROOT/frps.toml" "$FRP_ROOT/frp-control.sh"; do
+for required_file in "$FRP_CERT" "$FRP_PORT_HOOK" "$FRP_ROOT/yudesk-port-direct.sh" "$FRP_ROOT/upnpc-dispatch.sh" "$ROOT_DIR/upnpc-conference-turn.py" "$FRP_ROOT/frps" "$FRP_ROOT/frps.toml" "$FRP_ROOT/frp-control.sh"; do
   if [[ ! -f "$required_file" ]]; then
     echo "missing FRP component: $required_file" >&2
     exit 1
@@ -79,6 +79,24 @@ if ! "$FRP_ROOT/frp-control.sh" start; then
   "$FRP_PORT_HOOK" cleanup >/dev/null 2>&1 || true
   rm -f "$PID_FILE"
   exit 1
+fi
+# Refresh the static router mappings through the same restricted loopback key
+# used by the daily task. The forced command injects UDP STUN 8233 as well as
+# the existing TCP ports. A router failure must not take down the TCP relay,
+# but it is made visible in the startup log instead of silently disabling P2P.
+upnpc_start_log="$ROOT_DIR/logs/upnpc-start.log"
+if [[ -r /Users/yu/.ssh/frp_upnpc_loopback ]]; then
+  if ! /usr/bin/ssh -4 \
+    -i /Users/yu/.ssh/frp_upnpc_loopback \
+    -o BatchMode=yes \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o ConnectTimeout=3 \
+    yu@127.0.0.1 >"$upnpc_start_log" 2>&1; then
+    echo "Warning: router mapping refresh failed; TCP relay remains available. See $upnpc_start_log" >&2
+  fi
+else
+  echo "Warning: restricted UPnP loopback key is unavailable; router mappings were not refreshed" >&2
 fi
 frp_ready=0
 for _ in {1..20}; do

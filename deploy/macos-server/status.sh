@@ -18,6 +18,28 @@ if [[ -f "$PID_FILE" ]]; then
     else
       echo "Port mapping: FRPS is not running"
     fi
+    router_listing=""
+    if [[ -x /opt/homebrew/bin/upnpc ]]; then
+      router_listing="$(/opt/homebrew/bin/upnpc -u "${IGD_URL:-http://192.168.1.1:5431/gatedesc.xml}" -l 2>&1 || true)"
+    fi
+    if /usr/sbin/lsof -nP -a -p "$pid" -iUDP:"$RELAY_PORT" >/dev/null 2>&1; then
+      if [[ -n "$router_listing" ]] && /usr/bin/grep -Eq "UDP[[:space:]]+$RELAY_PORT->.+:$RELAY_PORT" <<<"$router_listing"; then
+        echo "P2P STUN: UDP $RELAY_PORT is listening and mapped"
+      else
+        echo "P2P STUN: UDP $RELAY_PORT is listening, but the router mapping was not found"
+      fi
+    else
+      echo "P2P STUN: UDP $RELAY_PORT is not listening"
+    fi
+    if [[ -n "$router_listing" ]] &&
+      /usr/bin/grep -Eq "TCP[[:space:]]+$TURN_PORT->.+:$TURN_PORT" <<<"$router_listing" &&
+      /usr/bin/grep -Eq "UDP[[:space:]]+$TURN_PORT->.+:$TURN_PORT" <<<"$router_listing" &&
+      /usr/bin/grep -Eq "UDP[[:space:]]+$TURN_RELAY_MIN_PORT->.+:$TURN_RELAY_MIN_PORT" <<<"$router_listing" &&
+      /usr/bin/grep -Eq "UDP[[:space:]]+$TURN_RELAY_MAX_PORT->.+:$TURN_RELAY_MAX_PORT" <<<"$router_listing"; then
+      echo "Meeting TURN: TCP/UDP $TURN_PORT and UDP $TURN_RELAY_MIN_PORT-$TURN_RELAY_MAX_PORT are mapped"
+    else
+      echo "Meeting TURN: one or more public router mappings are missing"
+    fi
     echo "Website: $public_web_url/ (router TCP $PUBLIC_HTTP_PORT -> local $WEB_PORT)"
     echo "Admin: $public_web_url/admin"
     exit 0

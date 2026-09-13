@@ -13,6 +13,8 @@ var errWindowTargetMissing = errors.New("app window has not opened")
 // retire it before replacing a profile or a renderer.
 func (b *appWindow) monitor(id string) error {
 	b.stopMonitor()
+	b.monitorEpoch++
+	epoch := b.monitorEpoch
 	c, err := b.connection()
 	if err != nil {
 		return err
@@ -30,8 +32,9 @@ func (b *appWindow) monitor(id string) error {
 	processDone, onClose, journal := b.processDone, b.onClose, b.journal
 	closed := func(reason string) {
 		b.mu.Lock()
-		defer b.mu.Unlock()
-		if ctx.Err() != nil {
+		active := ctx.Err() == nil && b.monitorEpoch == epoch
+		b.mu.Unlock()
+		if !active {
 			return
 		}
 		journal.record(reason, nil)
@@ -140,6 +143,7 @@ func (b *appWindow) monitor(id string) error {
 }
 
 func (b *appWindow) stopMonitor() {
+	b.monitorEpoch++
 	if b.cancelMonitor != nil {
 		b.cancelMonitor()
 		b.cancelMonitor = nil

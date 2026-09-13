@@ -25,6 +25,7 @@ public final class CaptureService extends Service {
     private final Handler main=new Handler(Looper.getMainLooper());
     private HandlerThread captureThread;
     private Handler capture;
+    private Thread inputThread;
     private MediaProjection projection;
     private VirtualDisplay display;
     private ImageReader reader;
@@ -36,7 +37,7 @@ public final class CaptureService extends Service {
     private Engine engine;
     private YuDeskApp app;
     private volatile boolean stopping;
-    private boolean registered;
+    private boolean registered,displayListenerRegistered;
     private int width,height,density;
     private final CapturePacer pacer=new CapturePacer(33);
     private final Runnable captureLatest=()->{pacer.begin();if(reader!=null&&!stopping)image(reader);};
@@ -52,11 +53,11 @@ public final class CaptureService extends Service {
     private Notification notification(){PendingIntent stop=PendingIntent.getService(this,2,new Intent(this,CaptureService.class).setAction(STOP),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);return new Notification.Builder(this,CAPTURE).setSmallIcon(R.drawable.ic_notification).setContentTitle("YuDesk · 屏幕共享已授权").setContentText("获准连接后发送屏幕；点击查看，随时停止。").setContentIntent(open()).setOngoing(true).addAction(new Notification.Action.Builder(null,"停止共享",stop).build()).build();}
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent==null||STOP.equals(intent.getAction())){stopSelf();return START_NOT_STICKY;}
-        if(projection!=null)return START_NOT_STICKY;
-        if(Build.VERSION.SDK_INT>=29)startForeground(7,notification(),ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);else startForeground(7,notification());
-        Intent result=Build.VERSION.SDK_INT>=33?intent.getParcelableExtra("projection",Intent.class):intent.getParcelableExtra("projection");
-        if(intent.getIntExtra("result",Activity.RESULT_CANCELED)!=Activity.RESULT_OK||result==null){stopSelf();return START_NOT_STICKY;}
+        if(projection!=null){app.sharingStarting=false;return START_NOT_STICKY;}
         try{
+            if(Build.VERSION.SDK_INT>=29)Api29.startForeground(this,notification());else startForeground(7,notification());
+            Intent result=Build.VERSION.SDK_INT>=33?Api33.projection(intent):intent.getParcelableExtra("projection");
+            if(intent.getIntExtra("result",Activity.RESULT_CANCELED)!=Activity.RESULT_OK||result==null){stopSelf();return START_NOT_STICKY;}
             engine=app.engine();if(!app.state().optBoolean("running"))throw new IllegalStateException("设备已被服务器停止，请处理授权状态后重新打开");
             captureThread=new HandlerThread("YuDesk-capture",android.os.Process.THREAD_PRIORITY_DISPLAY);captureThread.start();capture=new Handler(captureThread.getLooper());
             projection=((MediaProjectionManager)getSystemService(MEDIA_PROJECTION_SERVICE)).getMediaProjection(Activity.RESULT_OK,result);
@@ -65,11 +66,12 @@ public final class CaptureService extends Service {
                 @Override public void onCapturedContentResize(int w,int h){resize(w,h);}
             },capture);
             DisplayMetrics metrics=metrics();density=metrics.densityDpi;
-            capture.post(()->{try{configureReader(metrics.widthPixels,metrics.heightPixels);display=projection.createVirtualDisplay("YuDesk authorized sharing",width,height,density,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,reader.getSurface(),null,capture);engine.setSharing(true);app.sharing=true;}catch(Exception ex){fail("无法开始共享："+ex.getMessage());}});
+            capture.post(()->{try{configureReader(metrics.widthPixels,metrics.heightPixels);display=projection.createVirtualDisplay("YuDesk authorized sharing",width,height,density,DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,reader.getSurface(),null,capture);if(display==null)throw new IllegalStateException("无法创建共享显示器");engine.setSharing(true);app.sharing=true;app.sharingStarting=false;}catch(Throwable failure){if(!FailureBoundary.recoverable(failure))throw (Error)failure;fail("无法开始共享："+FailureBoundary.message(failure,"设备不支持当前共享方式"));}});
             getSystemService(DisplayManager.class).registerDisplayListener(displayChanges,capture);
+            displayListenerRegistered=true;
             if(Build.VERSION.SDK_INT>=33)registerReceiver(screenOff,new IntentFilter(Intent.ACTION_SCREEN_OFF),Context.RECEIVER_NOT_EXPORTED);else registerReceiver(screenOff,new IntentFilter(Intent.ACTION_SCREEN_OFF));registered=true;
             main.post(statusTick);startInputPump();
-        }catch(Exception ex){fail("屏幕共享启动失败："+ex.getMessage());}
+        }catch(Throwable failure){if(!FailureBoundary.recoverable(failure))throw (Error)failure;fail("屏幕共享启动失败："+FailureBoundary.message(failure,"请重新授权后重试"));}
         return START_NOT_STICKY;
     }
     private DisplayMetrics metrics(){DisplayMetrics m=new DisplayMetrics();((WindowManager)getSystemService(WINDOW_SERVICE)).getDefaultDisplay().getRealMetrics(m);return m;}
@@ -100,18 +102,28 @@ public final class CaptureService extends Service {
                 compactPixels.flip();frame.copyPixelsFromBuffer(compactPixels);
             }
             jpeg.reset();if(!frame.compress(Bitmap.CompressFormat.JPEG,75,jpeg))throw new IllegalStateException("JPEG 编码失败");engine.submitJPEG(jpeg.toByteArray(),width,height);
-        }catch(Exception ex){if(!stopping)fail("屏幕采集失败："+ex.getMessage());}
+        }catch(Throwable failure){if(!FailureBoundary.recoverable(failure))throw (Error)failure;if(!stopping)fail("屏幕采集失败："+FailureBoundary.message(failure,"采集组件已停止"));}
     }
     private void recycle(){canvas.setBitmap(null);compactPixels=null;if(padded!=null){padded.recycle();padded=null;}if(frame!=null){frame.recycle();frame=null;}}
-    private void fail(String message){app.notice=message;main.post(this::stopSelf);}
+    private void fail(String message){if(stopping)return;app.notice=message;main.post(this::stopSelf);}
     private final Runnable statusTick=new Runnable(){@Override public void run(){if(stopping)return;JSONObject state=app.state();if(!state.optBoolean("running",true)){app.notice=state.optString("message");stopSelf();return;}try{String raw=engine.pendingApprovalJSON();if(raw.equals("null")){getSystemService(NotificationManager.class).cancel(8);lastRequest="";}else{JSONObject p=new JSONObject(raw);String id=p.getString("id");if(!id.equals(lastRequest)){lastRequest=id;Notification request=new Notification.Builder(CaptureService.this,REQUEST).setSmallIcon(R.drawable.ic_notification).setContentTitle("YuDesk · 请求"+(p.optString("mode").equals("control")?"控制手机":"观看手机")).setContentText("点击选择允许或拒绝，60 秒超时自动拒绝。").setContentIntent(open()).setAutoCancel(true).setTimeoutAfter(60000).build();getSystemService(NotificationManager.class).notify(8,request);}}}catch(Exception ignored){}main.postDelayed(this,300);}};
-    private void startInputPump(){new Thread(()->{while(!stopping){String message=engine.nextInputJSON(500);if(message.isEmpty())continue;CountDownLatch accepted=new CountDownLatch(1);main.post(()->{try{if(!stopping)RemoteAccessibilityService.receive(message);}finally{accepted.countDown();}});try{while(!stopping&&!accepted.await(500,TimeUnit.MILLISECONDS)){} }catch(InterruptedException ex){Thread.currentThread().interrupt();return;}}},"YuDesk-input").start();}
+    private void startInputPump(){inputThread=new Thread(()->{try{while(!stopping){String message=engine.nextInputJSON(500);if(message==null||message.isEmpty())continue;CountDownLatch accepted=new CountDownLatch(1);main.post(()->{try{if(!stopping)RemoteAccessibilityService.receive(message);}finally{accepted.countDown();}});while(!stopping&&!accepted.await(500,TimeUnit.MILLISECONDS)){} }}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}catch(Throwable failure){if(!FailureBoundary.recoverable(failure))throw (Error)failure;if(!stopping)fail("远程连接已断开，请检查网络后重新连接。");}},"YuDesk-input");inputThread.start();}
     @Override public void onTaskRemoved(Intent rootIntent){stopSelf();}
     @Override public void onDestroy(){
-        stopping=true;app.sharing=false;main.removeCallbacksAndMessages(null);if(engine!=null)engine.setSharing(false);RemoteAccessibilityService.receive("{\"release\":true}");
-        if(registered){unregisterReceiver(screenOff);registered=false;}getSystemService(DisplayManager.class).unregisterDisplayListener(displayChanges);getSystemService(NotificationManager.class).cancel(8);
-        if(capture!=null){capture.post(()->{if(display!=null){display.release();display=null;}if(reader!=null){reader.close();reader=null;}if(projection!=null){projection.stop();projection=null;}recycle();captureThread.quitSafely();});}
-        stopForeground(STOP_FOREGROUND_REMOVE);if(!app.uiVisible)app.closeEngine();super.onDestroy();
+        stopping=true;app.sharing=false;app.sharingStarting=false;main.removeCallbacksAndMessages(null);if(inputThread!=null)inputThread.interrupt();
+        if(engine!=null)FailureBoundary.runQuietly(()->engine.setSharing(false));RemoteAccessibilityService.receive("{\"release\":true}");
+        if(registered){FailureBoundary.runQuietly(()->unregisterReceiver(screenOff));registered=false;}
+        if(displayListenerRegistered){FailureBoundary.runQuietly(()->getSystemService(DisplayManager.class).unregisterDisplayListener(displayChanges));displayListenerRegistered=false;}
+        getSystemService(NotificationManager.class).cancel(8);
+        if(capture!=null){capture.removeCallbacksAndMessages(null);capture.post(()->{if(display!=null){FailureBoundary.runQuietly(display::release);display=null;}if(reader!=null){FailureBoundary.runQuietly(reader::close);reader=null;}if(projection!=null){FailureBoundary.runQuietly(projection::stop);projection=null;}recycle();if(captureThread!=null)captureThread.quitSafely();});}
+        stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();
     }
     @Override public IBinder onBind(Intent intent){return null;}
+
+    @android.annotation.TargetApi(29)
+    @android.annotation.SuppressLint("UseRequiresApi")
+    private static final class Api29 {static void startForeground(Service service,Notification notification){service.startForeground(7,notification,ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);}}
+    @android.annotation.TargetApi(33)
+    @android.annotation.SuppressLint("UseRequiresApi")
+    private static final class Api33 {static Intent projection(Intent intent){return intent.getParcelableExtra("projection",Intent.class);}}
 }

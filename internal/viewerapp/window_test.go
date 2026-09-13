@@ -1,14 +1,51 @@
 package viewerapp
 
 import (
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestOpenBrowserRetriesOnlyTransientWakeFailures(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/ui/show" || r.Method != http.MethodPost {
+			t.Errorf("unexpected wake request %s %s", r.Method, r.URL.Path)
+		}
+		if calls.Add(1) < 3 {
+			http.Error(w, "renderer rebuilding", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	if err := openBrowser(server.URL+"/?access_token=test", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("transient wake attempts=%d, want 3", got)
+	}
+
+	calls.Store(0)
+	denied := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		http.Error(w, "denied", http.StatusForbidden)
+	}))
+	defer denied.Close()
+	if err := openBrowser(denied.URL+"/?access_token=test", false); err == nil || !strings.Contains(err.Error(), fmt.Sprint(http.StatusForbidden)) {
+		t.Fatalf("permanent wake failure not returned: %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("permanent failure retried %d times", got)
+	}
+}
 
 func TestColdStartUsesFreshRendererProfile(t *testing.T) {
 	root := t.TempDir()

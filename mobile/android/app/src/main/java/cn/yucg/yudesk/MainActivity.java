@@ -53,10 +53,12 @@ public final class MainActivity extends Activity {
     private Dialog noticeDialog;
     private final Set<Dialog> ownedDialogs=new HashSet<>();
     private final Set<Dialog> remoteDialogs=new HashSet<>();
+    private final Set<Long> projectionLaunches=new HashSet<>();
     private String deferredTitle,deferredMessage;
     private TextView approvalDescription;
     private String approvalID = "", shownNotice = "";
-    private boolean connecting, meetingStarting, resumed, destroyed, pendingConferenceHost, pendingConferenceMic, pendingConferenceCamera, pendingProjectionRecording, conferenceHostEnding;
+    private boolean connecting, meetingStarting, resumed, destroyed, pendingConferenceHost, pendingConferenceMic, pendingConferenceCamera, pendingProjectionRecording, conferenceHostEnding, remoteEnding;
+    private int remoteStatusFailures;
     private String pendingConferenceCode="", pendingConferenceName="";
     private ConferenceController conference;
     private RemoteView remote;
@@ -121,32 +123,65 @@ public final class MainActivity extends Activity {
     }
     private void beginCapture() {
         if(app.sharing){showError("正在共享","如需重新授权，请先停止共享。无需重复开启。");return;}
-        if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},33);return;}
+        if(app.sharingStarting){showError("正在准备共享","系统授权窗口已经打开，请完成授权或取消后再试。");return;}
         requestProjection();
     }
     private void requestProjection() {
-        MediaProjectionManager m=(MediaProjectionManager)getSystemService(MEDIA_PROJECTION_SERVICE);
-        Intent request=Build.VERSION.SDK_INT>=34?Api34.createScreenCaptureIntent(m):m.createScreenCaptureIntent();
-        startActivityForResult(request,40);
+        try{app.sharingStarting=true;MediaProjectionManager m=(MediaProjectionManager)getSystemService(MEDIA_PROJECTION_SERVICE);Intent request=Build.VERSION.SDK_INT>=34?Api34.createScreenCaptureIntent(m):m.createScreenCaptureIntent();startActivityForResult(request,40);}
+        catch(Throwable failure){app.sharingStarting=false;if(!FailureBoundary.recoverable(failure))throw (Error)failure;showError("共享未开启","系统无法打开屏幕共享授权："+FailureBoundary.message(failure,"请重试"));}
     }
     @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){
         super.onRequestPermissionsResult(request,permissions,results);
-        if(request==33){if(results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED)requestProjection();else showError("需要共享通知","请允许通知后再共享，便于及时看到连接请求并随时停止共享。");return;}
         if(request==ConferenceController.REQUEST_INITIAL_MEDIA){pendingConferenceMic=pendingConferenceMic&&checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED;pendingConferenceCamera=pendingConferenceCamera&&checkSelfPermission(Manifest.permission.CAMERA)==PackageManager.PERMISSION_GRANTED;beginConference();return;}
         if(request==ConferenceController.REQUEST_MICROPHONE||request==ConferenceController.REQUEST_CAMERA){ConferenceController value=conference;if(value!=null)value.mediaPermissionResult(request,results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED);return;}
-        if(request==54){if(results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED)launchConferenceProjection();else{ConferenceController value=conference;if(value!=null&&!pendingProjectionRecording)value.cancelScreenShareRequest(false);showError("无法共享或录制","请允许显示屏幕共享通知后重试。客户端仍留在会议中。 ");}}
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
-        if(request==40){if(result==RESULT_OK&&data!=null){Intent s=new Intent(this,CaptureService.class).putExtra("result",result).putExtra("projection",data);startForegroundService(s);}else showError("共享未开启","系统授权已取消，没有采集或发送屏幕。");return;}
-        if(request==41||request==42){final boolean recording=request==42;ConferenceController current=conference;if(result==RESULT_OK&&data!=null&&current!=null){try{startForegroundService(new Intent(this,ConferenceProjectionService.class).putExtra("recording",recording));Intent permission=new Intent(data);ui.postDelayed(()->{ConferenceController value=conference;if(value==null)return;if(recording)value.startRecording(permission);else value.startScreenShare(permission);},120);}catch(Exception failure){if(!recording)current.cancelScreenShareRequest(false);showError(recording?"录制未开始":"共享未开启","系统无法启动屏幕共享服务："+failure.getMessage());}}else{if(current!=null&&!recording)current.cancelScreenShareRequest(false);showError(recording?"录制未开始":"共享未开启","你已取消系统授权，会议仍会继续。 ");}}
+        if(request==40){
+            if(result==RESULT_OK&&data!=null){
+                try{startForegroundService(new Intent(this,CaptureService.class).putExtra("result",result).putExtra("projection",new Intent(data)));}
+                catch(Throwable failure){app.sharingStarting=false;if(!FailureBoundary.recoverable(failure))throw (Error)failure;showError("共享未开启","系统无法启动屏幕共享服务："+FailureBoundary.message(failure,"请重新打开应用后重试"));}
+            }else{app.sharingStarting=false;showError("共享未开启","系统授权已取消，没有采集或发送屏幕。");}
+            return;
+        }
+        if(request==41||request==42){
+            final boolean recording=request==42;ConferenceController current=conference;
+            if(result==RESULT_OK&&data!=null&&current!=null)startConferenceProjection(current,new Intent(data),recording);
+            else{if(current!=null&&!recording)current.cancelScreenShareRequest(false);showError(recording?"录制未开始":"共享未开启","你已取消系统授权，会议仍会继续。 ");}
+        }
+    }
+
+    private void startConferenceProjection(ConferenceController expected,Intent permission,boolean recording){
+        final long[] token={0};
+        try{
+            long owner=expected.projectionOwner();
+            token[0]=ConferenceProjectionService.prepareLaunch(owner,new ProjectionLaunchCoordinator.Callback(){
+                @Override public void ready(){
+                    projectionLaunches.remove(token[0]);
+                    if(destroyed||conference!=expected||expected.isClosed())return;
+                    if(recording)expected.startRecording(permission);else expected.startScreenShare(permission);
+                }
+                @Override public void failed(String reason){
+                    projectionLaunches.remove(token[0]);
+                    if(!recording)expected.cancelScreenShareRequest(false);
+                    if(!destroyed&&conference==expected&&!expected.isClosed())showError(recording?"录制未开始":"共享未开启",reason);
+                }
+            });
+            projectionLaunches.add(token[0]);
+            long request=token[0];ui.postDelayed(()->{if(projectionLaunches.contains(request))ConferenceProjectionService.cancelLaunch(request,"共享服务启动超时，请重新点击共享屏幕");},8000);
+            startForegroundService(ConferenceProjectionService.launchIntent(this,owner,token[0],recording));
+        }catch(Throwable failure){
+            if(!FailureBoundary.recoverable(failure))throw (Error)failure;
+            if(token[0]>0)ConferenceProjectionService.cancelLaunch(token[0],"系统无法启动屏幕共享服务："+FailureBoundary.message(failure,"请重试"));
+            else{if(!recording)expected.cancelScreenShareRequest(false);showError(recording?"录制未开始":"共享未开启","系统无法准备屏幕共享："+FailureBoundary.message(failure,"请重试"));}
+        }
     }
     private void connect(){
         if(connecting)return;String id=code.getText().toString().trim(),secret=pin.getText().toString();boolean control=!viewOnly.isChecked();
         if(!id.matches("[1-9][0-9]{8}")||(!secret.isEmpty()&&!secret.matches("[0-9]{6}"))){showError("检查连接信息","请输入 9 位设备码；PIN 填 6 位数字或留空。");return;}
         connecting=true;if(dashboardUi!=null)dashboardUi.setConnectionPending(true);
         waitingDialog=dialog("正在连接",secret.isEmpty()?"正在检测连接，随后等待对方允许（最多 60 秒）。未获准前不会获取画面或操作。":"正在验证设备和 PIN…", "取消连接",()->{Engine e=app.existingEngine();if(e!=null)e.cancelConnect();},null,null);waitingDialog.setCancelable(false);waitingDialog.show();
-        worker.execute(()->{Session session=null;Exception failure=null;try{session=app.engine().connect(id,secret,control);}catch(Exception ex){failure=ex;}Session value=session;Exception error=failure;ui.post(()->{connecting=false;if(waitingDialog!=null){waitingDialog.dismiss();waitingDialog=null;}if(destroyed){if(value!=null)value.close();return;}if(dashboardUi!=null)dashboardUi.setConnectionPending(false);if(error!=null){showError("连接未完成",error.getMessage());return;}app.session=value;remember(id);showRemote();});});
+        worker.execute(()->{Session session=null;Throwable failure=null;try{session=app.engine().connect(id,secret,control);}catch(Throwable ex){if(!FailureBoundary.recoverable(ex))throw (Error)ex;failure=ex;}Session value=session;Throwable error=failure;ui.post(()->{connecting=false;if(waitingDialog!=null){waitingDialog.dismiss();waitingDialog=null;}if(destroyed){if(value!=null)FailureBoundary.runQuietly(value::close);return;}if(dashboardUi!=null)dashboardUi.setConnectionPending(false);if(error!=null){showError("连接未完成",FailureBoundary.message(error,"请检查网络后重试"));return;}app.session=value;remember(id);showRemote();});});
     }
     private void startMeeting(){
         if(meetingStarting||conference!=null||dashboardUi==null)return;JSONObject s=app.state();
@@ -169,7 +204,7 @@ public final class MainActivity extends Activity {
     }
     private void beginConference(){
         if(meetingStarting||conference!=null)return;meetingStarting=true;if(dashboardUi!=null)dashboardUi.setConnectionPending(true);waitingDialog=dialog(pendingConferenceHost?"正在发起会议":"正在加入会议","正在建立端到端加密音视频连接，入会无需主持人确认。","请稍候",null,null,null);waitingDialog.setCancelable(false);waitingDialog.show();
-        worker.execute(()->{String number=pendingConferenceCode;cn.yucg.bridge.core.Conference link=null;Exception failure=null;try{if(pendingConferenceHost&&number.isEmpty())number=app.engine().startMeeting();link=app.engine().openConference(number,pendingConferenceName,pendingConferenceHost);}catch(Exception ex){failure=ex;}String joinedCode=number;cn.yucg.bridge.core.Conference joined=link;Exception error=failure;ui.post(()->{meetingStarting=false;if(waitingDialog!=null){waitingDialog.dismiss();waitingDialog=null;}if(destroyed){if(joined!=null)joined.close();return;}if(error!=null){if(dashboardUi!=null){dashboardUi.update(app.state());dashboardUi.setConnectionPending(false);}showError(pendingConferenceHost?"会议未开始":"入会未完成",error.getMessage());return;}try{dashboardOrientation=getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE?ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT;setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);conference=new ConferenceController(this,joined,joinedCode,pendingConferenceName,pendingConferenceHost,pendingConferenceMic,pendingConferenceCamera);dashboardUi=null;getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);getWindow().setStatusBarColor(0xff0d1119);getWindow().setNavigationBarColor(0xff0d1119);content(conference.view());immersiveConference();}catch(Exception ex){joined.close();if(dashboardUi!=null){dashboardUi.update(app.state());dashboardUi.setConnectionPending(false);}showError("会议组件无法启动",ex.getMessage());}});});
+        worker.execute(()->{String number=pendingConferenceCode;cn.yucg.bridge.core.Conference link=null;Throwable failure=null;try{if(pendingConferenceHost&&number.isEmpty())number=app.engine().startMeeting();link=app.engine().openConference(number,pendingConferenceName,pendingConferenceHost);}catch(Throwable ex){if(!FailureBoundary.recoverable(ex))throw (Error)ex;failure=ex;}String joinedCode=number;cn.yucg.bridge.core.Conference joined=link;Throwable error=failure;ui.post(()->{meetingStarting=false;if(waitingDialog!=null){waitingDialog.dismiss();waitingDialog=null;}if(destroyed){if(joined!=null)FailureBoundary.runQuietly(joined::close);return;}if(error!=null){if(dashboardUi!=null){dashboardUi.update(app.state());dashboardUi.setConnectionPending(false);}showError(pendingConferenceHost?"会议未开始":"入会未完成",FailureBoundary.message(error,"请检查网络后重试"));return;}try{dashboardOrientation=getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE?ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT;setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);conference=new ConferenceController(this,joined,joinedCode,pendingConferenceName,pendingConferenceHost,pendingConferenceMic,pendingConferenceCamera);dashboardUi=null;getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);getWindow().setStatusBarColor(0xff0d1119);getWindow().setNavigationBarColor(0xff0d1119);content(conference.view());immersiveConference();}catch(Throwable ex){if(!FailureBoundary.recoverable(ex))throw (Error)ex;FailureBoundary.runQuietly(joined::close);if(dashboardUi!=null){dashboardUi.update(app.state());dashboardUi.setConnectionPending(false);}showError("会议组件无法启动",FailureBoundary.message(ex,"当前设备无法初始化音视频组件"));}});});
     }
     private void showRemote(){
         if(app.session==null){dashboard();return;}
@@ -178,7 +213,7 @@ public final class MainActivity extends Activity {
         remotePlatform=status.optString("platform");
         if(!remoteModeSaved){dashboardOrientation=getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE?ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT;setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);}
         LinearLayout root=column();root.setBackgroundColor(0xff0c1420);
-        remote=new RemoteView(this,app.session,message->showError("操作提示",message));remote.setControl(status.optBoolean("control"));
+        remoteEnding=false;remoteStatusFailures=0;remote=new RemoteView(this,app.session,this::remoteEnded);remote.setControl(status.optBoolean("control"));
         remote.mouseMode(remoteModeSaved?savedMouseMode:!remotePlatform.equals("android"));remoteModeSaved=false;
         remoteToolbar=new RemoteToolbar(this,remote,this::rotateRemote,this::remoteTools,()->{app.endSession();dashboard();},this::sendText);
         remoteToolbar.orientation(getResources().getConfiguration().orientation==Configuration.ORIENTATION_LANDSCAPE);remoteToolbar.update(status);
@@ -186,12 +221,16 @@ public final class MainActivity extends Activity {
         root.addView(remote,new LinearLayout.LayoutParams(-1,0,1));root.addView(remoteToolbar.bottom,new LinearLayout.LayoutParams(-1,dp(48)));
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);getWindow().setNavigationBarColor(0xff0c1420);getWindow().setStatusBarColor(0xff0c1420);content(root);immersiveRemote();remote.start();
     }
+    private void remoteEnded(String message){
+        if(destroyed||remote==null||remoteEnding)return;
+        remoteEnding=true;app.endSession();dashboard();showError("连接已断开",message==null||message.trim().isEmpty()?"网络连接已断开，请检查网络后重新连接。":message);
+    }
     private void immersiveRemote(){
         if(Build.VERSION.SDK_INT>=30)Api30.hideSystemBars(getWindow());
         else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
     }
     private void immersiveConference(){immersiveRemote();}
-    void requestConferenceProjection(boolean recording){pendingProjectionRecording=recording;if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},54);return;}launchConferenceProjection();}
+    void requestConferenceProjection(boolean recording){pendingProjectionRecording=recording;launchConferenceProjection();}
     private void launchConferenceProjection(){if(conference==null)return;MediaProjectionManager manager=(MediaProjectionManager)getSystemService(MEDIA_PROJECTION_SERVICE);Intent request=Build.VERSION.SDK_INT>=34?Api34.createScreenCaptureIntent(manager):manager.createScreenCaptureIntent();startActivityForResult(request,pendingProjectionRecording?42:41);}
     void requestConferenceLeave(){ConferenceController value=conference;if(value==null)return;boolean host=value.isHost();Dialog confirm=dialog(host?"结束会议":"离开会议",host?"结束后所有参会者会同时离开，会议号立即失效。":"确认离开当前会议？","取消",null,host?"结束会议":"离开",()->{conferenceHostEnding=host;ConferenceController current=conference;if(current!=null)current.leave(host);});confirm.show();}
     void requestConferenceTransfer(String id,String name){ConferenceController value=conference;if(value==null||!value.isHost())return;Dialog confirm=dialog("转让主持人","将主持人转交给“"+name+"”？转让后由对方管理共享屏幕和结束会议。","取消",null,"确认转让",()->{ConferenceController current=conference;if(current!=null)current.transfer(id);});confirm.show();}
@@ -255,7 +294,7 @@ public final class MainActivity extends Activity {
     private void sendText(){if(remote==null)return;remote.cancelInput();EditText input=new EditText(this);input.setHint("输入要发送的文字");input.setTextSize(15);input.setPadding(dp(12),dp(10),dp(12),dp(10));input.setBackground(surface(0xfff0f4fa,10));input.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI);input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(1024)});LinearLayout box=column();box.setPadding(dp(20),dp(16),dp(20),dp(16));box.setBackground(surface(Color.WHITE,20));box.addView(text("发送文字",18,INK));box.addView(input);Dialog d=new Dialog(this);d.requestWindowFeature(Window.FEATURE_NO_TITLE);dialogContent(d,box);LinearLayout actions=row();addButton(actions,button("取消",d::dismiss));addButton(actions,button("发送",()->{try{if(remote!=null)remote.send(new JSONArray().put(new JSONObject().put("type","text").put("text",input.getText().toString())));d.dismiss();}catch(Exception ex){showError("发送失败",ex.getMessage());}}));box.addView(actions);styleDialog(d);remoteDialogs.add(d);d.show();}
     private void update(){
         JSONObject s=app.state();if(dashboardUi!=null&&remote==null&&conference==null)dashboardUi.update(s);
-        if(remote!=null&&app.session!=null){try{JSONObject session=new JSONObject(app.session.statusJSON());remote.setControl(session.optBoolean("control"));remote.setReady(session.optBoolean("ready"));remoteToolbar.update(session);if(session.optBoolean("closed")){String message=session.optString("message");app.endSession();dashboard();showError("连接已结束",message);}}catch(Exception ignored){}}
+        if(remote!=null&&app.session!=null){try{JSONObject session=new JSONObject(app.session.statusJSON());remoteStatusFailures=0;remote.setControl(session.optBoolean("control"));remote.setReady(session.optBoolean("ready"));remoteToolbar.update(session);if(session.optBoolean("closed")){String message=session.optString("message");remoteEnded(message.isEmpty()?"远程连接已结束。":message);}}catch(Throwable failure){if(!FailureBoundary.recoverable(failure))throw (Error)failure;if(++remoteStatusFailures>=2)remoteEnded("无法读取远程连接状态，请检查网络后重新连接。");}}
         if(!app.notice.isEmpty()&&!app.notice.equals(shownNotice)){shownNotice=app.notice;showError("YuDesk 提示",shownNotice);}
         if(!s.optBoolean("running",true)){stopService(new Intent(this,CaptureService.class));if(!s.optString("message").equals(shownNotice)){shownNotice=s.optString("message");showError("接收已停止",shownNotice);}}
         Engine e=app.existingEngine();if(e==null)return;
@@ -289,7 +328,8 @@ public final class MainActivity extends Activity {
     private void renderHistory(){if(dashboardUi!=null)dashboardUi.renderHistory(saved());}
     private void exit(){stopService(new Intent(this,CaptureService.class));app.closeEngine();finishAndRemoveTask();}
     @Override public void onBackPressed(){if(conference!=null){if(!conference.handleBack())requestConferenceLeave();}else if(remote!=null){app.endSession();dashboard();}else exit();}
+    @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);setIntent(intent);if(destroyed)return;if(app.existingEngine()==null)try{app.engine();}catch(Throwable failure){if(!FailureBoundary.recoverable(failure))throw (Error)failure;showStartupFailure(failure);return;}if(conference!=null){immersiveConference();return;}if(app.session!=null){if(remote==null)showRemote();else immersiveRemote();}else if(dashboardUi==null)dashboard();else update();}
     @Override protected void onResume(){super.onResume();resumed=true;app.uiVisible=true;ui.post(refresh);if(deferredTitle!=null){String title=deferredTitle,message=deferredMessage;deferredTitle=null;deferredMessage=null;showError(title,message);}}
-    @Override protected void onPause(){super.onPause();resumed=false;app.uiVisible=false;ui.removeCallbacks(refresh);if(remote!=null)remote.cancelInput();else if(app.session!=null)app.session.releaseInput();if(approvalDialog!=null){approvalDialog.dismiss();approvalDialog=null;approvalID="";}}
-    @Override protected void onDestroy(){destroyed=true;ui.removeCallbacksAndMessages(null);if(remote!=null)remote.stop();if(conference!=null)conference.leave(false);for(Dialog d:new HashSet<>(ownedDialogs))d.dismiss();ownedDialogs.clear();Engine e=app.existingEngine();if(e!=null)e.cancelConnect();worker.shutdownNow();if(isFinishing()&&!app.sharing)app.closeEngine();super.onDestroy();}
+    @Override protected void onPause(){super.onPause();resumed=false;app.uiVisible=false;ui.removeCallbacks(refresh);if(remote!=null)remote.cancelInput();else app.releaseSessionInput();if(approvalDialog!=null){approvalDialog.dismiss();approvalDialog=null;approvalID="";}}
+    @Override protected void onDestroy(){destroyed=true;for(long request:new HashSet<>(projectionLaunches))ConferenceProjectionService.cancelLaunch(request,"界面已关闭");projectionLaunches.clear();ui.removeCallbacksAndMessages(null);if(remote!=null)remote.stop();if(conference!=null)conference.leave(false);for(Dialog d:new HashSet<>(ownedDialogs))d.dismiss();ownedDialogs.clear();Engine e=app.existingEngine();if(e!=null)FailureBoundary.runQuietly(e::cancelConnect);worker.shutdownNow();if(isFinishing()&&!app.sharing)app.closeEngine();super.onDestroy();}
 }

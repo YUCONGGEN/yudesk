@@ -27,12 +27,12 @@ public final class RemoteAccessibilityService extends AccessibilityService {
     static boolean available(){return instance!=null;}
     static void receive(String raw){RemoteAccessibilityService s=instance;if(s!=null)s.accept(raw);}
     private YuDeskApp app(){return (YuDeskApp)getApplication();}
-    private boolean permitted(){Engine e=app().existingEngine();return instance==this&&e!=null&&e.canInput();}
-    @Override protected void onServiceConnected(){instance=this;Engine e=app().existingEngine();if(e!=null)e.setAccessibility(true);}
+    private boolean permitted(){Engine e=app().existingEngine();if(instance!=this||e==null)return false;try{return e.canInput();}catch(Throwable failure){if(!FailureBoundary.recoverable(failure))throw (Error)failure;return false;}}
+    @Override protected void onServiceConnected(){instance=this;Engine e=app().existingEngine();if(e!=null)FailureBoundary.runQuietly(()->e.setAccessibility(true));}
     @Override public void onAccessibilityEvent(AccessibilityEvent event){/* Never collect UI events or window text. */}
     @Override public void onInterrupt(){clear();}
-    @Override public boolean onUnbind(Intent intent){instance=null;Engine e=app().existingEngine();if(e!=null)e.setAccessibility(false);clear();return super.onUnbind(intent);}
-    @Override public void onDestroy(){instance=null;Engine e=app().existingEngine();if(e!=null)e.setAccessibility(false);clear();super.onDestroy();}
+    @Override public boolean onUnbind(Intent intent){instance=null;Engine e=app().existingEngine();if(e!=null)FailureBoundary.runQuietly(()->e.setAccessibility(false));clear();return super.onUnbind(intent);}
+    @Override public void onDestroy(){instance=null;Engine e=app().existingEngine();if(e!=null)FailureBoundary.runQuietly(()->e.setAccessibility(false));clear();super.onDestroy();}
     private void clear(){epoch++;queue.clear();stroke=null;down=false;busy=false;releaseRequested=false;main.removeCallbacksAndMessages(null);}
     // Called on the application's main thread by the capture service's single
     // bounded input pump. Re-check OS service state and session authorization.
@@ -52,7 +52,7 @@ public final class RemoteAccessibilityService extends AccessibilityService {
         if(stroke!=null&&down&&instance==this){try{Path p=new Path();p.moveTo(x,y);GestureDescription.StrokeDescription end=stroke.continueStroke(p,0,1,false);dispatchGesture(new GestureDescription.Builder().addStroke(end).build(),null,null);}catch(Exception ignored){}}
         clear();
     }
-    private void failure(String message){app().notice=message;Engine e=app().existingEngine();if(e!=null)e.reportInputError(message);}
+    private void failure(String message){app().notice=message;Engine e=app().existingEngine();if(e!=null)FailureBoundary.runQuietly(()->e.reportInputError(message));}
     private void pump(){
         if(busy||queue.isEmpty())return;if(!permitted()){clear();return;}
         Command command=queue.removeFirst();JSONObject event=command.value;String type=event.optString("type");

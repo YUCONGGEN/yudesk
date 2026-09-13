@@ -173,6 +173,16 @@ func TestRelayRejectionCodesSeparateTerminationFromActivationWait(t *testing.T) 
 	if got := relay.RejectionCode(errors.New("temporary network failure")); got != "" {
 		t.Fatalf("network error was classified as rejection: %q", got)
 	}
+	for _, code := range []string{"STOP", "DISABLED", "DELETED", "DENIED", "EXPIRED"} {
+		if !terminalRelayRejection(code) {
+			t.Fatalf("%q must terminate a managed device", code)
+		}
+	}
+	for _, code := range []string{"", "BUSY", "LICENSE_REQUIRED"} {
+		if terminalRelayRejection(code) {
+			t.Fatalf("%q must be retried without terminating the process", code)
+		}
+	}
 }
 
 func TestAgentPageOffersOneClickCopy(t *testing.T) {

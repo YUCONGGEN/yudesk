@@ -241,9 +241,11 @@ func Main() {
 			c, e := relay.DialWithContext(ctx, *relayAddr, options, relay.Hello{Role: "agent", ID: id.ID, Name: a.name, PIN: id.PIN, Token: *relayToken, Auth: *relayAuth, PublicKey: id.PrivateKey.Public().(ed25519.PublicKey)})
 			if e != nil {
 				switch relay.RejectionCode(e) {
-				case "STOP", "DISABLED", "DELETED", "DENIED", "BUSY", "EXPIRED":
+				case "STOP", "DISABLED", "DELETED", "DENIED", "EXPIRED":
 					a.terminateWithNotice("服务器已拒绝连接，被控端正在退出", e.Error())
 					return
+				case "BUSY":
+					a.setRelayStatus("旧连接正在释放，正在自动恢复", false, e.Error())
 				case "LICENSE_REQUIRED":
 					a.setRelayStatus("等待设备授权，不再重复连接中转服务器", false, e.Error())
 					if !a.waitForActiveLicense(*webServer) {
@@ -610,7 +612,7 @@ func (a *agent) monitorManagement(ctx context.Context, addr string, options rela
 		if a.quitting() || ctx.Err() != nil {
 			return
 		}
-		if relay.RejectionCode(err) != "" {
+		if terminalRelayRejection(relay.RejectionCode(err)) {
 			a.terminateWithNotice("服务器已终止运行", err.Error())
 			return
 		}
@@ -621,6 +623,15 @@ func (a *agent) monitorManagement(ctx context.Context, addr string, options rela
 		if backoff < 30*time.Second {
 			backoff *= 2
 		}
+	}
+}
+
+func terminalRelayRejection(code string) bool {
+	switch code {
+	case "STOP", "DISABLED", "DELETED", "DENIED", "EXPIRED":
+		return true
+	default:
+		return false
 	}
 }
 

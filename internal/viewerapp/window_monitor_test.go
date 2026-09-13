@@ -230,3 +230,27 @@ func TestWindowMonitorConfirmsOwnedProcessExit(t *testing.T) {
 		t.Fatal("closed browser process was left running as invisible app")
 	}
 }
+
+func TestWindowMonitorCallbackCanAcquireWindowLock(t *testing.T) {
+	f := newMonitorFixture(t)
+	callback := make(chan struct{}, 1)
+	f.window.onClose = func() {
+		// Production recovery hides/rebuilds the window and must be allowed to
+		// enter appWindow methods. Invoking callbacks under b.mu deadlocks here.
+		f.window.mu.Lock()
+		f.window.mu.Unlock()
+		callback <- struct{}{}
+	}
+	if err := f.window.monitor("owned-target"); err != nil {
+		t.Fatal(err)
+	}
+	c := f.socket(t)
+	if err := c.send(map[string]any{"method": "Target.targetDestroyed", "params": map[string]string{"targetId": "owned-target"}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-callback:
+	case <-time.After(time.Second):
+		t.Fatal("window recovery callback deadlocked on appWindow mutex")
+	}
+}

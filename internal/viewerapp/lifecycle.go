@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,7 +36,7 @@ type viewerHost struct {
 	lastShow time.Time
 }
 
-const duplicateShowWindow = 750 * time.Millisecond
+const duplicateShowWindow = 2 * time.Second
 
 func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHost, error) {
 	l, err := net.Listen("tcp", addr)
@@ -50,10 +51,10 @@ func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHo
 	h.window = newAppWindow(l.Addr().String(), token)
 	h.window.journal = h.journal
 	h.version.Store("desktop-input-files-v3")
-	// Closing a renderer unexpectedly still exits, so a browser crash cannot
-	// leave an invisible process. Windows' owned native X has a separate callback
-	// below and only hides the healthy window to the notification area.
-	windowClosed := func() { h.requestExit("window_closed") }
+	// Windows has a separate native WM_CLOSE callback for user intent. A private
+	// renderer failure is recoverable there; other shells still report an
+	// explicit close as process-level intent.
+	windowClosed := h.handleWindowClosed
 	tracker := uilifecycle.NewWithCallback(700*time.Millisecond, func() {
 		// Managed native windows report target destruction directly, avoiding
 		// duplicate/late HTTP watcher callbacks after the dashboard reopens.
@@ -223,6 +224,24 @@ func newViewerHost(addr, token string, journals ...*lifecycleJournal) (*viewerHo
 		cancel()
 	}()
 	return h, nil
+}
+
+// A Windows native host has a separate WM_CLOSE path for user intent. Losing
+// only its private Chromium target therefore means renderer failure, not
+// application exit. Keep the singleton and tray alive so the next desktop or
+// tray launch can rebuild the renderer in the same process. Other platforms
+// still receive their explicit close event from their native shell.
+func (h *viewerHost) handleWindowClosed() {
+	if runtime.GOOS == "windows" && h.window != nil && !h.window.headless && h.window.managed.Load() {
+		h.journal.record("window_monitor_lost", nil)
+		if err := h.closeToTray(); err != nil {
+			h.journal.record("window_close_to_tray_failed", err)
+			h.setDeskHidden(true)
+			h.setTrayVisible(true)
+		}
+		return
+	}
+	h.requestExit("window_closed")
 }
 
 func (h *viewerHost) requestExit(reason string) {

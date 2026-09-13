@@ -21,6 +21,7 @@ import (
 )
 
 const serviceName = "YuDeskDesktop"
+const serviceRegistryPath = `SYSTEM\CurrentControlSet\Services\` + serviceName
 
 func defaultInstallDirectory() (string, error) {
 	root, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
@@ -59,6 +60,48 @@ func registeredInstallDirectory() (string, error) {
 	return validateInstallDirectory(directory)
 }
 
+func serviceExecutablePath(command string) (string, error) {
+	command = strings.TrimSpace(command)
+	const argument = " -desktop-service"
+	if len(command) <= len(argument) || !strings.EqualFold(command[len(command)-len(argument):], argument) {
+		return "", errors.New("Windows 服务命令无效")
+	}
+	path := strings.TrimSpace(command[:len(command)-len(argument)])
+	quoted := len(path) >= 2 && path[0] == '"' && path[len(path)-1] == '"'
+	if quoted {
+		path = path[1 : len(path)-1]
+	}
+	if strings.ContainsAny(path, "\"\r\n") || (!quoted && strings.ContainsAny(path, " \t")) || !filepath.IsAbs(path) || !strings.EqualFold(filepath.Base(path), "yudesk.exe") {
+		return "", errors.New("Windows 服务程序路径无效")
+	}
+	directory, err := validateInstallDirectory(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(directory, "yudesk.exe"), nil
+}
+
+// A failed/older installer can leave the uninstall key incomplete while the
+// service still has the authoritative administrator-owned image path. Recover
+// that path so repair installation remains possible instead of failing before
+// the user can choose an installation directory.
+func serviceInstallDirectory() (string, error) {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, serviceRegistryPath, registry.QUERY_VALUE|registry.WOW64_64KEY)
+	if err != nil {
+		return "", err
+	}
+	defer key.Close()
+	command, _, err := key.GetStringValue("ImagePath")
+	if err != nil {
+		return "", err
+	}
+	path, err := serviceExecutablePath(command)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(path), nil
+}
+
 // ResolveInstallPath resolves an explicit installer choice, or the trusted
 // machine-wide location from a previous installation. The registry value is
 // written only by the elevated installer and is also used by the service when
@@ -69,13 +112,14 @@ func ResolveInstallPath(directory string) (string, error) {
 		if err == nil {
 			return filepath.Join(registered, "yudesk.exe"), nil
 		}
-		if !errors.Is(err, registry.ErrNotExist) {
-			return "", fmt.Errorf("无法读取已登记的安装目录: %w", err)
+		serviceDirectory, serviceErr := serviceInstallDirectory()
+		if serviceErr == nil {
+			return filepath.Join(serviceDirectory, "yudesk.exe"), nil
 		}
 		var defaultErr error
 		directory, defaultErr = defaultInstallDirectory()
 		if defaultErr != nil {
-			return "", defaultErr
+			return "", errors.Join(fmt.Errorf("无法读取已登记的安装目录: %w", err), defaultErr)
 		}
 	}
 	validated, err := validateInstallDirectory(directory)

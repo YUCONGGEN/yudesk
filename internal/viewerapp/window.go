@@ -40,6 +40,7 @@ type appWindow struct {
 	onClose       func()
 	onUserClose   func()
 	cancelMonitor func()
+	monitorEpoch  uint64 // guarded by mu; retires stale monitor callbacks
 	journal       *lifecycleJournal
 	native        *nativeAppWindow
 	shell         *windowShell
@@ -287,6 +288,18 @@ func (b *appWindow) Show() error {
 	// racing a recently exited browser's storage/AV handles on hide/reopen on
 	// platforms without an in-process native host (and headless fixtures).
 	if b.processDone != nil {
+		// A dead renderer can leave its captionless host HWND alive. Retire that
+		// host before starting a replacement; otherwise showNativeWindow would
+		// reuse a valid HWND that still points at the old browser process.
+		if err := b.closeNativeWindow(); err != nil {
+			if b.stopBrowser != nil {
+				_ = b.stopBrowser()
+				b.stopBrowser = nil
+			}
+			if retryErr := b.closeNativeWindow(); retryErr != nil {
+				return errors.Join(err, retryErr)
+			}
+		}
 		if b.stopBrowser != nil {
 			if err := b.stopBrowser(); err != nil {
 				return err
@@ -515,21 +528,39 @@ func openBrowser(address string, _ bool) error {
 		return err
 	}
 	u.Path = "/api/ui/show"
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	r, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), nil)
-	if err != nil {
-		return err
-	}
-	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 20 * time.Second}
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 2 * time.Second}
 	defer client.CloseIdleConnections()
-	response, err := client.Do(r)
-	if err != nil {
-		return err
+	var lastErr error
+	for {
+		r, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), nil)
+		if requestErr != nil {
+			return requestErr
+		}
+		response, requestErr := client.Do(r)
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		if requestErr == nil && response.StatusCode == http.StatusOK {
+			return nil
+		}
+		if requestErr == nil {
+			lastErr = fmt.Errorf("无法打开 YuDesk 窗口（%d）", response.StatusCode)
+			// Authentication and malformed requests are permanent. A busy host or
+			// a renderer being rebuilt is transient and should be retried.
+			if response.StatusCode != http.StatusServiceUnavailable && response.StatusCode != http.StatusTooManyRequests {
+				return lastErr
+			}
+		} else {
+			lastErr = requestErr
+		}
+		timer := time.NewTimer(80 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("无法恢复 YuDesk 窗口: %w", errors.Join(lastErr, ctx.Err()))
+		case <-timer.C:
+		}
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("无法打开 YuDesk 窗口（%d）", response.StatusCode)
-	}
-	return nil
 }

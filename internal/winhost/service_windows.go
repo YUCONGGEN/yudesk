@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -298,30 +301,37 @@ func estimatedInstallSize(size int64) uint32 {
 	return uint32(kib)
 }
 
-func registerUninstall(path string) error {
+func registerUninstall(path string) (resultErr error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
-	key, _, err := registry.CreateKey(registry.LOCAL_MACHINE, uninstallRegistryPath, registry.SET_VALUE|registry.WOW64_64KEY)
+	key, openedExisting, err := registry.CreateKey(registry.LOCAL_MACHINE, uninstallRegistryPath, registry.SET_VALUE|registry.WOW64_64KEY)
 	if err != nil {
 		return fmt.Errorf("无法登记到 Windows 程序列表: %w", err)
 	}
-	defer key.Close()
-	values := map[string]string{
-		"DisplayName":          "YuDesk",
-		"DisplayVersion":       releaseinfo.Version,
-		"Publisher":            "YuDesk",
-		"InstallLocation":      filepath.Dir(path),
-		"DisplayIcon":          path + ",0",
-		"UninstallString":      uninstallCommand(path),
-		"QuietUninstallString": uninstallCommand(path),
-		"URLInfoAbout":         "http://www.yucg.cn:8235/",
-		"InstallDate":          time.Now().Format("20060102"),
+	defer func() {
+		_ = key.Close()
+		// Do not leave a newly-created, partial Programs and Features entry:
+		// ResolveInstallPath must remain repairable after any registry write error.
+		if resultErr != nil && !openedExisting {
+			_ = registry.DeleteKey(registry.LOCAL_MACHINE, uninstallRegistryPath)
+		}
+	}()
+	values := []struct{ name, value string }{
+		{"InstallLocation", filepath.Dir(path)},
+		{"DisplayName", "YuDesk"},
+		{"DisplayVersion", releaseinfo.Version},
+		{"Publisher", "YuDesk"},
+		{"DisplayIcon", path + ",0"},
+		{"UninstallString", uninstallCommand(path)},
+		{"QuietUninstallString", uninstallCommand(path)},
+		{"URLInfoAbout", "http://www.yucg.cn:8235/"},
+		{"InstallDate", time.Now().Format("20060102")},
 	}
-	for name, value := range values {
-		if err = key.SetStringValue(name, value); err != nil {
-			return fmt.Errorf("无法写入 Windows 程序信息 %s: %w", name, err)
+	for _, value := range values {
+		if err = key.SetStringValue(value.name, value.value); err != nil {
+			return fmt.Errorf("无法写入 Windows 程序信息 %s: %w", value.name, err)
 		}
 	}
 	for name, value := range map[string]uint32{"NoModify": 1, "NoRepair": 1, "EstimatedSize": estimatedInstallSize(info.Size())} {
@@ -449,6 +459,81 @@ func desktopGUIRunning() (bool, error) {
 	return true, nil
 }
 
+func desktopExitEndpoint(raw string) (string, bool) {
+	endpoint, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || endpoint.Scheme != "http" || endpoint.User != nil || endpoint.Port() == "" || endpoint.Query().Get("access_token") == "" {
+		return "", false
+	}
+	ip := net.ParseIP(endpoint.Hostname())
+	if ip == nil || !ip.IsLoopback() {
+		return "", false
+	}
+	endpoint.Path = "/api/exit"
+	endpoint.RawPath = ""
+	endpoint.Fragment = ""
+	return endpoint.String(), true
+}
+
+func requestDesktopGUIExit() error {
+	running, err := desktopGUIRunning()
+	if err != nil || !running {
+		return err
+	}
+	root, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	paths := []string{
+		filepath.Join(root, "yudesk", "viewer-session.url"),
+		filepath.Join(root, "yudesk", "viewer-launcher.url"),
+	}
+	transport := &http.Transport{Proxy: nil}
+	client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+	defer transport.CloseIdleConnections()
+	requested := false
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		running, err = desktopGUIRunning()
+		if err != nil {
+			return err
+		}
+		if !running {
+			return nil
+		}
+		if !requested {
+			for _, path := range paths {
+				file, openErr := os.Open(path)
+				if openErr != nil {
+					continue
+				}
+				data, readErr := io.ReadAll(io.LimitReader(file, 4097))
+				_ = file.Close()
+				if readErr != nil || len(data) > 4096 {
+					continue
+				}
+				endpoint, valid := desktopExitEndpoint(string(data))
+				if !valid {
+					continue
+				}
+				request, requestErr := http.NewRequest(http.MethodPost, endpoint, nil)
+				if requestErr != nil {
+					continue
+				}
+				response, requestErr := client.Do(request)
+				if response != nil {
+					_ = response.Body.Close()
+				}
+				if requestErr == nil && (response.StatusCode == http.StatusNoContent || response.StatusCode == http.StatusOK) {
+					requested = true
+					break
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return errors.New("无法自动关闭旧版 YuDesk，请从托盘退出后重试")
+}
+
 func install(remove bool, requestedDirectory string) (resultErr error) {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return errors.New("请允许管理员授权")
@@ -463,14 +548,11 @@ func install(remove bool, requestedDirectory string) (resultErr error) {
 		if err != nil {
 			return err
 		}
-		if !strings.EqualFold(path, previousPath) {
-			running, runningErr := desktopGUIRunning()
-			if runningErr != nil {
-				return fmt.Errorf("无法确认 YuDesk 是否已退出: %w", runningErr)
-			}
-			if running {
-				return errors.New("更换安装目录前，请先从 YuDesk 托盘菜单选择“退出”")
-			}
+		// A repair or upgrade must replace the same executable that may currently
+		// own the desktop window. Ask the authenticated loopback UI to shut down
+		// and wait for its singleton lock instead of failing with a sharing error.
+		if err = requestDesktopGUIExit(); err != nil {
+			return err
 		}
 	}
 	m, err := mgr.Connect()

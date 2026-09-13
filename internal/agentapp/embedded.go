@@ -162,7 +162,7 @@ func StartEmbedded(parent context.Context, o EmbeddedOptions) (*Device, error) {
 				if a.quitting() {
 					return
 				}
-				if code := relay.RejectionCode(err); code != "" && code != "LICENSE_REQUIRED" {
+				if code := relay.RejectionCode(err); terminalRelayRejection(code) {
 					a.terminateWithNotice("服务器已终止运行", err.Error())
 					return
 				}

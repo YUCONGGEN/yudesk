@@ -108,22 +108,59 @@ func (b *broker) handleControl(c net.Conn, reader *bufio.Reader, hello relay.Hel
 	if b.controls == nil {
 		b.controls = make(map[string]*deviceControl)
 	}
-	if b.controls[hello.ID] != nil {
+	previous := b.controls[hello.ID]
+	if previous != nil && previous.stopping {
 		b.Unlock()
-		stop("BUSY", "device process is already online")
+		stop("STOP", "device process is stopping")
 		return
+	}
+	if previous != nil {
+		// A network transition can establish the replacement management socket
+		// before the old socket's heartbeat deadline expires. The authenticated
+		// device owns the same Ed25519 key, so let it take over immediately and
+		// retain its port-map session instead of terminating the whole process as
+		// a duplicate. The old handler's deferred cleanup is generation-checked.
+		control.portMapSession = previous.portMapSession
 	}
 	b.controls[hello.ID] = control
 	b.Unlock()
+	if previous != nil {
+		_ = previous.conn.Close()
+	}
 	defer func() {
-		b.disconnectDevice("device:"+hello.ID, hello.ID)
-		b.closeDevicePortMaps(hello.ID)
+		var connections []net.Conn
+		var removedPortMaps []*serverPortMap
 		b.Lock()
-		if b.controls[hello.ID] == control {
-			delete(b.controls, hello.ID)
-			b.removeMeetingLocked(hello.ID)
+		if b.controls[hello.ID] != control {
+			b.Unlock()
+			return
+		}
+		delete(b.controls, hello.ID)
+		b.removeMeetingLocked(hello.ID)
+		owner := "device:" + hello.ID
+		if waiting, ok := b.devices[hello.ID]; ok && waiting.owner == owner {
+			delete(b.devices, hello.ID)
+			connections = append(connections, waiting.conn)
+			waiting.ready <- nil
+		}
+		if active, ok := b.active[hello.ID]; ok && active.owner == owner {
+			delete(b.active, hello.ID)
+			connections = append(connections, active.agent, active.viewer)
+		}
+		for mapID, mapping := range b.portMaps {
+			if mapping.DeviceID == hello.ID {
+				if removed := b.removePortMapLocked(mapID); removed != nil {
+					removedPortMaps = append(removedPortMaps, removed)
+				}
+			}
 		}
 		b.Unlock()
+		b.closePortMapHooks(removedPortMaps)
+		for _, connection := range connections {
+			if connection != nil {
+				_ = connection.Close()
+			}
+		}
 	}()
 	readDone := make(chan struct{})
 	defer func() {

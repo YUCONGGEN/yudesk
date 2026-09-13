@@ -13,6 +13,7 @@ public final class YuDeskApp extends Application {
     volatile String notice = "";
     volatile boolean uiVisible;
     volatile boolean sharing;
+    volatile boolean sharingStarting;
 
     @Override public void onCreate() { super.onCreate();go.Seq.setContext(this); }
 
@@ -26,14 +27,22 @@ public final class YuDeskApp extends Application {
     public synchronized Engine existingEngine() { return engine; }
     public JSONObject state() {
         try { Engine value = existingEngine(); return value == null ? new JSONObject() : new JSONObject(value.statusJSON()); }
-        catch (Exception ignored) { return new JSONObject(); }
+        catch (Throwable failure) { if (!FailureBoundary.recoverable(failure)) throw (Error) failure; return new JSONObject(); }
     }
     public void endSession() {
         Session value = session; session = null;
-        if (value != null) { value.releaseInput(); value.close(); }
+        if (value != null) {
+            FailureBoundary.runQuietly(value::releaseInput);
+            FailureBoundary.runQuietly(value::close);
+        }
+    }
+    public void releaseSessionInput() {
+        Session value = session;
+        if (value != null) FailureBoundary.runQuietly(value::releaseInput);
     }
     public synchronized void closeEngine() {
         endSession();
-        if (engine != null) { engine.close(); engine = null; }
+        Engine value = engine; engine = null;
+        if (value != null) FailureBoundary.runQuietly(value::close);
     }
 }

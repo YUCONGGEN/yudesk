@@ -3,6 +3,7 @@ package viewerapp
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,16 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/yudesk/yudesk/internal/relay"
 )
+
+// conferenceJS is appended to the dashboard bundle from this meeting-specific
+// file so conference fixes stay isolated from the rest of the desktop UI.
+//
+//go:embed ui/conference.js
+var conferenceJS string
+
+func init() {
+	dashboardJS += "\n" + conferenceJS
+}
 
 func (d *unifiedDesk) serveConference(w http.ResponseWriter, r *http.Request) {
 	code, name := strings.TrimSpace(r.URL.Query().Get("code")), strings.TrimSpace(r.URL.Query().Get("name"))
