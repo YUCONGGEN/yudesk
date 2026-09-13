@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -106,7 +105,7 @@ func (d *unifiedDesk) Close() { d.device.Close() }
 func (d *unifiedDesk) render(w http.ResponseWriter, id, message string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = dashboardPage.Execute(w, map[string]any{"Token": d.token, "DeviceID": id, "Message": message, "Version": releaseinfo.Version, "Windows": runtime.GOOS == "windows", "InstallPrompt": d.config.openUI && d.config.stateDir == "" && d.config.deviceDir == ""})
+	_ = dashboardPage.Execute(w, map[string]any{"Token": d.token, "DeviceID": id, "Message": message, "Version": releaseinfo.Version, "Build": releaseinfo.BuildID(), "InstallPrompt": d.config.openUI && d.config.stateDir == "" && d.config.deviceDir == ""})
 }
 
 func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {

@@ -75,7 +75,7 @@ async function fixture(t,{surface='transition',pending=null,clock=false,platform
           return send(200,{ok:true});
         }
       }
-      if(req.method==='POST'&&['/api/local/hide','/api/ui/minimize','/api/exit','/connect'].includes(url.pathname))return send(200,{ok:true});
+      if(req.method==='POST'&&['/api/local/hide','/api/ui/minimize','/api/ui/close-to-tray','/api/exit','/connect'].includes(url.pathname))return send(200,{ok:true});
       return send(404,{});
     })().catch(error=>{failures.push(error.message);if(!res.headersSent)res.writeHead(500);res.end();});
   });
@@ -445,7 +445,9 @@ for(const [surface,hideSelector] of [['dashboard','#hideApp'],['transition','[da
   test(surface+': hide, minimize and close are ordered and minimize stays local',async t=>{
     const {page,state}=await fixture(t,{surface});
     const minimizeSelector=surface==='dashboard'?'.topbar [data-window-action="minimize"]':'[data-window-action="minimize"]';
-    const selectors=[hideSelector,minimizeSelector,'[aria-label="关闭应用"]'];
+    const closeSelector=surface==='dashboard'?'[aria-label="关闭窗口"]':'[aria-label="关闭应用"]';
+    const closePath=surface==='dashboard'?'/api/ui/close-to-tray':'/api/exit';
+    const selectors=[hideSelector,minimizeSelector,closeSelector];
     const domOrder=await page.evaluate(selectors=>{
       const nodes=selectors.map(selector=>document.querySelector(selector));
       return nodes.every((node,index)=>node&&(index===0||!!(nodes[index-1].compareDocumentPosition(node)&Node.DOCUMENT_POSITION_FOLLOWING)));
@@ -461,9 +463,10 @@ for(const [surface,hideSelector] of [['dashboard','#hideApp'],['transition','[da
     assert.deepEqual(state.requests.filter(r=>r.method==='POST').map(({path,body,token})=>({path,body,token})),[{path:'/api/ui/minimize',body:{},token}]);
     // Close is immediate and mocked; it must not ask for approval or disconnect
     // merely the remote session. No real process is terminated by this test.
-    const closed=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/exit');
+    const closed=page.waitForResponse(r=>new URL(r.url()).pathname===closePath);
     await page.locator(selectors[2]).click();await closed;
-    assert.equal(state.requests.filter(r=>r.path==='/api/exit'&&r.method==='POST').length,1);
+    assert.equal(state.requests.filter(r=>r.path===closePath&&r.method==='POST').length,1);
+    if(surface==='dashboard')assert.equal(state.requests.some(r=>r.path==='/api/exit'),false,'desktop dashboard close must preserve the online process');
     assert.equal(await page.locator('#appConfirm').isVisible(),false);
   });
 }

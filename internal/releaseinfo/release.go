@@ -14,6 +14,22 @@ import (
 
 const Version = "2.0.0"
 
+// BuildCommit is injected by the release build. Keeping it in the common
+// package makes every desktop binary self-identifying and exposes mixed builds.
+var BuildCommit = "development"
+
+func BuildID() string {
+	if len(BuildCommit) == 40 {
+		for _, value := range BuildCommit {
+			if !(value >= '0' && value <= '9') && !(value >= 'a' && value <= 'f') {
+				return "development"
+			}
+		}
+		return BuildCommit[:12]
+	}
+	return "development"
+}
+
 type Manifest struct {
 	Version     string    `json:"version"`
 	PublishedAt time.Time `json:"publishedAt"`

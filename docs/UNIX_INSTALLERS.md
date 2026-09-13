@@ -169,6 +169,7 @@ binaries. Substitute the project's real release contact for the maintainer:
 ```sh
 bash scripts/package-unix.sh --target linux --arch amd64 \
   --linux-suite ubuntu22.04 --maintainer 'Release team <actual-release-email>' \
+  --build-commit "$(git rev-parse HEAD)" \
   --staging-dir /work/staging/ubuntu22.04-amd64 --output-dir /work/packages
 ```
 
@@ -202,9 +203,11 @@ binaries for the desired minimum rather than silently claiming older support.
 
 ```sh
 bash scripts/package-unix.sh --target macos --arch arm64 \
+  --build-commit "$(git rev-parse HEAD)" \
   --macos-min-version 13.0 --staging-dir /work/staging/macos-arm64 \
   --output-dir /work/packages
 bash scripts/package-unix.sh --target macos --arch amd64 \
+  --build-commit "$(git rev-parse HEAD)" \
   --macos-min-version 13.0 --staging-dir /work/staging/macos-amd64 \
   --output-dir /work/packages
 ```
@@ -284,7 +287,12 @@ native input implementation or separately verified bundled cliclick support.
 `--version` defaults to `2.0.0` and must match the repository's release constant;
 it does not rebuild or prove the embedded version of an arbitrary supplied
 binary. The release owner must supply the matching product build.
-For final packages, pass `--main-sha256 HEX --helper-sha256 HEX` and, on macOS,
+Every package requires `--build-commit HEX` and writes a sibling
+`.provenance.json` containing that commit, the checked core/helper hashes and
+the completed package hash. The consolidated publisher rejects a missing or
+mismatched provenance file, preventing an older `.deb` or `.pkg` from being
+published beside a newer Windows build. For final packages, pass
+`--main-sha256 HEX --helper-sha256 HEX` and, on macOS,
 `--launcher-sha256 HEX`, with hashes
 confirmed by the corresponding build owners. The packager checks these before
 copying, checks the copied bytes again, and refuses publication if any source

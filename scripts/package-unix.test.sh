@@ -31,11 +31,16 @@ cp "$project_root/packaging/linux/copyright" "$test_root/licenses supplied/neste
 cp "$project_root/packaging/linux/copyright" "$test_root/user state/keep.txt"
 before=$(sha256sum "$staging/yudesk" "$staging/yudesk-window" "$test_root/user state/keep.txt")
 common=(--target linux --arch amd64 --staging-dir "$staging" --output-dir "$output"
-  --linux-suite "$suite" --maintainer 'Packaging Test <test@example.invalid>')
+  --linux-suite "$suite" --maintainer 'Packaging Test <test@example.invalid>'
+  --build-commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
 bash "$project_root/scripts/package-unix.sh" "${common[@]}" --keep-work --licenses-dir "$test_root/licenses supplied" \
   --main-sha256 "$(sha256sum "$staging/yudesk" | awk '{print $1}')" \
   --helper-sha256 "$(sha256sum "$staging/yudesk-window" | awk '{print $1}')"
 package="$output/YuDesk-2.0.0-1-linux-amd64-$suite.deb"
+provenance="$package.provenance.json"
+[ -s "$provenance" ]
+grep -Fq '"buildCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' "$provenance"
+grep -Fq '"packageSha256":"'"$(sha256sum "$package" | awk '{print $1}')"'"' "$provenance"
 dpkg-deb --extract "$package" "$test_root/extracted"
 dpkg-deb --control "$package" "$test_root/control"
 desktop-file-validate "$test_root/extracted/usr/share/applications/yudesk.desktop"
@@ -82,6 +87,7 @@ expect_failure 'Main SHA-256 mismatch' "${common[@]}" --main-sha256 000000000000
 expect_failure 'Helper SHA-256 mismatch' "${common[@]}" --helper-sha256 0000000000000000000000000000000000000000000000000000000000000000
 expect_failure '64 hex characters' "${common[@]}" --main-sha256 invalid
 expect_failure '64 hex characters' "${common[@]}" --launcher-sha256 invalid
+expect_failure '40-character --build-commit' "${common[@]}" --build-commit invalid
 mkdir "$test_root/missing helper"
 cp "$staging/yudesk" "$test_root/missing helper/yudesk"
 expect_failure 'Missing/empty/non-regular' "${common[@]}" --staging-dir "$test_root/missing helper"

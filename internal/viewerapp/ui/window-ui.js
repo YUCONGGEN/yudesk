@@ -43,7 +43,12 @@
     button.addEventListener('click',async()=>{
       if(button.disabled)return;
       button.disabled=true;
-      try{await command(button.dataset.windowAction==='hide'?'/api/local/hide':'/api/ui/minimize');}
+      const paths={hide:'/api/local/hide',minimize:'/api/ui/minimize','close-to-tray':'/api/ui/close-to-tray'};
+      try{
+        const path=paths[button.dataset.windowAction];
+        if(!path)throw Error('未知窗口操作');
+        await command(path);
+      }
       catch(error){showError(error.message);}finally{button.disabled=false;}
     });
   }

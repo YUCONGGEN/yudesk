@@ -1,5 +1,7 @@
 # YuDesk 2.0.0
 
+2026-09-14 **桌面同源发布批次**：Windows x64、Linux x64、macOS Intel 与 Apple Silicon 现在必须从同一个 Git 提交构建；构建号显示在设置页，`.deb`/`.pkg` 同时携带可核验的来源记录。发布脚本会拒绝缺少任一桌面平台、混入旧核心或包校验不一致的发布。三类桌面系统继续共用远程控制、设备列表、会议、文件传输、端口映射、设置及连接审批功能，主界面关闭行为统一为“关闭窗口但保持在线，再次运行恢复”。安装包字节数因 CPU 指令集、原生窗口组件和 EXE/DEB/PKG 压缩方式不同，不以体积判断功能是否一致。详见 [桌面同源发布说明](docs/DESKTOP_PARITY_20260914.md)。
+
 2026-09-13 **会议扩容与全屏共享批次 `meeting-scale-share-20260913.12` 已部署**：会议移除 8 人应用层硬限制，桌面全屏始终保留退出入口，全屏发起共享时会可靠调起系统选择器并在授权或取消后恢复全屏；Android 多成员视频网格支持自适应滚动。Android 当前版本为 **2.0.0-preview.18 / 2000018**。详情见 [本次发布说明](docs/RELEASE_NOTES_20260913.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
 
 2026-09-12 **外网自适应延迟与 Windows 重启稳定批次 `low-latency-restart-20260912.9` 已部署**：远程画面按最低 ACK RTT 动态控制在途帧数，输入后的快速采集延长为“100 ms 高频 + 350 ms 尾段”，会议桌面与 Android 按连接人数、真实链路 RTT 和可用上行带宽动态分配摄像头/共享屏幕码率。Windows 再次打开或渲染器恢复时会在原生窗口完成嵌入和首帧合成后再显示，消除裸 Chromium 窗口闪现。Android 当前版本为 **2.0.0-preview.15 / 2000015**。详情见 [本次发布说明](docs/RELEASE_NOTES_20260912.md)、[低延迟设计与验收](docs/LOW_LATENCY.md)、[Android 说明](docs/ANDROID.md) 和 [发布状态](docs/RELEASE_STATUS.md)。

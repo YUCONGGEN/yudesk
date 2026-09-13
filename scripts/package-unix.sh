@@ -19,6 +19,7 @@ Output and input directories must already exist. Existing packages are not repla
 Common options:
   --version 2.0.0             Must match internal/releaseinfo/release.go
   --package-revision N        Positive integer, default 1; does not change product version
+  --build-commit HEX          Required 40-character Git commit shared by all desktop builds
   --licenses-dir DIR         Additional licensing documents (no symlinks/special files)
   --main-sha256 HEX          Expected SHA-256 of the released yudesk binary
   --helper-sha256 HEX        Expected SHA-256 of the released yudesk-window binary
@@ -39,6 +40,7 @@ HELP
 
 target='' arch='' staging='' output='' linux_suite='' maintainer='' macos_min=''
 version=2.0.0 revision=1 extra_licenses='' app_identity='' installer_identity=''
+build_commit=''
 keep_work=0 work=''
 expected_main_sha='' expected_helper_sha='' main_input_sha='' helper_input_sha=''
 expected_launcher_sha='' launcher_input_sha=''
@@ -46,7 +48,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --help|-h) usage; exit 0 ;;
     --keep-work) keep_work=1; shift; continue ;;
-    --target|--arch|--staging-dir|--output-dir|--version|--package-revision|--linux-suite|--maintainer|--macos-min-version|--licenses-dir|--main-sha256|--helper-sha256|--launcher-sha256|--app-sign-identity|--installer-sign-identity)
+    --target|--arch|--staging-dir|--output-dir|--version|--package-revision|--build-commit|--linux-suite|--maintainer|--macos-min-version|--licenses-dir|--main-sha256|--helper-sha256|--launcher-sha256|--app-sign-identity|--installer-sign-identity)
       if [ "$#" -lt 2 ] || [ -z "${2:-}" ]; then fail "Missing value for $1"; fi
       case "$2" in --*) fail "Missing value for $1" ;; esac ;;
     *) fail "Unknown option: $1 (use --help)" ;;
@@ -55,6 +57,7 @@ while [ "$#" -gt 0 ]; do
     --target) target=$2 ;; --arch) arch=$2 ;;
     --staging-dir) staging=$2 ;; --output-dir) output=$2 ;;
     --version) version=$2 ;; --package-revision) revision=$2 ;;
+    --build-commit) build_commit=$2 ;;
     --linux-suite) linux_suite=$2 ;; --maintainer) maintainer=$2 ;;
     --macos-min-version) macos_min=$2 ;; --licenses-dir) extra_licenses=$2 ;;
     --main-sha256) expected_main_sha=$2 ;; --helper-sha256) expected_helper_sha=$2 ;;
@@ -68,6 +71,8 @@ done
 [ "$arch" = amd64 ] || [ "$arch" = arm64 ] || fail '--arch must be amd64 or arm64'
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || fail 'Invalid product version'
 [[ "$revision" =~ ^[1-9][0-9]*$ ]] || fail 'Invalid package revision'
+[[ "$build_commit" =~ ^[a-fA-F0-9]{40}$ ]] || fail 'A 40-character --build-commit is required'
+build_commit=$(printf '%s' "$build_commit" | tr '[:upper:]' '[:lower:]')
 for expected in "$expected_main_sha" "$expected_helper_sha" "$expected_launcher_sha"; do
   [ -z "$expected" ] || [[ "$expected" =~ ^[a-fA-F0-9]{64}$ ]] || fail 'Expected SHA-256 must be 64 hex characters'
 done
@@ -147,8 +152,8 @@ write_install_marker() {
   marker_directory=$1
   marker_platform=$2
   marker_path=$3
-  printf '{"schemaVersion":1,"product":"YuDesk","version":"%s","packageRevision":"%s","platform":"%s","architecture":"%s","installed":true,"executable":"%s/yudesk","helper":"%s/yudesk-window"}\n' \
-    "$version" "$revision" "$marker_platform" "$arch" "$marker_path" "$marker_path" > "$marker_directory/yudesk-install.json"
+  printf '{"schemaVersion":1,"product":"YuDesk","version":"%s","packageRevision":"%s","buildCommit":"%s","platform":"%s","architecture":"%s","installed":true,"executable":"%s/yudesk","helper":"%s/yudesk-window"}\n' \
+    "$version" "$revision" "$build_commit" "$marker_platform" "$arch" "$marker_path" "$marker_path" > "$marker_directory/yudesk-install.json"
   chmod 0644 "$marker_directory/yudesk-install.json"
 }
 
@@ -193,6 +198,19 @@ verify_inputs_unchanged() {
   if [ "$target" = macos ]; then
     [ "$(hash_file "$staging/yudesk-launcher")" = "$launcher_input_sha" ] || fail 'Launcher input changed during packaging; package was not published'
   fi
+}
+
+publish_package() {
+  package_name=$1
+  package_platform=$2
+  package_sha=$(hash_file "$work/$package_name")
+  provenance="$work/$package_name.provenance.json"
+  printf '{"schemaVersion":1,"product":"YuDesk","version":"%s","packageRevision":"%s","buildCommit":"%s","platform":"%s","architecture":"%s","coreSha256":"%s","helperSha256":"%s","launcherSha256":"%s","packageSha256":"%s"}\n' \
+    "$version" "$revision" "$build_commit" "$package_platform" "$arch" "$main_input_sha" "$helper_input_sha" "$launcher_input_sha" "$package_sha" > "$provenance"
+  chmod 0644 "$provenance"
+  [[ ! -e "$output/$package_name.provenance.json" && ! -L "$output/$package_name.provenance.json" ]] || fail "Output already exists: $output/$package_name.provenance.json"
+  ln "$work/$package_name" "$output/$package_name" || fail "Cannot publish without overwriting: $output/$package_name"
+  ln "$provenance" "$output/$package_name.provenance.json" || fail "Cannot publish provenance without overwriting: $output/$package_name.provenance.json"
 }
 
 if [ "$target" = linux ]; then
@@ -283,7 +301,7 @@ if [ "$target" = linux ]; then
   dpkg-deb --info "$work/$name" >/dev/null
   verify_inputs_unchanged
   # Atomic no-clobber publication on the same filesystem, even with parallel builders.
-  ln "$work/$name" "$output/$name" || fail "Cannot publish without overwriting: $output/$name"
+  publish_package "$name" linux
   (cd "$output" && sha256sum "$name")
 else
   [ "$(uname -s)" = Darwin ] || fail 'macOS .pkg and .icns generation require an actual Mac; no cross-host iconutil substitute is used'
@@ -376,7 +394,7 @@ else
   if [ -n "$installer_identity" ]; then productbuild_args+=(--sign "$installer_identity" --timestamp); fi
   productbuild "${productbuild_args[@]}" "$work/$name"
   verify_inputs_unchanged
-  ln "$work/$name" "$output/$name" || fail "Cannot publish without overwriting: $output/$name"
+  publish_package "$name" darwin
   (cd "$output" && shasum -a 256 "$name")
   if [ -z "$installer_identity" ]; then printf 'WARNING: Installer is unsigned.\n' >&2; fi
   printf 'NOT NOTARIZED: Gatekeeper acceptance and GUI installation on a clean Mac remain release checks.\n' >&2

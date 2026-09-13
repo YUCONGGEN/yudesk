@@ -10,6 +10,12 @@ if ($Target -ne 'windows') {
     Write-Warning 'Unix outputs are core binaries, not standalone GUI apps. Build the native helper and run scripts/package-unix.sh before publishing the .pkg/.deb installers.'
 }
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$buildRevision = (& git -C $projectRoot rev-parse --verify HEAD).Trim().ToLowerInvariant()
+if ($LASTEXITCODE -ne 0 -or $buildRevision -notmatch '^[0-9a-f]{40}$') {
+    throw 'A valid Git commit is required for a traceable desktop build.'
+}
+$buildRecords = @()
+$commitLinkerFlag = "-X github.com/yudesk/yudesk/internal/releaseinfo.BuildCommit=$buildRevision"
 $components = @('yudesk')
 $obsoleteComponents = @('yudesk-account', 'yudesk-admin', 'yudesk-relay', 'yudesk-update')
 $targets = @(
@@ -46,22 +52,25 @@ try {
         foreach ($component in $components) {
             $suffix = if ($buildTarget.OS -eq 'windows') { '.exe' } else { '' }
             $output = Join-Path $outputDir ($component + $suffix)
-            $linkerFlags = if ($buildTarget.OS -eq 'windows') { '-s -w -H=windowsgui' } else { '-s -w' }
+            $linkerFlags = if ($buildTarget.OS -eq 'windows') { "-s -w -H=windowsgui $commitLinkerFlag" } else { "-s -w $commitLinkerFlag" }
             if ($localGo) {
                 $previousGOOS, $previousGOARCH = $env:GOOS, $env:GOARCH
                 $env:GOOS, $env:GOARCH = $buildTarget.OS, $buildTarget.Arch
                 try {
-                    & go build -trimpath -ldflags $linkerFlags -o $output "./cmd/$component"
+                    & go build -buildvcs=false -trimpath -ldflags $linkerFlags -o $output "./cmd/$component"
                     if ($LASTEXITCODE -ne 0) { throw "build failed: $component" }
                 } finally {
                     $env:GOOS, $env:GOARCH = $previousGOOS, $previousGOARCH
                 }
             } else {
                 $containerOutput = "/src/dist/$($buildTarget.OS)-$($buildTarget.Arch)/$component$suffix"
-                & docker run --rm -e "GOOS=$($buildTarget.OS)" -e "GOARCH=$($buildTarget.Arch)" -v "${projectRoot}:/src" -w /src -v yudesk-gomod:/go/pkg/mod -v yudesk-gocache:/root/.cache/go-build $goImage sh -lc "/usr/local/go/bin/go build -trimpath -ldflags='$linkerFlags' -o '$containerOutput' './cmd/$component'"
+                & docker run --rm -e "GOOS=$($buildTarget.OS)" -e "GOARCH=$($buildTarget.Arch)" -v "${projectRoot}:/src" -w /src -v yudesk-gomod:/go/pkg/mod -v yudesk-gocache:/root/.cache/go-build $goImage sh -lc "/usr/local/go/bin/go build -buildvcs=false -trimpath -ldflags='$linkerFlags' -o '$containerOutput' './cmd/$component'"
                 if ($LASTEXITCODE -ne 0) { throw "build failed: $component" }
             }
         }
+        $coreName = if ($buildTarget.OS -eq 'windows') { 'yudesk.exe' } else { 'yudesk' }
+        $corePath = Join-Path $outputDir $coreName
+        $coreHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $corePath).Hash.ToLowerInvariant()
         if ($buildTarget.OS -eq 'windows') {
             # The public Windows download is a real one-window installer. Keep
             # the application payload separate while building, then append it
@@ -90,6 +99,14 @@ try {
             }
             Remove-Item -LiteralPath $clientOutput, $setupStub -Force
         }
+        $artifactPath = Join-Path $outputDir $coreName
+        $buildRecords += [ordered]@{
+            os = $buildTarget.OS
+            arch = $buildTarget.Arch
+            revision = $buildRevision
+            coreSha256 = $coreHash
+            artifactSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $artifactPath).Hash.ToLowerInvariant()
+        }
     }
     if ($Target -eq 'all' -or $Target -eq 'darwin') {
         $serverOutputDir = Join-Path $projectRoot 'dist/server'
@@ -99,13 +116,13 @@ try {
             $previousGOOS, $previousGOARCH = $env:GOOS, $env:GOARCH
             $env:GOOS, $env:GOARCH = 'darwin', 'arm64'
             try {
-                & go build -trimpath -ldflags '-s -w' -o $serverOutput './cmd/yudesk-relay'
+                & go build -buildvcs=false -trimpath -ldflags "-s -w $commitLinkerFlag" -o $serverOutput './cmd/yudesk-relay'
                 if ($LASTEXITCODE -ne 0) { throw 'server build failed' }
             } finally {
                 $env:GOOS, $env:GOARCH = $previousGOOS, $previousGOARCH
             }
         } else {
-            & docker run --rm -e GOOS=darwin -e GOARCH=arm64 -v "${projectRoot}:/src" -w /src -v yudesk-gomod:/go/pkg/mod -v yudesk-gocache:/root/.cache/go-build $goImage sh -lc "/usr/local/go/bin/go build -trimpath -ldflags='-s -w' -o '/src/dist/server/yudesk-relay' './cmd/yudesk-relay'"
+            & docker run --rm -e GOOS=darwin -e GOARCH=arm64 -v "${projectRoot}:/src" -w /src -v yudesk-gomod:/go/pkg/mod -v yudesk-gocache:/root/.cache/go-build $goImage sh -lc "/usr/local/go/bin/go build -buildvcs=false -trimpath -ldflags='-s -w $commitLinkerFlag' -o '/src/dist/server/yudesk-relay' './cmd/yudesk-relay'"
             if ($LASTEXITCODE -ne 0) { throw 'server build failed' }
         }
     }
@@ -131,6 +148,8 @@ try {
         }
     $checksumPath = Join-Path $projectRoot 'dist/SHA256SUMS.txt'
     [System.IO.File]::WriteAllText($checksumPath, (($hashes -join "`n") + "`n"), [System.Text.Encoding]::ASCII)
+    $buildManifest = [ordered]@{ version = '2.0.0'; revision = $buildRevision; targets = $buildRecords }
+    [System.IO.File]::WriteAllText((Join-Path $projectRoot 'dist/desktop-core-builds.json'), (($buildManifest | ConvertTo-Json -Depth 5 -Compress) + "`n"), [System.Text.UTF8Encoding]::new($false))
     Write-Host "Build complete: $(Join-Path $projectRoot 'dist')"
 } finally {
     $env:GOTOOLCHAIN = $previousGoToolchain

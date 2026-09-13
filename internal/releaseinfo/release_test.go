@@ -28,3 +28,18 @@ func TestPublishedDateIsExplicitAndBeijing(t *testing.T) {
 		t.Fatal("versioned filename")
 	}
 }
+
+func TestBuildID(t *testing.T) {
+	previous := BuildCommit
+	t.Cleanup(func() { BuildCommit = previous })
+	BuildCommit = "c591d75d98f44b49b4695a67c44509339883debb"
+	if got := BuildID(); got != "c591d75d98f4" {
+		t.Fatalf("BuildID() = %q", got)
+	}
+	for _, invalid := range []string{"", "c591d75", "C591D75D98F44B49B4695A67C44509339883DEBB", "z591d75d98f44b49b4695a67c44509339883debb"} {
+		BuildCommit = invalid
+		if got := BuildID(); got != "development" {
+			t.Fatalf("BuildID() accepted %q as %q", invalid, got)
+		}
+	}
+}
