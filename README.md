@@ -1,6 +1,6 @@
 # YuDesk 2.0.0
 
-2026-09-13 **冷启动稳定批次 `cold-start-20260913.11` 已部署**：Windows 被任务管理器强制结束后再次打开会使用全新的专用渲染配置，关闭 Chromium 崩溃恢复提示，并在页面与样式真正可绘制后才显示无标题栏窗口，避免启动时闪出旧窗口、白框或第二个界面。桌面与官网联系方式统一为“遇到问题联系 17739798184”。Android 当前版本为 **2.0.0-preview.17 / 2000017**。详情见 [本次发布说明](docs/RELEASE_NOTES_20260913.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
+2026-09-13 **会议扩容与全屏共享批次 `meeting-scale-share-20260913.12` 已部署**：会议移除 8 人应用层硬限制，桌面全屏始终保留退出入口，全屏发起共享时会可靠调起系统选择器并在授权或取消后恢复全屏；Android 多成员视频网格支持自适应滚动。Android 当前版本为 **2.0.0-preview.18 / 2000018**。详情见 [本次发布说明](docs/RELEASE_NOTES_20260913.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
 
 2026-09-12 **外网自适应延迟与 Windows 重启稳定批次 `low-latency-restart-20260912.9` 已部署**：远程画面按最低 ACK RTT 动态控制在途帧数，输入后的快速采集延长为“100 ms 高频 + 350 ms 尾段”，会议桌面与 Android 按连接人数、真实链路 RTT 和可用上行带宽动态分配摄像头/共享屏幕码率。Windows 再次打开或渲染器恢复时会在原生窗口完成嵌入和首帧合成后再显示，消除裸 Chromium 窗口闪现。Android 当前版本为 **2.0.0-preview.15 / 2000015**。详情见 [本次发布说明](docs/RELEASE_NOTES_20260912.md)、[低延迟设计与验收](docs/LOW_LATENCY.md)、[Android 说明](docs/ANDROID.md) 和 [发布状态](docs/RELEASE_STATUS.md)。
 
@@ -14,19 +14,31 @@
 
 2026-09-09 **12:44（北京时间）窗口拖动修复批次 `drag-20260909.1` 已部署**：主界面、远程页和连接过渡页使用可拖动顶部区域，Windows 原生输入与 Linux 连续拖动回归通过；macOS 同步修复事件桥并更新双架构安装包，真机拖动尚待验证。更新前请完全退出旧程序，再安装新包。详情见 [拖动修复与验证边界](docs/WINDOW_DRAG_20260909.md)。Android 保持 preview.5，未因桌面拖动改动重新发布移动端代码。
 
-本版提供只填设备码的 **60 秒连接审批**、Windows 托盘及紧凑窗口、官网产品介绍和脱敏功能截图。2026-09-13 冷启动稳定修复已随五个平台安装包部署；下载校验与验证范围见 [发布状态](docs/RELEASE_STATUS.md)、[跨平台集成](docs/ALL_PLATFORM_RELEASE_20260909.md)。Android 双向端为 **preview.17 预览版**，构建和真机验收边界见 [Android 说明](docs/ANDROID.md)；iOS 暂停。
+本版提供只填设备码的 **60 秒连接审批**、Windows 托盘及紧凑窗口、官网产品介绍和脱敏功能截图。2026-09-13 会议扩容、全屏共享与冷启动稳定修复已随五个平台安装包部署；下载校验与验证范围见 [发布状态](docs/RELEASE_STATUS.md)、[跨平台集成](docs/ALL_PLATFORM_RELEASE_20260909.md)。Android 双向端为 **preview.18 预览版**，构建和真机验收边界见 [Android 说明](docs/ANDROID.md)；iOS 暂停。
 
 当前界面与声音说明：[紧凑窗口及关闭行为](docs/WINDOW_LIFECYCLE.md)、[按需系统声音及平台限制](docs/AUDIO.md)。设备授权在“设置”内默认折叠；不提供隐私屏或虚拟屏。
 
 最新响应优化与实测：[2026-09-09 桌面基线](docs/DESKTOP_INSTALLED_LATENCY_20260909.md)、[Android 专项](docs/ANDROID_LATENCY_20260909.md)。排队修复不等于物理 RTT 降低，不承诺零延迟；部署版本和校验值见 [发布状态](docs/RELEASE_STATUS.md)。
 
-继续包含 2026-09-08 网络更新：[P2P 优先、打洞与中转回退](docs/P2P_20260908.md)、[传输排队优化](docs/RTT_20260908.md)。官网桌面版为 2.0.0，Android 为 preview.17；UDP 8233 已开放并验证。远程桌面在 PIN 或审批认证后优先 UDP 直连，失败沿用原中转；会议媒体采用 WebRTC P2P，信令复用已验证 TLS 连接。服务器授权管控继续有效。远程桌面中途直连丢失需要重新连接，不宣称无缝切换。
+继续包含 2026-09-08 网络更新：[P2P 优先、打洞与中转回退](docs/P2P_20260908.md)、[传输排队优化](docs/RTT_20260908.md)。官网桌面版为 2.0.0，Android 为 preview.18；UDP 8233 已开放并验证。远程桌面在 PIN 或审批认证后优先 UDP 直连，失败沿用原中转；会议媒体采用 WebRTC P2P，信令复用已验证 TLS 连接。服务器授权管控继续有效。远程桌面中途直连丢失需要重新连接，不宣称无缝切换。
 
 本轮健壮性、后台北京时间/心跳修复及界面备案标识：[检查记录与已知限制](docs/ROBUSTNESS_20260908.md)。
 
 YuDesk 是 Go 实现的跨平台远程桌面软件。现在控制端与被控端合并为一个程序 **YuDesk**：同一个窗口既可接收远程连接，也可控制另一台电脑，无需普通用户账号或更新工具。
 
 [官网与下载](http://www.yucg.cn:8235/) · [管理员后台](http://www.yucg.cn:8235/admin)
+
+## 界面截图
+
+以下截图使用演示设备码和演示设备名称，不包含真实用户信息。
+
+| 统一远程控制首页 | 60 秒连接审批 |
+| --- | --- |
+| ![YuDesk 统一远程控制首页](cmd/yudesk-relay/site/desktop-home.png) | ![YuDesk 远程连接审批](cmd/yudesk-relay/site/desktop-approval.png) |
+
+### 设备列表
+
+![YuDesk 设备列表](cmd/yudesk-relay/site/desktop-devices.png)
 
 ## 用户使用方法
 
