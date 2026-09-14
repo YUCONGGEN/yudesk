@@ -138,14 +138,22 @@ try {
             Remove-Item -LiteralPath $legacyPath -Force
         }
     }
-    $hashes = Get-ChildItem -LiteralPath $distRoot -Recurse -File |
-        Where-Object { $_.Directory.Name -in @('windows-amd64', 'linux-amd64', 'darwin-amd64', 'darwin-arm64') -and $_.BaseName -in $components } |
-        Sort-Object FullName |
-        ForEach-Object {
-            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
-            $relative = $_.FullName.Substring($distRoot.Length + 1).Replace('\', '/')
-            "$hash  $relative"
+    # Hash only the artifacts produced for this invocation. A recursive scan
+    # can accidentally publish files from old deployment staging directories
+    # whose final folder happens to be named windows-amd64 or darwin-arm64.
+    $hashes = foreach ($buildTarget in $targets) {
+        $suffix = if ($buildTarget.OS -eq 'windows') { '.exe' } else { '' }
+        foreach ($component in $components) {
+            $relative = "$($buildTarget.OS)-$($buildTarget.Arch)/$component$suffix"
+            $publishedArtifact = Join-Path $distRoot $relative
+            if (-not (Test-Path -LiteralPath $publishedArtifact -PathType Leaf)) {
+                throw "missing release artifact: $relative"
+            }
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $publishedArtifact).Hash.ToLowerInvariant()
+            "$hash  $($relative.Replace('\', '/'))"
         }
+    }
+    $hashes = $hashes | Sort-Object
     $checksumPath = Join-Path $projectRoot 'dist/SHA256SUMS.txt'
     [System.IO.File]::WriteAllText($checksumPath, (($hashes -join "`n") + "`n"), [System.Text.Encoding]::ASCII)
     $buildManifest = [ordered]@{ version = '2.0.0'; revision = $buildRevision; targets = $buildRecords }

@@ -16,6 +16,14 @@ func TestDesktopReleaseCarriesOneSourceRevision(t *testing.T) {
 			t.Errorf("desktop build is missing provenance guard %q", expected)
 		}
 	}
+	if strings.Contains(string(build), `Get-ChildItem -LiteralPath $distRoot -Recurse`) {
+		t.Fatal("desktop checksums recursively include historical staging artifacts")
+	}
+	for _, expected := range []string{"publishedArtifact", "missing release artifact"} {
+		if !strings.Contains(string(build), expected) {
+			t.Errorf("desktop checksum generation is missing fixed artifact guard %q", expected)
+		}
+	}
 	publish, err := os.ReadFile("package-release.ps1")
 	if err != nil {
 		t.Fatal(err)
