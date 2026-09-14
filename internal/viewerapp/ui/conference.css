@@ -46,6 +46,16 @@
 .conference-grid.conference-grid-focused .conference-tile.conference-focused{width:100%;height:100%;display:flex;border:0;border-radius:0;box-shadow:none;cursor:zoom-out}
 .conference-grid.conference-grid-focused .conference-tile.conference-focused video{object-fit:contain;background:#0f151d}
 .conference-grid.conference-grid-focused .conference-tile-name{left:14px;bottom:14px}
+.conference-share-fullscreen{position:absolute;right:10px;bottom:10px;z-index:3;min-height:31px;display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid rgba(217,228,240,.86);border-radius:8px;background:rgba(255,255,255,.94);color:#286da9;font-size:13px;line-height:1;box-shadow:0 5px 18px rgba(12,43,75,.16);backdrop-filter:blur(10px);transition:background .12s ease,border-color .12s ease,color .12s ease,transform .12s ease}
+.conference-share-fullscreen[hidden]{display:none}
+.conference-share-fullscreen:hover{border-color:#9bcaf4;background:#fff;color:#087ff2;transform:translateY(-1px)}
+.conference-share-fullscreen:focus-visible{outline:2px solid #087ff2;outline-offset:2px}
+.conference-share-fullscreen:disabled{opacity:.7;cursor:wait;transform:none}
+.conference-share-fullscreen small{font-size:10px;white-space:nowrap}
+.conference-grid.conference-grid-focused .conference-share-fullscreen{position:fixed;right:22px;bottom:90px;border-color:rgba(255,255,255,.24);background:rgba(20,30,42,.82);color:#fff;box-shadow:0 8px 28px rgba(0,0,0,.28)}
+.conference-grid.conference-grid-focused .conference-share-fullscreen:hover{border-color:rgba(255,255,255,.42);background:rgba(28,42,58,.94)}
+.conference-fullscreen.conference-share-viewing .conference-head,.conference-fullscreen.conference-share-viewing .conference-toolbar{display:none}
+.conference-fullscreen.conference-share-viewing .conference-grid.conference-grid-focused .conference-share-fullscreen{bottom:22px}
 .conference-members{width:240px;flex:0 0 240px;overflow:auto;border-left:1px solid #e8ebef;background:#fff}
 .conference-members-head{height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid #e8edf2;color:#2b333e;font-size:13px}
 .conference-members-head span{color:#8995a3;font-size:10px}

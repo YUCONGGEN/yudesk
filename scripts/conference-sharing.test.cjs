@@ -203,3 +203,41 @@ test('share control follows host ownership and focused view switches sharers',as
     assert.deepEqual(await f.page.evaluate(()=>window.__testRejections),[]);
   }finally{await f.close();}
 });
+
+test('shared screen has an explicit full-screen viewer and returns to the meeting',async()=>{
+  const f=await fixture();
+  try{
+    await f.page.evaluate(()=>{
+      const state={id:'presenter',name:'演示者',joinedAt:Date.now(),microphone:true,camera:false,screen:true,recording:false};
+      conference.states.set(state.id,state);
+      ensureConferenceTile(state.id,state.name,false,new MediaStream());
+      updateConferenceTile(state.id);
+    });
+    const tile=f.page.locator('.conference-tile[data-id="presenter"]');
+    const viewer=tile.locator('.conference-share-fullscreen');
+    assert.equal(await viewer.isVisible(),true);
+    assert.equal(await viewer.locator('small').textContent(),'全屏查看');
+    assert.match(await viewer.getAttribute('aria-label'),/全屏查看 演示者 的共享屏幕/);
+
+    await viewer.click();
+    await f.page.waitForFunction(()=>conference.focusedID==='presenter'&&conference.fullscreenMode==='native');
+    assert.equal(await f.page.locator('#conferenceGrid').getAttribute('class'),'conference-grid conference-grid-focused');
+    assert.equal(await tile.getAttribute('class'),'conference-tile shareable conference-focused');
+    assert.equal(await viewer.locator('small').textContent(),'退出全屏');
+    assert.deepEqual(await f.page.evaluate(()=>[getComputedStyle(document.querySelector('.conference-head')).display,getComputedStyle(document.querySelector('.conference-toolbar')).display]),['none','none']);
+
+    await viewer.click();
+    await f.page.waitForFunction(()=>!conference.focusedID&&!conference.fullscreenMode);
+    assert.equal(await f.page.locator('#conferenceGrid').getAttribute('class'),'conference-grid');
+    assert.equal(await viewer.locator('small').textContent(),'全屏查看');
+    assert.deepEqual(await f.page.evaluate(()=>[getComputedStyle(document.querySelector('.conference-head')).display,getComputedStyle(document.querySelector('.conference-toolbar')).display]),['flex','flex']);
+
+    await tile.dblclick();
+    await f.page.waitForFunction(()=>conference.focusedID==='presenter'&&conference.fullscreenMode==='native');
+    await f.page.keyboard.press('Escape');
+    await f.page.waitForFunction(()=>!conference.focusedID&&!conference.fullscreenMode);
+    assert.deepEqual(f.errors,[]);
+    assert.deepEqual(f.dialogs,[]);
+    assert.deepEqual(await f.page.evaluate(()=>window.__testRejections),[]);
+  }finally{await f.close();}
+});

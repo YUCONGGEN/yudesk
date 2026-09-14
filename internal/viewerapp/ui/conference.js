@@ -139,6 +139,99 @@ updateConferenceSharing=function(){
   },300);
 };
 
+// A shared screen can already be focused by clicking its tile, but that
+// interaction is too easy to miss. Keep the whole tile and keyboard shortcuts
+// while also exposing an explicit, stateful full-screen control on the image.
+function syncConferenceShareFullscreenControls(active=conference){
+  if(!active)return;
+  const fullscreen=conferenceFullscreenActive(active);
+  document.body.classList.toggle('conference-share-viewing',!!active.focusedID);
+  for(const [id,tile] of active.tiles){
+    const button=tile.querySelector('.conference-share-fullscreen'),state=active.states.get(id);
+    if(!button)continue;
+    const sharing=!!state?.screen,focused=sharing&&active.focusedID===id;
+    button.hidden=!sharing;
+    button.disabled=!!active.fullscreenBusy;
+    button.classList.toggle('active',focused&&fullscreen);
+    const label=active.fullscreenBusy&&focused?'正在切换…':focused&&fullscreen?'退出全屏':'全屏查看';
+    button.querySelector('small').textContent=label;
+    button.setAttribute('aria-label',sharing?(label+' '+state.name+' 的共享屏幕'):'全屏查看共享屏幕');
+    button.title=label;
+  }
+}
+
+function installConferenceShareFullscreenControl(tile){
+  if(!tile||tile.querySelector('.conference-share-fullscreen'))return;
+  const button=document.createElement('button');
+  button.type='button';
+  button.className='conference-share-fullscreen';
+  button.hidden=true;
+  button.innerHTML='<span aria-hidden="true">⛶</span><small>全屏查看</small>';
+  button.onclick=event=>{
+    event.preventDefault();
+    event.stopPropagation();
+    const active=conference,id=tile.dataset.id,state=active?.states.get(id);
+    if(!active||!state?.screen||active.fullscreenBusy)return;
+    if(active.focusedID===id&&conferenceFullscreenActive(active))clearConferenceFocus(true);
+    else focusConferenceShare(id,true);
+  };
+  // Delay the single-click toggle very briefly so a double click cannot run
+  // two opposing single-click actions before entering full screen.
+  tile.onclick=event=>{
+    if(event.target?.closest?.('.conference-share-fullscreen'))return;
+    const active=conference,id=tile.dataset.id;
+    if(!active?.states.get(id)?.screen)return;
+    clearTimeout(tile.conferenceShareClickTimer);
+    tile.conferenceShareClickTimer=setTimeout(()=>{
+      if(conference?.focusedID===id)clearConferenceFocus(true);
+      else focusConferenceShare(id,true);
+    },180);
+  };
+  tile.ondblclick=event=>{
+    const active=conference,id=tile.dataset.id;
+    if(!active?.states.get(id)?.screen||active.fullscreenBusy)return;
+    event.preventDefault();
+    event.stopPropagation();
+    clearTimeout(tile.conferenceShareClickTimer);
+    focusConferenceShare(id,true);
+  };
+  tile.append(button);
+}
+
+const ensureConferenceTileFullscreenBase=ensureConferenceTile;
+ensureConferenceTile=function(...args){
+  const tile=ensureConferenceTileFullscreenBase(...args);
+  installConferenceShareFullscreenControl(tile);
+  syncConferenceShareFullscreenControls();
+  return tile;
+};
+
+const updateConferenceTileFullscreenBase=updateConferenceTile;
+updateConferenceTile=function(id){
+  updateConferenceTileFullscreenBase(id);
+  const tile=conference?.tiles.get(id==='local'?'local':id);
+  installConferenceShareFullscreenControl(tile);
+  syncConferenceShareFullscreenControls();
+};
+
+const focusConferenceShareFullscreenBase=focusConferenceShare;
+focusConferenceShare=function(id,fullscreen){
+  focusConferenceShareFullscreenBase(id,fullscreen);
+  syncConferenceShareFullscreenControls();
+};
+
+const clearConferenceFocusFullscreenBase=clearConferenceFocus;
+clearConferenceFocus=function(exitFullscreen){
+  clearConferenceFocusFullscreenBase(exitFullscreen);
+  syncConferenceShareFullscreenControls();
+};
+
+const updateConferenceFullscreenButtonBase=updateConferenceFullscreenButton;
+updateConferenceFullscreenButton=function(){
+  updateConferenceFullscreenButtonBase();
+  syncConferenceShareFullscreenControls();
+};
+
 async function conferenceNegotiateChanged(active,changed){
   const failures=[];
   for(const id of changed){
@@ -317,5 +410,7 @@ cleanupConference=function(active){
   clearTimeout(active?.shareSwitchTimer);
   if(conferenceToast.dismissTimer)clearTimeout(conferenceToast.dismissTimer);
   conferenceToast.hidden=true;
-  return conferenceShareBaseCleanup(active);
+  const result=conferenceShareBaseCleanup(active);
+  document.body.classList.remove('conference-share-viewing');
+  return result;
 };
