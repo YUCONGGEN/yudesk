@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type MeetingInfo struct {
 	ID        string    `json:"id,omitempty"`
 	Code      string    `json:"code"`
+	Topic     string    `json:"topic,omitempty"`
 	Active    bool      `json:"active"`
 	ExpiresAt time.Time `json:"expiresAt,omitempty"`
 	Error     string    `json:"error,omitempty"`
@@ -31,20 +33,41 @@ func IsMeetingCode(value string) bool {
 	return true
 }
 
+func ValidMeetingTopic(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len([]rune(value)) > 64 {
+		return false
+	}
+	for _, char := range value {
+		if unicode.IsControl(char) {
+			return false
+		}
+	}
+	return true
+}
+
 func MeetingProof(deviceID, action string, nonce []byte) []byte {
 	return append([]byte("yudesk-meeting-v1:"+strings.ToUpper(deviceID)+":"+action+":"), nonce...)
 }
 
 func OpenMeeting(ctx context.Context, addr string, options DialOptions, deviceID string, key ed25519.PrivateKey) (MeetingInfo, error) {
-	return manageMeeting(ctx, addr, options, deviceID, "open", key)
+	return manageMeeting(ctx, addr, options, deviceID, "open", "", key)
+}
+
+func OpenMeetingWithTopic(ctx context.Context, addr string, options DialOptions, deviceID, topic string, key ed25519.PrivateKey) (MeetingInfo, error) {
+	topic = strings.TrimSpace(topic)
+	if !ValidMeetingTopic(topic) {
+		return MeetingInfo{}, errors.New("会议主题应为 1 到 64 个字符")
+	}
+	return manageMeeting(ctx, addr, options, deviceID, "open", topic, key)
 }
 
 func CloseMeeting(ctx context.Context, addr string, options DialOptions, deviceID string, key ed25519.PrivateKey) error {
-	_, err := manageMeeting(ctx, addr, options, deviceID, "close", key)
+	_, err := manageMeeting(ctx, addr, options, deviceID, "close", "", key)
 	return err
 }
 
-func manageMeeting(ctx context.Context, addr string, options DialOptions, deviceID, action string, key ed25519.PrivateKey) (MeetingInfo, error) {
+func manageMeeting(ctx context.Context, addr string, options DialOptions, deviceID, action, topic string, key ed25519.PrivateKey) (MeetingInfo, error) {
 	var result MeetingInfo
 	deviceID = strings.ToUpper(strings.TrimSpace(deviceID))
 	if len(deviceID) != 24 || strings.Trim(deviceID, "0123456789ABCDEF") != "" || len(key) != ed25519.PrivateKeySize || (action != "open" && action != "close") {
@@ -61,7 +84,7 @@ func manageMeeting(ctx context.Context, addr string, options DialOptions, device
 	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stop()
 	_ = c.SetDeadline(time.Now().Add(8 * time.Second))
-	hello, _ := json.Marshal(Hello{Role: "meeting", ID: deviceID, Action: action, PublicKey: key.Public().(ed25519.PublicKey)})
+	hello, _ := json.Marshal(Hello{Role: "meeting", ID: deviceID, Action: action, Topic: topic, PublicKey: key.Public().(ed25519.PublicKey)})
 	if _, err = fmt.Fprintf(c, "YU_RELAY/1 %s\n", hello); err != nil {
 		return result, err
 	}
@@ -101,7 +124,7 @@ func manageMeeting(ctx context.Context, addr string, options DialOptions, device
 	if message.Type != "meeting" || (message.Active && (!IsMeetingCode(message.Code) || !message.ActiveUntil.After(time.Now()))) {
 		return result, errors.New("服务器返回了无效会议状态")
 	}
-	return MeetingInfo{ID: deviceID, Code: message.Code, Active: message.Active, ExpiresAt: message.ActiveUntil}, nil
+	return MeetingInfo{ID: deviceID, Code: message.Code, Topic: message.Topic, Active: message.Active, ExpiresAt: message.ActiveUntil}, nil
 }
 
 func ResolveMeeting(ctx context.Context, addr string, options DialOptions, code string) (MeetingInfo, error) {
@@ -130,7 +153,7 @@ func ResolveMeeting(ctx context.Context, addr string, options DialOptions, code 
 	if !scanner.Scan() || json.Unmarshal(scanner.Bytes(), &result) != nil {
 		return MeetingInfo{}, errors.New("会议目录暂时不可用")
 	}
-	if result.Error != "" || !result.Active || result.Code != code || len(result.ID) != 24 || strings.Trim(result.ID, "0123456789ABCDEF") != "" || !result.ExpiresAt.After(time.Now()) {
+	if result.Error != "" || !result.Active || result.Code != code || len(result.ID) != 24 || strings.Trim(result.ID, "0123456789ABCDEF") != "" || !result.ExpiresAt.After(time.Now()) || (result.Topic != "" && !ValidMeetingTopic(result.Topic)) {
 		return MeetingInfo{}, errors.New("会议不存在、已结束或已过期")
 	}
 	return result, nil

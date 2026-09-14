@@ -30,7 +30,7 @@ func TestTemporaryMeetingInvitationLifecycle(t *testing.T) {
 	d := &Device{a: a, identityDir: directory}
 	var closed atomic.Int32
 	d.meetingOpen = func(context.Context) (relay.MeetingInfo, error) {
-		return relay.MeetingInfo{ID: a.id, Code: "654321987", Active: true, ExpiresAt: time.Now().Add(time.Hour)}, nil
+		return relay.MeetingInfo{ID: a.id, Code: "654321987", Topic: "项目周会", Active: true, ExpiresAt: time.Now().Add(time.Hour)}, nil
 	}
 	d.meetingEnd = func(context.Context) error { closed.Add(1); return nil }
 	d.receiving.Store(true)
@@ -40,7 +40,7 @@ func TestTemporaryMeetingInvitationLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := d.Status()
-	if invitation != "654321987" || !status.Meeting || status.MeetingCode != invitation || !status.MeetingUntil.After(time.Now()) {
+	if invitation != "654321987" || !status.Meeting || status.MeetingCode != invitation || status.MeetingTopic != "项目周会" || !status.MeetingUntil.After(time.Now()) {
 		t.Fatalf("invalid meeting state: invitation=%q status=%+v", invitation, status)
 	}
 	if invitation == deviceIdentity.PIN {

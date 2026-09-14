@@ -1,0 +1,160 @@
+/* YuDesk 2.0 visual system. Airy blue-violet glass with compact controls. */
+:root{
+  --yu-blue:#236cf5;
+  --yu-blue-strong:#1558e8;
+  --yu-ink:#111827;
+  --yu-muted:#7b889d;
+  --yu-glass-line:rgba(255,255,255,.72);
+  --yu-shadow:0 18px 48px rgba(44,64,120,.12),0 2px 8px rgba(44,64,120,.05);
+}
+
+/* Main desktop shell. The data attribute is present only on the dashboard. */
+body[data-install-prompt]{
+  color:var(--yu-ink);
+  background:
+    radial-gradient(circle at 10% 16%,rgba(255,255,255,.94) 0 1px,transparent 1.6px) 0 0/39px 39px,
+    radial-gradient(circle at 78% 12%,rgba(255,255,255,.7) 0 1px,transparent 1.5px) 0 0/57px 57px,
+    radial-gradient(circle at 17% 8%,rgba(128,180,255,.45),transparent 32%),
+    radial-gradient(circle at 88% 84%,rgba(163,118,255,.28),transparent 36%),
+    linear-gradient(135deg,#edf6ff 0%,#dfe8ff 47%,#e9dcff 100%);
+}
+body[data-install-prompt]::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  background:linear-gradient(118deg,transparent 28%,rgba(255,255,255,.34) 48%,transparent 68%);
+  opacity:.58;
+}
+body[data-install-prompt]>.sidebar,
+body[data-install-prompt]>main,
+body[data-install-prompt]>.app-footer{position:relative;z-index:1}
+body[data-install-prompt]>.sidebar{
+  background:rgba(247,250,255,.71);
+  border-right:1px solid rgba(255,255,255,.85);
+  box-shadow:8px 0 28px rgba(65,81,132,.055);
+  backdrop-filter:blur(22px) saturate(1.12);
+}
+body[data-install-prompt] .brand{color:#171b27;letter-spacing:-.75px}
+body[data-install-prompt] .brand-icon{border-radius:10px;box-shadow:0 8px 19px rgba(35,108,245,.24)}
+body[data-install-prompt] .profile{margin:14px 0 17px;padding:11px 9px;border:1px solid rgba(255,255,255,.8);border-radius:14px;background:rgba(255,255,255,.5)}
+body[data-install-prompt] .avatar{background:rgba(223,234,255,.9);color:#4679ce}
+body[data-install-prompt] nav{gap:5px}
+body[data-install-prompt] nav button{border:1px solid transparent;border-radius:11px;color:#526078;transition:background .15s ease,color .15s ease,transform .15s ease,box-shadow .15s ease}
+body[data-install-prompt] nav button:hover{background:rgba(255,255,255,.68);color:#1b2a41;filter:none}
+body[data-install-prompt] nav button.selected{border-color:rgba(255,255,255,.62);background:#111318;color:#fff;box-shadow:0 9px 22px rgba(22,27,38,.15)}
+body[data-install-prompt] nav button:active{transform:translateY(1px)}
+body[data-install-prompt] .count{background:rgba(255,255,255,.17);color:inherit}
+body[data-install-prompt] .sidebar-footer{border-color:rgba(115,137,183,.14);color:#64728a}
+body[data-install-prompt] .topbar{background:rgba(255,255,255,.36);border-color:rgba(255,255,255,.68);backdrop-filter:blur(18px)}
+body[data-install-prompt] .top-actions .quiet{border-radius:999px;color:#637087}
+body[data-install-prompt] .top-actions .quiet:hover{background:rgba(255,255,255,.76);color:#1d293b;filter:none}
+body[data-install-prompt] .top-actions .window-close:hover{background:#ffedf0;color:#c94152}
+body[data-install-prompt] .content{position:relative}
+body[data-install-prompt] .pane{
+  border:1px solid var(--yu-glass-line);
+  border-radius:22px;
+  padding:18px 20px;
+  background:linear-gradient(145deg,rgba(255,255,255,.78),rgba(251,250,255,.62));
+  box-shadow:var(--yu-shadow);
+  backdrop-filter:blur(24px) saturate(1.14);
+}
+body[data-install-prompt] .pane[hidden]{display:none!important}
+body[data-install-prompt] h1,body[data-install-prompt] h2{color:#172036;letter-spacing:-.12px}
+body[data-install-prompt] .subtle{color:#8490a4}
+body[data-install-prompt] .badge{border:1px solid rgba(255,255,255,.75);box-shadow:0 3px 10px rgba(61,80,130,.05)}
+body[data-install-prompt] .badge.good{background:rgba(228,251,240,.86);color:#21865d}
+body[data-install-prompt] .identity-card{
+  border:1px solid rgba(255,255,255,.84);
+  border-radius:16px;
+  background:rgba(255,255,255,.57);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.82),0 9px 26px rgba(48,71,132,.06);
+}
+body[data-install-prompt] .identity-half+.identity-half{border-color:rgba(113,136,184,.15)}
+body[data-install-prompt] #meetingTopic{font-size:13px;letter-spacing:0}
+body[data-install-prompt] .identity-value strong{color:#101522;font-weight:610;letter-spacing:1.25px}
+body[data-install-prompt] .icon-button{border-radius:8px;color:#8491a6}
+body[data-install-prompt] .icon-button:hover{background:rgba(226,235,252,.82);color:var(--yu-blue);filter:none}
+body[data-install-prompt] input,
+body[data-install-prompt] select,
+body[data-install-prompt] .field{border-color:rgba(157,173,205,.35);background:rgba(255,255,255,.7);box-shadow:inset 0 1px 0 rgba(255,255,255,.75)}
+body[data-install-prompt] input:focus,
+body[data-install-prompt] select:focus,
+body[data-install-prompt] .field:focus-within{border-color:rgba(35,108,245,.58);box-shadow:0 0 0 4px rgba(35,108,245,.10),inset 0 1px 0 #fff}
+body[data-install-prompt] button{transition:transform .13s ease,box-shadow .13s ease,background .13s ease,color .13s ease,border-color .13s ease}
+body[data-install-prompt] button:active:not(:disabled){transform:translateY(1px)}
+body[data-install-prompt] .primary{border-color:#111318;border-radius:999px;background:#111318;color:#fff;box-shadow:0 8px 20px rgba(17,19,24,.15)}
+body[data-install-prompt] .primary:hover{background:#262932;border-color:#262932;filter:none;box-shadow:0 10px 24px rgba(17,19,24,.19)}
+body[data-install-prompt] .secondary{border-color:rgba(135,153,187,.24);background:rgba(255,255,255,.62);color:#5a6880}
+body[data-install-prompt] .secondary:hover{border-color:rgba(35,108,245,.25);background:rgba(255,255,255,.9);color:var(--yu-blue);filter:none}
+body[data-install-prompt] .text-button{color:var(--yu-blue-strong)}
+body[data-install-prompt] .switch input:checked+span{background:linear-gradient(135deg,#2c8bff,#1759e7);box-shadow:0 5px 13px rgba(35,108,245,.24)}
+body[data-install-prompt] .recent-card,
+body[data-install-prompt] .device-table,
+body[data-install-prompt] .settings-card,
+body[data-install-prompt] .meeting-card,
+body[data-install-prompt] .meeting-security{border-color:rgba(255,255,255,.78)!important;background:rgba(255,255,255,.58)!important;box-shadow:0 8px 24px rgba(45,66,125,.06)!important}
+body[data-install-prompt] .meeting-topic-input input{font-size:13px;letter-spacing:0}
+body[data-install-prompt] .recent-card:hover{border-color:rgba(35,108,245,.25)!important;background:rgba(255,255,255,.9)!important;box-shadow:0 12px 26px rgba(44,80,150,.11)!important;filter:none}
+body[data-install-prompt] .table-heading{background:rgba(238,243,253,.62)}
+body[data-install-prompt] .device-row,body[data-install-prompt] .setting-row{border-color:rgba(130,151,192,.13)}
+body[data-install-prompt] .path-box{border-color:rgba(135,153,187,.22);background:rgba(241,246,255,.62)}
+body[data-install-prompt] .notice{border:1px solid rgba(255,255,255,.9);border-radius:999px;background:rgba(20,27,40,.90);color:#fff;box-shadow:0 14px 38px rgba(25,35,58,.22);backdrop-filter:blur(14px)}
+body[data-install-prompt]>.app-footer{border-color:rgba(255,255,255,.72);background:rgba(250,252,255,.55);backdrop-filter:blur(18px)}
+
+/* Dashboard form dialogs */
+body[data-install-prompt] .app-form-dialog,
+body[data-install-prompt] .conference-member-info{border:1px solid rgba(255,255,255,.84);border-radius:22px;background:linear-gradient(145deg,rgba(255,255,255,.94),rgba(242,239,255,.90));box-shadow:0 32px 100px rgba(30,42,83,.28),inset 0 1px 0 #fff;backdrop-filter:blur(26px) saturate(1.16)}
+body[data-install-prompt] .app-form-dialog::before,
+body[data-install-prompt] .conference-info-accent{height:5px;background:linear-gradient(90deg,#2b7dff,#866bff,#bc7eff)}
+body[data-install-prompt] .app-form-dialog::backdrop,
+body[data-install-prompt] .conference-member-info::backdrop{background:rgba(30,38,68,.38);backdrop-filter:blur(9px)}
+body[data-install-prompt] .dialog-mark,
+body[data-install-prompt] .conference-info-mark{border-radius:13px;background:linear-gradient(145deg,#328cff,#5d5cf1);box-shadow:0 10px 24px rgba(54,91,229,.25)}
+body[data-install-prompt] .dialog-actions{border-color:rgba(116,137,181,.15)}
+body[data-install-prompt] .dialog-error{border-color:rgba(231,91,111,.2);background:rgba(255,238,242,.75)}
+
+/* Remote desktop shell: glass chrome, uncompromised dark canvas. */
+body[data-control][data-audio]{background:linear-gradient(135deg,#e9f2ff,#e8e0ff);color:var(--yu-ink)}
+body[data-control][data-audio]>header{border-color:rgba(255,255,255,.72);background:rgba(255,255,255,.80);box-shadow:0 7px 26px rgba(42,62,118,.08);backdrop-filter:blur(20px)}
+body[data-control][data-audio] .brand{color:#171b27}
+body[data-control][data-audio] .status{border:1px solid rgba(57,185,119,.14);border-radius:999px;background:rgba(229,251,239,.88)}
+body[data-control][data-audio] .network{border:0;background:transparent;color:#47627f}
+body[data-control][data-audio] .toolbar button{border-radius:999px}
+body[data-control][data-audio] .toolbar button:not(.danger){border-color:rgba(136,154,189,.25);background:rgba(255,255,255,.75);color:#53627a}
+body[data-control][data-audio] .toolbar button:not(.danger):hover{border-color:rgba(35,108,245,.28);color:var(--yu-blue);filter:none}
+body[data-control][data-audio] .toolbar .danger{border-color:#15171d;background:#15171d;color:#fff;box-shadow:0 7px 18px rgba(21,23,29,.14)}
+body[data-control][data-audio] .desktop{border-color:rgba(255,255,255,.72);border-radius:14px;box-shadow:var(--yu-shadow);background:#0d121c}
+body[data-control][data-audio] .panel,
+body[data-control][data-audio] .connection-panel{border-color:rgba(255,255,255,.8);border-radius:14px;background:rgba(255,255,255,.82);box-shadow:var(--yu-shadow);backdrop-filter:blur(20px)}
+body[data-control][data-audio] .panel-tabs button{border-radius:999px}
+body[data-control][data-audio] .panel-tabs button.selected{background:#15171d;color:#fff}
+body[data-control][data-audio] input:not([type=checkbox]):not([type=range]),
+body[data-control][data-audio] select,
+body[data-control][data-audio] textarea{border-color:rgba(140,158,191,.3);border-radius:9px;background:rgba(255,255,255,.73)}
+body[data-control][data-audio] button:not(.secondary):not(.danger):not(.icon-control){border-color:#15171d;border-radius:999px;background:#15171d;color:#fff}
+body[data-control][data-audio]>.app-footer{border-color:rgba(255,255,255,.72);background:rgba(255,255,255,.65);backdrop-filter:blur(16px)}
+
+/* All application-owned dialogs use one polished visual language. */
+body[data-control][data-audio] .session-dialog,
+.yu-dialog{border:1px solid rgba(255,255,255,.86)!important;border-radius:22px!important;background:linear-gradient(145deg,rgba(255,255,255,.97),rgba(241,239,255,.94))!important;box-shadow:0 34px 110px rgba(24,35,72,.31),inset 0 1px 0 #fff!important;backdrop-filter:blur(28px) saturate(1.15)}
+body[data-control][data-audio] .session-dialog::backdrop,
+.yu-dialog::backdrop{background:rgba(25,33,58,.42)!important;backdrop-filter:blur(10px)!important}
+body[data-control][data-audio] .session-dialog .dialog-accent,
+.yu-dialog::before{height:5px!important;background:linear-gradient(90deg,#2b7dff,#8269ff,#bd7cff)!important}
+body[data-control][data-audio] .session-dialog .dialog-icon img,
+.yu-dialog-mark{filter:drop-shadow(0 10px 18px rgba(40,101,239,.23))}
+body[data-control][data-audio] .session-dialog .dialog-actions,
+.yu-dialog-actions{border-color:rgba(115,137,183,.15)!important}
+body[data-control][data-audio] .session-dialog #confirmDisconnect,
+.yu-dialog button.primary{border-color:#15171d!important;border-radius:999px!important;background:#15171d!important;color:#fff!important;box-shadow:0 8px 20px rgba(21,23,29,.16)!important}
+.yu-dialog-danger::before{background:linear-gradient(90deg,#ef5c70,#ff997f)!important}
+.yu-dialog-danger button.primary{border-color:#d84959!important;background:#d84959!important}
+
+@media(max-width:680px){
+  body[data-install-prompt] .pane{border-radius:17px;padding:14px}
+  body[data-install-prompt] .profile{padding:9px 6px}
+}
+@media(prefers-reduced-motion:reduce){
+  body[data-install-prompt] button,body[data-install-prompt] nav button{transition:none}
+}

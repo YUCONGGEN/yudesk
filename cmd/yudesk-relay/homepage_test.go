@@ -50,6 +50,7 @@ func TestHomepageContentAndDownloads(t *testing.T) {
 		"v2.0.0", "2026-09-08 08:00", "（北京时间）", "Android 预览版",
 		`id="downloads"`, `id="about-title"`, `id="features"`, `id="how-it-works"`, `id="support"`,
 		`aria-label="服务器实时状态"`, `id="live-online">0`, `id="live-connected">0`, "每 30 秒自动更新",
+		`class="server-snow"`, `aria-hidden="true"><span></span><span></span><span></span>`,
 		`src="` + homepageAssetURL("homepage.js") + `"`,
 		`href="/guide"`, `href="/admin"`, `href="/SHA256SUMS.txt"`, "安装包 SHA-256 校验和",
 		`href="/THIRD_PARTY_NOTICES.txt"`, "第三方许可",
@@ -76,6 +77,15 @@ func TestHomepageContentAndDownloads(t *testing.T) {
 	for _, unwanted := range []string{".smoke/", "unified-session.png", "<script>", "cdn.", "fonts.googleapis", "#ZgotmplZ"} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("unexpected home content: %s", unwanted)
+		}
+	}
+}
+
+func TestHomepageThemeKeepsSnowDecorativeAndAccessible(t *testing.T) {
+	css := string(homepageAssets["homepage.css"].data)
+	for _, want := range []string{".server-snow", "pointer-events:none", "prefers-reduced-motion:reduce", "backdrop-filter:blur", "linear-gradient"} {
+		if !strings.Contains(css, want) {
+			t.Errorf("homepage theme missing %q", want)
 		}
 	}
 }

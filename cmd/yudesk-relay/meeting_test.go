@@ -62,15 +62,15 @@ func TestTemporaryMeetingDirectoryAuthenticatesOpensResolvesAndCloses(t *testing
 	options := relay.DialOptions{TLS: true, Fingerprint: fingerprint}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	room, err := relay.OpenMeeting(ctx, listener.Addr().String(), options, deviceID, privateKey)
+	room, err := relay.OpenMeetingWithTopic(ctx, listener.Addr().String(), options, deviceID, "每周产品例会", privateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !room.Active || !relay.IsMeetingCode(room.Code) || room.Code == deviceCode || !room.ExpiresAt.After(time.Now()) {
+	if !room.Active || room.Topic != "每周产品例会" || !relay.IsMeetingCode(room.Code) || room.Code == deviceCode || !room.ExpiresAt.After(time.Now()) {
 		t.Fatalf("invalid meeting room: %+v deviceCode=%s", room, deviceCode)
 	}
 	resolved, err := relay.ResolveMeeting(ctx, listener.Addr().String(), options, room.Code)
-	if err != nil || resolved.ID != deviceID || resolved.Code != room.Code {
+	if err != nil || resolved.ID != deviceID || resolved.Code != room.Code || resolved.Topic != room.Topic {
 		t.Fatalf("meeting resolution failed: %+v %v", resolved, err)
 	}
 	if err := relay.CloseMeeting(ctx, listener.Addr().String(), options, deviceID, privateKey); err != nil {

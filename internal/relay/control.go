@@ -18,6 +18,7 @@ type ControlMessage struct {
 	ActiveUntil        time.Time       `json:"activeUntil,omitempty"`
 	Code               string          `json:"code,omitempty"`
 	Message            string          `json:"message,omitempty"`
+	Topic              string          `json:"topic,omitempty"`
 	DeviceCode         string          `json:"deviceCode,omitempty"`
 	PIN                string          `json:"pin,omitempty"`
 	PortMaps           []PortMap       `json:"portMaps,omitempty"`

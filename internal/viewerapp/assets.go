@@ -50,6 +50,9 @@ var windowUI []byte
 //go:embed ui/window-ui.css
 var windowStyle []byte
 
+//go:embed ui/product-theme.css
+var productTheme []byte
+
 func serveBrandAsset(w http.ResponseWriter, r *http.Request) bool {
 	var data []byte
 	switch r.URL.Path {
@@ -57,7 +60,10 @@ func serveBrandAsset(w http.ResponseWriter, r *http.Request) bool {
 		data = []byte(compatJS)
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	case "/assets/window-ui.css":
-		data = windowStyle
+		data = append(append([]byte{}, windowStyle...), productTheme...)
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	case "/assets/product-theme.css":
+		data = productTheme
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	case "/assets/window-ui.js":
 		data = append([]byte(compatJS+"\n"), windowUI...)
@@ -83,14 +89,14 @@ func serveAppIcon(w http.ResponseWriter, r *http.Request) {
 }
 
 func registerViewerAssets(mux *http.ServeMux) {
-	for _, path := range []string{"/assets/compat.js", "/assets/footer.css", "/assets/beian.svg", "/assets/window-ui.js", "/assets/window-ui.css"} {
+	for _, path := range []string{"/assets/compat.js", "/assets/footer.css", "/assets/beian.svg", "/assets/window-ui.js", "/assets/window-ui.css", "/assets/product-theme.css"} {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) { serveBrandAsset(w, r) })
 	}
 	mux.HandleFunc("/assets/icon.svg", serveAppIcon)
 	mux.HandleFunc("/assets/session.css", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		_, _ = w.Write([]byte(sessionCSS))
+		_, _ = w.Write(append([]byte(sessionCSS+"\n"), productTheme...))
 	})
 	for path, source := range map[string]string{"/assets/input.js": inputJS, "/assets/session.js": sessionJS, "/assets/frames.js": framesJS, "/assets/files.js": filesJS, "/assets/audio.js": audioJS} {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {

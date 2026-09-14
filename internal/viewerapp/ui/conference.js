@@ -8,6 +8,63 @@ conferenceToast.setAttribute('aria-live','polite');
 conferenceToast.innerHTML='<span class="conference-toast-icon" aria-hidden="true"></span><span class="conference-toast-message"></span>';
 $('conferenceRoom').append(conferenceToast);
 
+// The host card mirrors the join card: topic + name, then media options and
+// one primary action. The server repeats the topic in every welcome message.
+const meetingTopicField=document.createElement('label');
+meetingTopicField.className='meeting-input meeting-topic-input';
+meetingTopicField.innerHTML='<span>会议主题</span><input id="meetingTopic" maxlength="64" autocomplete="off" placeholder="请输入会议主题" required>';
+$('meetingHostName').closest('.meeting-input').before(meetingTopicField);
+$('meetingTopic').value='';
+const meetingHostStatus=document.createElement('p');
+meetingHostStatus.id='meetingHostStatus';
+meetingHostStatus.className='presence';
+meetingHostStatus.textContent='填写主题和姓名即可创建会议';
+$('startMeeting').after(meetingHostStatus);
+const meetingTopics=new Map();
+function validMeetingTopic(value){return value.length>0&&[...value].length<=64&&!/[\u0000-\u001f\u007f]/.test(value);}
+
+const enterConferenceWithoutTopic=enterConference;
+enterConference=async function(code,requestedHost,name,stream){
+  let topic=requestedHost?(local?.meetingTopic||$('meetingTopic').value.trim()):(meetingTopics.get(code)||'');
+  if(!requestedHost&&!topic){
+    try{const info=await request('/api/local/meeting/resolve',undefined,{code});topic=String(info.topic||'').trim();}catch(_){}
+  }
+  if(topic)meetingTopics.set(code,topic);
+  const result=await enterConferenceWithoutTopic(code,requestedHost,name,stream);
+  if(conference&&conference.code===code){
+    conference.topic=topic;
+    $('conferenceTitle').textContent=topic||'YuDesk 会议';
+  }
+  return result;
+};
+
+$('startMeeting').onclick=async()=>{
+  if(meetingSubmitting)return;
+  const topic=$('meetingTopic').value.trim(),name=normalizeMeetingName($('meetingHostName').value);
+  if(!validMeetingTopic(topic)){notice('请输入 1 到 64 个字符的会议主题');$('meetingTopic').focus();return;}
+  if(!validMeetingName(name)){notice('请输入 1 到 32 个字符的姓名');$('meetingHostName').focus();return;}
+  meetingSubmitting=true;
+  const button=$('startMeeting');button.disabled=true;
+  let stream;
+  try{
+    stream=await prepareConferenceMedia($('meetingHostMic').checked,$('meetingHostCamera').checked);
+    await request('/api/local/meeting/start',{topic});
+    const value=await request('/api/local/status');
+    updateLocal(value);
+    meetingTopics.set(value.meetingCode,topic);
+    await enterConference(value.meetingCode,true,name,stream);
+    notice('会议已创建，你已作为主持人进入');
+  }catch(error){if(stream)for(const track of stream.getTracks())track.stop();notice(error.message);}
+  finally{meetingSubmitting=false;button.disabled=false;}
+};
+
+$('copyMeeting').onclick=()=>{
+  const code=$('copyMeeting').dataset.code;
+  if(!code)return;
+  const topic=local?.meetingTopic||meetingTopics.get(code)||$('meetingTopic').value.trim();
+  copy((topic?'会议主题：'+topic+'\n':'')+'YuDesk 会议号：'+formatMeeting(code)+'\n填写姓名和会议号即可直接加入','会议号');
+};
+
 function showConferenceToast(message,tone='info',active=conference){
   if(active&&conference!==active)return;
   clearTimeout(conferenceToast.dismissTimer);
@@ -234,6 +291,8 @@ $('conferenceShare').onclick=()=>{
 const conferenceShareBaseMessage=handleConferenceMessage;
 handleConferenceMessage=async function(message,active=conference){
   if(active&&message?.type==='welcome'){
+    const topic=String(message.topic||active.topic||'').trim();
+    if(topic){active.topic=topic;meetingTopics.set(active.code,topic);$('conferenceTitle').textContent=topic;}
     const sharing=(message.peers||[]).filter(peer=>peer.screen).sort((left,right)=>(right.joinedAt||0)-(left.joinedAt||0));
     active.activeSharerID=sharing[0]?.id||'';
   }else if(active&&message?.type==='state'){

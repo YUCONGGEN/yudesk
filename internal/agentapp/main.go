@@ -84,6 +84,7 @@ type agent struct {
 	managed                 bool
 	managementOnline        bool // protected by statusMu
 	meetingPIN              string
+	meetingTopic            string
 	meetingUntil            time.Time
 	meetingGeneration       uint64
 	meetingSession          bool

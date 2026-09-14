@@ -83,7 +83,10 @@ func TestRecycledCaptureBuffersDoNotOverwriteEncoderReference(t *testing.T) {
 			} else {
 				reused.Add(1)
 			}
-			n := byte(sequence.Add(1))
+			// Keep adjacent synthetic frames farther apart than JPEG quantization.
+			// With one-level increments, two valid successive frames can decode to
+			// the same 8-bit red value at quality 70 and falsely look recycled.
+			n := byte(min(sequence.Add(1)*16, 240))
 			for i := 0; i < len(img.Pix); i += 4 {
 				img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = n, 77, 123, 255
 			}

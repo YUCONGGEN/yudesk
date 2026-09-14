@@ -106,6 +106,11 @@ func TestControlHeartbeatsAdvanceAndPersistOnDisconnect(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), formatAdminTime(last)) || !strings.Contains(w.Body.String(), "北京时间（UTC+8）") {
 		t.Fatal("admin timestamp missing")
 	}
+	for _, want := range []string{`class="server-snow"`, "prefers-reduced-motion:reduce", "backdrop-filter:blur", "admin-snow"} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("admin visual theme missing %q", want)
+		}
+	}
 	// Reading the admin page cannot make an offline device appear seen now.
 	again, _ := s.ListLicensedDevices(10)
 	if !again[0].LastSeen.Equal(last) {

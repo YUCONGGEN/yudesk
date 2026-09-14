@@ -52,6 +52,7 @@ type ConferenceMessage struct {
 	From       string           `json:"from,omitempty"`
 	To         string           `json:"to,omitempty"`
 	Name       string           `json:"name,omitempty"`
+	Topic      string           `json:"topic,omitempty"`
 	JoinedAt   int64            `json:"joinedAt,omitempty"`
 	Host       string           `json:"host,omitempty"`
 	Peers      []ConferencePeer `json:"peers,omitempty"`

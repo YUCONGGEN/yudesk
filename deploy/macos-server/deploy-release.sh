@@ -1,5 +1,6 @@
 #!/bin/sh
-# Explicit, backed-up deployment on the configured YuDesk host. No router edits.
+# Explicit deployment on the configured YuDesk host. Runtime/business history
+# is reset on every successful release; server identity and admin access remain.
 set -eu
 umask 077
 root=/Users/yu/bin/yudesk
@@ -11,7 +12,7 @@ case "$archive_hash" in *[!0-9a-f]*) exit 2;; esac
 test "${#archive_hash}" = 64
 case "$expected_pid" in ''|*[!0-9]*) exit 2;; esac
 test "$(cd "$root" && pwd -P)" = "$root"
-for dir in bin data downloads releases staging backups run; do
+for dir in bin data downloads releases staging backups run logs; do
   test -d "$root/$dir" && test ! -L "$root/$dir"
 done
 test -z "$(find "$root/downloads" -type l -print)"
@@ -41,12 +42,12 @@ grep -q '^TURN_RELAY_MIN_PORT=' "$config_next"
 grep -q '^TURN_RELAY_MAX_PORT=' "$config_next"
 test ! -e "$release" && test ! -e "$backup"
 test "$(shasum -a 256 "$archive" | awk '{print $1}')" = "$archive_hash"
-files='windows-amd64/yudesk.exe linux-amd64/yudesk linux-amd64/yudesk.deb darwin-amd64/yudesk darwin-amd64/yudesk.pkg darwin-arm64/yudesk darwin-arm64/yudesk.pkg android/yudesk.apk SHA256SUMS.txt release.json THIRD_PARTY_NOTICES.txt'
+files='windows-amd64/yudesk.exe linux-amd64/yudesk linux-amd64/yudesk.deb linux-amd64/yudesk.provenance.json darwin-amd64/yudesk darwin-amd64/yudesk.pkg darwin-amd64/yudesk.provenance.json darwin-arm64/yudesk darwin-arm64/yudesk.pkg darwin-arm64/yudesk.provenance.json android/yudesk.apk desktop-core-builds.json SHA256SUMS.txt release.json THIRD_PARTY_NOTICES.txt'
 tar -tzf "$archive" | while IFS= read -r entry; do
   case "$entry" in
     server/yudesk-relay|RELEASE-SHA256SUMS.txt) ;;
-    downloads/windows-amd64/yudesk.exe|downloads/linux-amd64/yudesk|downloads/darwin-amd64/yudesk|downloads/darwin-arm64/yudesk|downloads/android/yudesk.apk|downloads/SHA256SUMS.txt|downloads/release.json|downloads/THIRD_PARTY_NOTICES.txt) ;;
-    downloads/linux-amd64/yudesk.deb|downloads/darwin-amd64/yudesk.pkg|downloads/darwin-arm64/yudesk.pkg) ;;
+    downloads/windows-amd64/yudesk.exe|downloads/linux-amd64/yudesk|downloads/darwin-amd64/yudesk|downloads/darwin-arm64/yudesk|downloads/android/yudesk.apk|downloads/desktop-core-builds.json|downloads/SHA256SUMS.txt|downloads/release.json|downloads/THIRD_PARTY_NOTICES.txt) ;;
+    downloads/linux-amd64/yudesk.deb|downloads/linux-amd64/yudesk.provenance.json|downloads/darwin-amd64/yudesk.pkg|downloads/darwin-amd64/yudesk.provenance.json|downloads/darwin-arm64/yudesk.pkg|downloads/darwin-arm64/yudesk.provenance.json) ;;
     *) echo "Unexpected archive entry: $entry" >&2; exit 1;;
   esac
 done
@@ -89,15 +90,18 @@ finish() {
       fi
     done
     "$root/start.sh"
-    echo "Deployment failed; old executable/downloads restored. Database was not replaced. Backup: $backup" >&2
+    echo "Deployment failed; old executable/downloads restored. Business data remains reset. Temporary rollback: $backup" >&2
   fi
   exit "$result"
 }
 trap finish EXIT
 "$root/stop.sh"
 stopped=1
-/usr/bin/sqlite3 "$root/data/yudesk.db" ".backup '$backup/yudesk.db'"
-test "$(/usr/bin/sqlite3 "$backup/yudesk.db" 'PRAGMA quick_check;')" = ok
+# The release policy intentionally starts with no devices, activations,
+# meetings, mappings, audit records or sessions. Do not copy this database to
+# backups. TLS keys, TURN secret and admin.key are separate files and survive.
+rm -f "$root/data/yudesk.db" "$root/data/yudesk.db-wal" "$root/data/yudesk.db-shm"
+find "$root/logs" -mindepth 1 -maxdepth 1 -type f -delete
 cp "$release/server/yudesk-relay" "$root/bin/yudesk-relay.next"
 chmod 700 "$root/bin/yudesk-relay.next"
 mv "$root/bin/yudesk-relay.next" "$root/bin/yudesk-relay"
@@ -140,6 +144,10 @@ lsof -nP -a -p "$(cat "$root/run/yudesk-relay.pid")" -iUDP:8233 >/dev/null
 lsof -nP -a -p "$(cat "$root/run/yudesk-relay.pid")" -iUDP:8254 >/dev/null
 lsof -nP -a -p "$(cat "$root/run/yudesk-relay.pid")" -iTCP:8254 >/dev/null
 committed=1
-echo "Deployed $name; backup: $backup"
+for history in "$root/releases" "$root/backups" "$root/staging"; do
+  test "$(cd "$history" && pwd -P)" = "$history"
+  find "$history" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+done
+echo "Deployed $name; business and deployment history cleared"
 "$root/status.sh"
 cat "$root/downloads/release.json"

@@ -125,7 +125,7 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		w.Header().Set("Cache-Control", "no-store")
 		if path == "/assets/dashboard.css" {
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
-			_, _ = w.Write([]byte(dashboardCSS))
+			_, _ = w.Write(append([]byte(dashboardCSS+"\n"), productTheme...))
 		} else if path == "/assets/conference.css" {
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
 			_, _ = w.Write([]byte(conferenceCSS))
@@ -190,6 +190,7 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 		Key       string `json:"key"`
 		Code      string `json:"code"`
 		Name      string `json:"name"`
+		Topic     string `json:"topic"`
 		MapID     string `json:"mapID"`
 		LocalPort int    `json:"localPort"`
 	}
@@ -218,7 +219,7 @@ func (d *unifiedDesk) serve(w http.ResponseWriter, r *http.Request) bool {
 	case "/api/local/pin/rotate":
 		_, err = d.device.RotatePIN()
 	case "/api/local/meeting/start":
-		_, err = d.device.StartMeeting(2 * time.Hour)
+		_, err = d.device.StartMeetingWithTopic(2*time.Hour, p.Topic)
 	case "/api/local/meeting/end":
 		d.device.EndMeeting()
 	case "/api/local/activate":

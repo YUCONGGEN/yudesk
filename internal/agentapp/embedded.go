@@ -59,6 +59,7 @@ type DeviceStatus struct {
 	FileDirectory    string            `json:"fileDirectory"`
 	Meeting          bool              `json:"meeting"`
 	MeetingCode      string            `json:"meetingCode,omitempty"`
+	MeetingTopic     string            `json:"meetingTopic,omitempty"`
 	MeetingUntil     time.Time         `json:"meetingUntil,omitempty"`
 	PortMapAvailable bool              `json:"portMapAvailable"`
 	PortMaps         []relay.PortMap   `json:"portMaps,omitempty"`
@@ -204,6 +205,7 @@ func (d *Device) Status() DeviceStatus {
 	if a.managementOnline && a.meetingUntil.After(time.Now()) && relay.IsMeetingCode(a.meetingPIN) {
 		s.Meeting = true
 		s.MeetingCode = a.meetingPIN
+		s.MeetingTopic = a.meetingTopic
 		s.MeetingUntil = a.meetingUntil
 	}
 	if s.Active {
@@ -275,6 +277,18 @@ func (d *Device) RotatePIN() (string, error) {
 // StartMeeting publishes only a short-lived lookup to the authenticated relay.
 // The same random code is then checked again inside the end-to-end channel.
 func (d *Device) StartMeeting(duration time.Duration) (string, error) {
+	return d.startMeeting(duration, "")
+}
+
+func (d *Device) StartMeetingWithTopic(duration time.Duration, topic string) (string, error) {
+	topic = strings.TrimSpace(topic)
+	if !relay.ValidMeetingTopic(topic) {
+		return "", errors.New("会议主题应为 1 到 64 个字符")
+	}
+	return d.startMeeting(duration, topic)
+}
+
+func (d *Device) startMeeting(duration time.Duration, topic string) (string, error) {
 	if duration <= 0 || duration > 8*time.Hour {
 		return "", errors.New("会议时长无效")
 	}
@@ -313,7 +327,11 @@ func (d *Device) StartMeeting(duration time.Duration) (string, error) {
 	if d.meetingOpen != nil {
 		info, err = d.meetingOpen(requestCtx)
 	} else {
-		info, err = relay.OpenMeeting(requestCtx, d.relayAddr, d.transport, deviceID, key)
+		if topic == "" {
+			info, err = relay.OpenMeeting(requestCtx, d.relayAddr, d.transport, deviceID, key)
+		} else {
+			info, err = relay.OpenMeetingWithTopic(requestCtx, d.relayAddr, d.transport, deviceID, topic, key)
+		}
 	}
 	if err != nil {
 		return "", err
@@ -330,6 +348,10 @@ func (d *Device) StartMeeting(duration time.Duration) (string, error) {
 	a.meetingGeneration++
 	generation := a.meetingGeneration
 	a.meetingPIN = info.Code
+	a.meetingTopic = info.Topic
+	if a.meetingTopic == "" {
+		a.meetingTopic = topic
+	}
 	a.meetingUntil = info.ExpiresAt
 	a.statusMu.Unlock()
 	time.AfterFunc(time.Until(info.ExpiresAt), func() { d.expireMeeting(generation) })
@@ -380,6 +402,7 @@ func (d *Device) clearMeetingLocked(generation uint64) bool {
 	meetingSession := a.meetingSession
 	a.meetingGeneration++
 	a.meetingPIN = ""
+	a.meetingTopic = ""
 	a.meetingUntil = time.Time{}
 	a.statusMu.Unlock()
 	if !wasOpen {

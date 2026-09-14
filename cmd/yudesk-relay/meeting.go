@@ -17,6 +17,7 @@ import (
 
 type meetingRoom struct {
 	deviceID   string
+	topic      string
 	expires    time.Time
 	conference *conferenceRoom
 }
@@ -33,8 +34,13 @@ func (b *broker) handleMeeting(c net.Conn, reader *bufio.Reader, hello relay.Hel
 		return
 	}
 	hello.ID = strings.ToUpper(strings.TrimSpace(hello.ID))
+	hello.Topic = strings.TrimSpace(hello.Topic)
 	if (hello.Action != "open" && hello.Action != "close") || len(hello.PublicKey) != ed25519.PublicKeySize || secureconn.DeviceID(hello.PublicKey) != hello.ID {
 		stop("DENIED", "invalid meeting request")
+		return
+	}
+	if hello.Action == "open" && hello.Topic != "" && !relay.ValidMeetingTopic(hello.Topic) {
+		stop("DENIED", "invalid meeting topic")
 		return
 	}
 	nonce := make([]byte, 32)
@@ -104,7 +110,7 @@ func (b *broker) handleMeeting(c net.Conn, reader *bufio.Reader, hello relay.Hel
 		}
 	}
 	if code != "" {
-		b.meetings[code] = meetingRoom{deviceID: hello.ID, expires: expires}
+		b.meetings[code] = meetingRoom{deviceID: hello.ID, topic: hello.Topic, expires: expires}
 		b.meetingDevices[hello.ID] = code
 	}
 	b.Unlock()
@@ -113,7 +119,7 @@ func (b *broker) handleMeeting(c net.Conn, reader *bufio.Reader, hello relay.Hel
 		return
 	}
 	b.accounts.Audit(account.AuditEntry{Action: "meeting_open", DeviceID: hello.ID, RemoteAddr: c.RemoteAddr().String()})
-	_ = send(relay.ControlMessage{Type: "meeting", Active: true, ActiveUntil: expires, Code: code})
+	_ = send(relay.ControlMessage{Type: "meeting", Active: true, ActiveUntil: expires, Code: code, Topic: hello.Topic})
 }
 
 func (b *broker) handleMeetingResolve(c net.Conn, code string) {
@@ -133,6 +139,7 @@ func (b *broker) handleMeetingResolve(c net.Conn, code string) {
 	if available {
 		if expiry, err := b.accounts.DeviceLicenseExpiry(room.deviceID); err == nil && expiry.After(now) {
 			result.ID = room.deviceID
+			result.Topic = room.topic
 			result.Active = true
 			result.ExpiresAt = room.expires
 			result.Error = ""

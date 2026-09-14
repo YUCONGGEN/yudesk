@@ -21,7 +21,7 @@ func TestFooterPresentAndOfflineAssets(t *testing.T) {
 			}
 		}
 	}
-	for _, path := range []string{"/assets/footer.css", "/assets/beian.svg"} {
+	for _, path := range []string{"/assets/footer.css", "/assets/beian.svg", "/assets/product-theme.css"} {
 		w := httptest.NewRecorder()
 		if !serveBrandAsset(w, httptest.NewRequest(http.MethodGet, path, nil)) || w.Body.Len() == 0 {
 			t.Fatalf("missing local asset %s", path)
@@ -36,8 +36,8 @@ func TestApplicationDialogsAreCustomStyled(t *testing.T) {
 			t.Fatalf("application UI contains browser-native dialog call %q", forbidden)
 		}
 	}
-	styles := dashboardCSS + string(windowStyle) + sessionCSS + conferenceCSS
-	for _, expected := range []string{".yu-dialog-danger", ".app-form-dialog", ".dialog-error", ".session-dialog", ".conference-member-info", ".conference-info-mark", "backdrop-filter"} {
+	styles := dashboardCSS + string(windowStyle) + sessionCSS + conferenceCSS + string(productTheme)
+	for _, expected := range []string{".yu-dialog-danger", ".app-form-dialog", ".dialog-error", ".session-dialog", ".conference-member-info", ".conference-info-mark", "backdrop-filter", "body[data-install-prompt]", "body[data-control][data-audio]"} {
 		if !strings.Contains(styles, expected) {
 			t.Errorf("custom dialog styling missing %q", expected)
 		}
@@ -50,7 +50,7 @@ func TestDashboardContainsMultipartyMeetingFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := output.String() + dashboardJS + dashboardCSS + conferenceCSS
-	for _, expected := range []string{"data-tab=\"meeting\"", "快速会议", "9 位会议号", "请输入姓名", "自己立即进入", "/api/local/meeting/start", "/api/local/meeting/end", "/api/local/meeting/resolve", "/api/local/conference", "RTCPeerConnection", "getUserMedia", "getDisplayMedia", "MediaRecorder", "转让主持人", "移出会议", "conferenceMemberSearch", "conference-grid-focused", "conferenceToast", "conferenceShareFailure", "preferredConferenceSharer", "transient user activation", `id="conferenceMinimize"`, `aria-label="最小化会议"`} {
+	for _, expected := range []string{"data-tab=\"meeting\"", "快速会议", "9 位会议号", "请输入姓名", "自己立即进入", "会议主题", "meetingTopic", "meetingHostStatus", "填写主题和姓名即可创建会议", "validMeetingTopic", "/api/local/meeting/start", "/api/local/meeting/end", "/api/local/meeting/resolve", "/api/local/conference", "RTCPeerConnection", "getUserMedia", "getDisplayMedia", "MediaRecorder", "转让主持人", "移出会议", "conferenceMemberSearch", "conference-grid-focused", "conferenceToast", "conferenceShareFailure", "preferredConferenceSharer", "transient user activation", `id="conferenceMinimize"`, `aria-label="最小化会议"`} {
 		if !strings.Contains(page, expected) {
 			t.Errorf("meeting dashboard does not contain %q", expected)
 		}
