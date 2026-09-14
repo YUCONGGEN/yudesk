@@ -7,12 +7,15 @@ umask 077
 root=/Users/yu/bin/yudesk
 name=${1:?release name required}
 revision=${2:?package revision required}
-source_hash=${3:?source archive SHA-256 required}
-amd64_hash=${4:?amd64 main SHA-256 required}
-arm64_hash=${5:?arm64 main SHA-256 required}
+build_commit=${3:?build commit required}
+source_hash=${4:?source archive SHA-256 required}
+amd64_hash=${5:?amd64 main SHA-256 required}
+arm64_hash=${6:?arm64 main SHA-256 required}
 case "$name" in ''|*[!a-zA-Z0-9._-]*|.*) exit 2;; esac
 case "$revision" in ''|*[!0-9]*) exit 2;; esac
 test "$revision" -gt 0
+case "$build_commit" in *[!0-9a-f]*) exit 2;; esac
+test "${#build_commit}" = 40
 for value in "$source_hash" "$amd64_hash" "$arm64_hash"; do
   case "$value" in *[!0-9a-f]*) exit 2;; esac
   test "${#value}" = 64
@@ -52,6 +55,7 @@ for arch in amd64 arm64; do
   launcher_sha=$(shasum -a 256 "$input/yudesk-launcher" | awk '{print $1}')
   (cd "$build/source" && env TMPDIR="$build/tmp" bash scripts/package-unix.sh \
     --target macos --arch "$arch" --version 2.0.0 --package-revision "$revision" \
+    --build-commit "$build_commit" \
     --macos-min-version 13.0 --staging-dir "$input" --output-dir "$build/output" \
     --main-sha256 "$main_sha" --helper-sha256 "$helper_sha" --launcher-sha256 "$launcher_sha")
   package="$build/output/YuDesk-2.0.0-$revision-macos-$arch.pkg"
