@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
+	"github.com/yudesk/yudesk/internal/relay"
 )
 
 const (
-	defaultTimeout = 3 * time.Second
+	defaultTimeout = 4500 * time.Millisecond
 	signalGrace    = 2 * time.Second
 	heartbeatEvery = 2 * time.Second
 	tetherTimeout  = 7 * time.Second
@@ -31,7 +32,18 @@ type Options struct {
 	// Nil uses DefaultOptions. An explicitly empty slice gathers LAN hosts only.
 	// Only stun: URLs using UDP are allowed; TURN and TCP are never used.
 	STUNURLs []string
-	// Timeout bounds the ICE attempt, including gathering. Zero means 3 seconds.
+	// ICEServers contains authenticated TURN/UDP servers supplied by the
+	// verified YuDesk relay for this one session. Callers must not populate it
+	// from untrusted UI input.
+	ICEServers []webrtc.ICEServer
+	// PortMapping asks PCP/UPnP-capable routers to map the single ICE UDP
+	// socket. It is enabled by DefaultOptions and remains false for explicit
+	// test/custom Options unless requested.
+	PortMapping bool
+	// pathV2 is set only by an authenticated relay policy. It enables extended
+	// ready-state path labels while mixed-version peers keep the V1 wire shape.
+	pathV2 bool
+	// Timeout bounds the ICE attempt, including gathering. Zero means 4.5 seconds.
 	// Values above 10 seconds are capped.
 	// Signaling has an additional 2-second allowance to agree on the result.
 	Timeout time.Duration
@@ -47,12 +59,52 @@ type Options struct {
 }
 
 func DefaultOptions() Options {
-	return Options{STUNURLs: []string{"stun:www.yucg.cn:8233"}, Timeout: defaultTimeout}
+	return Options{STUNURLs: []string{"stun:www.yucg.cn:8233", "stun:www.yucg.cn:8254"}, Timeout: defaultTimeout, PortMapping: true}
+}
+
+// WithRTCPolicy merges a relay-authenticated, session-bound ICE policy. Direct
+// host/srflx candidates retain higher ICE priority than TURN relay candidates,
+// so direct and low-latency UDP fallback race without a serial timeout.
+func (o Options) WithRTCPolicy(policy *relay.RTCPolicy) Options {
+	if policy == nil {
+		return o
+	}
+	o.STUNURLs = append([]string(nil), o.STUNURLs...)
+	o.ICEServers = append([]webrtc.ICEServer(nil), o.ICEServers...)
+	o.pathV2 = true
+	if policy.DirectTimeoutMS >= 500 && policy.DirectTimeoutMS <= 10000 {
+		o.Timeout = time.Duration(policy.DirectTimeoutMS) * time.Millisecond
+	}
+	for _, server := range policy.ICEServers {
+		var turnURLs []string
+		for _, raw := range server.URLs {
+			if len(raw) >= 5 && raw[:5] == "stun:" {
+				if !containsString(o.STUNURLs, raw) {
+					o.STUNURLs = append(o.STUNURLs, raw)
+				}
+				continue
+			}
+			turnURLs = append(turnURLs, raw)
+		}
+		if len(turnURLs) != 0 && policy.RelayEnabled {
+			o.ICEServers = append(o.ICEServers, webrtc.ICEServer{URLs: turnURLs, Username: server.Username, Credential: server.Credential, CredentialType: webrtc.ICECredentialTypePassword})
+		}
+	}
+	return o
+}
+
+func containsString(values []string, value string) bool {
+	for _, existing := range values {
+		if existing == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (o Options) normalized() Options {
 	if o.STUNURLs == nil {
-		o.STUNURLs = DefaultOptions().STUNURLs
+		o.STUNURLs = append([]string(nil), DefaultOptions().STUNURLs...)
 	}
 	if o.Timeout <= 0 {
 		o.Timeout = defaultTimeout

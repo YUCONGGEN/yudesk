@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -75,5 +76,51 @@ func TestStructuredAndLegacyRelayRejections(t *testing.T) {
 		if !errors.As(err, &rejection) {
 			t.Errorf("%q did not return RejectionError", test.line)
 		}
+	}
+}
+
+func TestExtendedOKCarriesSessionRTCPolicyAndPreservesBufferedData(t *testing.T) {
+	policy := &RTCPolicy{
+		ICEServers: []ICEServer{
+			{URLs: []string{"stun:relay.example:8233"}},
+			{URLs: []string{"turn:relay.example:8254?transport=udp"}, Username: "temporary", Credential: "secret"},
+		},
+		DirectTimeoutMS: 4200,
+		RelayEnabled:    true,
+	}
+	encoded, err := EncodeRTCPolicy(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = bufio.NewReader(conn).ReadString('\n')
+		_, _ = fmt.Fprintf(conn, "OK %s\napplication-bytes", encoded)
+	}()
+	conn, err := DialWithContext(context.Background(), ln.Addr().String(), DialOptions{}, Hello{Role: "viewer", ID: "test", PeerPathV2: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	got := PeerRTCPolicy(conn)
+	if got == nil || got.DirectTimeoutMS != policy.DirectTimeoutMS || !got.RelayEnabled || len(got.ICEServers) != 2 || got.ICEServers[1].Username != "temporary" {
+		t.Fatalf("unexpected policy: %+v", got)
+	}
+	buffer := make([]byte, len("application-bytes"))
+	if _, err = io.ReadFull(conn, buffer); err != nil || string(buffer) != "application-bytes" {
+		t.Fatalf("buffered data lost: %q, %v", buffer, err)
+	}
+	got.DirectTimeoutMS = 9999
+	if PeerRTCPolicy(conn).DirectTimeoutMS != policy.DirectTimeoutMS {
+		t.Fatal("PeerRTCPolicy did not return a defensive copy")
 	}
 }

@@ -9,6 +9,12 @@ test('coordinates account for letterbox offsets, scaling and out-of-frame drag',
   assert.deepEqual(point({clientX:1500,clientY:900},rect,1920,1080),{x:1919,y:1079});
   assert.equal(point({},rect,0,0),null);
 });
+test('full-frame fill removes side bars and preserves every desktop edge',()=>{
+  const rect={left:0,top:0,width:1000,height:800};
+  assert.deepEqual(point({clientX:500,clientY:400},rect,1920,1080),{x:960,y:540});
+  assert.deepEqual(point({clientX:0,clientY:400},rect,1920,1080),{x:0,y:540});
+  assert.deepEqual(point({clientX:999,clientY:799},rect,1920,1080),{x:1918,y:1078});
+});
 test('slow network preserves down / drag / up order and coalesces only moves',async()=>{
   const sent=[];let finish;
   const queue=new InputQueue(async batch=>{sent.push(...batch.events);if(sent.length===1)await new Promise(resolve=>finish=resolve);},async()=>sent.push({type:'release'}),error=>{throw error});

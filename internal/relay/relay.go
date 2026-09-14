@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,6 +30,10 @@ type Hello struct {
 	Token     string `json:"token"`
 	Auth      string `json:"auth,omitempty"`
 	PublicKey []byte `json:"publicKey,omitempty"`
+	// PeerPathV2 advertises support for the authenticated ICE policy returned
+	// on the final OK line. Older relays ignore it and older clients never
+	// receive the extended response, preserving wire compatibility.
+	PeerPathV2 bool `json:"peerPathV2,omitempty"`
 }
 
 type DialOptions struct {
@@ -105,21 +110,121 @@ func DialWithContext(ctx context.Context, addr string, options DialOptions, h He
 			c.Close()
 			return nil, readErr
 		}
-		switch strings.TrimSpace(line) {
+		trimmed := strings.TrimSpace(line)
+		switch trimmed {
 		case "WAIT", "PING":
 			continue
 		case "OK":
 			_ = c.SetReadDeadline(time.Time{})
-			if reader.Buffered() > 0 {
-				return &bufferedConn{Conn: c, reader: reader}, nil
-			}
-			return c, nil
+			return relayResultConn(c, reader, nil), nil
 		default:
+			if h.PeerPathV2 && strings.HasPrefix(trimmed, "OK ") {
+				policy, policyErr := decodeRTCPolicy(strings.TrimSpace(strings.TrimPrefix(trimmed, "OK ")))
+				if policyErr != nil {
+					c.Close()
+					return nil, policyErr
+				}
+				_ = c.SetReadDeadline(time.Time{})
+				return relayResultConn(c, reader, policy), nil
+			}
 			c.Close()
-			return nil, parseRelayRejection(strings.TrimSpace(line))
+			return nil, parseRelayRejection(trimmed)
 		}
 	}
 }
+
+const maxRTCPolicyBytes = 8 << 10
+
+// EncodeRTCPolicy serializes the temporary, session-bound ICE policy carried
+// by an extended relay OK response. It is exported for the relay server; the
+// result is safe on one line and contains no long-lived secret.
+func EncodeRTCPolicy(policy *RTCPolicy) (string, error) {
+	if err := validateRTCPolicy(policy); err != nil {
+		return "", err
+	}
+	raw, err := json.Marshal(policy)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) > maxRTCPolicyBytes {
+		return "", errors.New("relay RTC policy is too large")
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func decodeRTCPolicy(encoded string) (*RTCPolicy, error) {
+	if len(encoded) == 0 || len(encoded) > base64.RawURLEncoding.EncodedLen(maxRTCPolicyBytes) {
+		return nil, errors.New("invalid relay RTC policy size")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || len(raw) > maxRTCPolicyBytes {
+		return nil, errors.New("invalid relay RTC policy encoding")
+	}
+	var policy RTCPolicy
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&policy); err != nil {
+		return nil, errors.New("invalid relay RTC policy")
+	}
+	if err = decoder.Decode(new(any)); err != io.EOF {
+		return nil, errors.New("invalid trailing relay RTC policy data")
+	}
+	if err = validateRTCPolicy(&policy); err != nil {
+		return nil, err
+	}
+	return &policy, nil
+}
+
+func validateRTCPolicy(policy *RTCPolicy) error {
+	if policy == nil || policy.DirectTimeoutMS < 500 || policy.DirectTimeoutMS > 10000 || len(policy.ICEServers) == 0 || len(policy.ICEServers) > 8 {
+		return errors.New("invalid relay RTC policy")
+	}
+	for _, server := range policy.ICEServers {
+		if len(server.URLs) == 0 || len(server.URLs) > 4 || len(server.Username) > 512 || len(server.Credential) > 1024 {
+			return errors.New("invalid relay RTC server")
+		}
+		for _, value := range server.URLs {
+			if len(value) == 0 || len(value) > 512 || strings.ContainsAny(value, "\r\n") {
+				return errors.New("invalid relay RTC URL")
+			}
+		}
+	}
+	return nil
+}
+
+type rtcPolicyConn struct {
+	net.Conn
+	policy *RTCPolicy
+}
+
+func relayResultConn(conn net.Conn, reader *bufio.Reader, policy *RTCPolicy) net.Conn {
+	if reader.Buffered() > 0 {
+		conn = &bufferedConn{Conn: conn, reader: reader}
+	}
+	if policy != nil {
+		return &rtcPolicyConn{Conn: conn, policy: policy}
+	}
+	return conn
+}
+
+// PeerRTCPolicy returns a defensive copy of the authenticated, per-session
+// ICE policy attached by a compatible relay. Call it before wrapping conn.
+func PeerRTCPolicy(conn net.Conn) *RTCPolicy {
+	provider, ok := conn.(interface{ peerRTCPolicy() *RTCPolicy })
+	if !ok {
+		return nil
+	}
+	policy := provider.peerRTCPolicy()
+	if policy == nil {
+		return nil
+	}
+	raw, _ := json.Marshal(policy)
+	var copy RTCPolicy
+	_ = json.Unmarshal(raw, &copy)
+	return &copy
+}
+
+func (c *rtcPolicyConn) peerRTCPolicy() *RTCPolicy { return c.policy }
 
 func parseRelayRejection(line string) error {
 	if !strings.HasPrefix(line, "ERR ") {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -14,23 +15,28 @@ import (
 	"github.com/pion/sdp/v3"
 	"github.com/pion/stun/v4"
 	"github.com/pion/webrtc/v4"
+	"github.com/yudesk/yudesk/internal/natmap"
 )
 
 const channelLabel = "yudesk-peerpath-v1"
 
 type attempt struct {
-	pc        *webrtc.PeerConnection
-	mu        sync.Mutex
-	stream    *dataConn
-	closed    bool
-	opened    chan struct{}
-	failed    chan struct{}
-	failOnce  sync.Once
-	closeOnce sync.Once
+	pc         *webrtc.PeerConnection
+	allowRelay bool
+	udpMux     ice.UDPMux
+	mapping    natmap.Lease
+	mapped     bool
+	mu         sync.Mutex
+	stream     *dataConn
+	closed     bool
+	opened     chan struct{}
+	failed     chan struct{}
+	failOnce   sync.Once
+	closeOnce  sync.Once
 }
 
-func newAttempt(o Options, gatherBudget time.Duration) (*attempt, error) {
-	if len(o.STUNURLs) > 4 {
+func newAttempt(ctx context.Context, o Options, gatherBudget time.Duration) (*attempt, error) {
+	if len(o.STUNURLs) > 8 || len(o.ICEServers) > 4 {
 		return nil, errors.New("too many STUN URLs")
 	}
 	for _, url := range o.STUNURLs {
@@ -39,27 +45,76 @@ func newAttempt(o Options, gatherBudget time.Duration) (*attempt, error) {
 			return nil, errors.New("only UDP STUN URLs are allowed")
 		}
 	}
+	for _, server := range o.ICEServers {
+		if len(server.URLs) == 0 || len(server.URLs) > 4 || server.Username == "" || server.Credential == nil {
+			return nil, errors.New("invalid authenticated TURN server")
+		}
+		for _, url := range server.URLs {
+			u, err := stun.ParseURI(url)
+			if len(url) > 512 || err != nil || u.Scheme != stun.SchemeTypeTURN || u.Proto != stun.ProtoTypeUDP {
+				return nil, errors.New("only authenticated UDP TURN URLs are allowed")
+			}
+		}
+	}
 	var settings webrtc.SettingEngine
 	settings.DetachDataChannels()
 	settings.EnableDataChannelBlockWrite(true)
 	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4, webrtc.NetworkTypeUDP6})
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	settings.SetSTUNGatherTimeout(gatherBudget)
-	settings.SetICETimeouts(4*time.Second, 6*time.Second, time.Second)
+	disconnectedTimeout := min(4*time.Second, max(2*time.Second, o.Timeout))
+	failedTimeout := max(6*time.Second, o.Timeout+time.Second)
+	settings.SetICETimeouts(disconnectedTimeout, failedTimeout, time.Second)
 	settings.SetSCTPMaxReceiveBufferSize(bufferLimit)
 	settings.SetSCTPMaxMessageSize(chunkSize)
+	var udpMux ice.UDPMux
+	var mappingLease natmap.Lease
+	if o.PortMapping {
+		var udpSocket *net.UDPConn
+		var listenErr error
+		udpMux, udpSocket, listenErr = newMappedUDPMux()
+		if listenErr == nil {
+			settings.SetICEUDPMux(udpMux)
+			mapBudget := min(gatherBudget, 900*time.Millisecond)
+			mapCtx, cancelMap := context.WithTimeout(ctx, mapBudget)
+			localPort := uint16(udpSocket.LocalAddr().(*net.UDPAddr).Port)
+			mapping, mapErr := natmap.OpenUDP(mapCtx, udpSocket, natmap.Options{Timeout: mapBudget, Lifetime: 2 * time.Hour, ExternalPort: localPort, Description: "YuDesk P2P"})
+			cancelMap()
+			if mapErr == nil && mapping.ExternalPort == localPort && usableMappedAddress(mapping.ExternalIP) {
+				mappingLease = mapping.Lease
+				if rewriteErr := settings.SetICEAddressRewriteRules(webrtc.ICEAddressRewriteRule{
+					// Publish the mapped endpoint as an appended host candidate so
+					// Pion keeps the UDPMux socket/port that the router actually
+					// mapped. A synthetic srflx rewrite opens another random socket.
+					External: []string{mapping.ExternalIP.String()}, AsCandidateType: webrtc.ICECandidateTypeHost,
+					Mode: webrtc.ICEAddressRewriteAppend, Networks: []webrtc.NetworkType{webrtc.NetworkTypeUDP4},
+				}); rewriteErr != nil {
+					_ = mappingLease.Close()
+					mappingLease = nil
+				}
+			} else if mapErr == nil {
+				_ = mapping.Lease.Close()
+			}
+		}
+	}
 	if o.configure != nil {
 		o.configure(&settings)
 	}
-	config := webrtc.Configuration{}
+	config := webrtc.Configuration{ICEServers: append([]webrtc.ICEServer(nil), o.ICEServers...)}
 	if len(o.STUNURLs) != 0 {
-		config.ICEServers = []webrtc.ICEServer{{URLs: o.STUNURLs}}
+		config.ICEServers = append([]webrtc.ICEServer{{URLs: o.STUNURLs}}, config.ICEServers...)
 	}
 	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(config)
 	if err != nil {
+		if mappingLease != nil {
+			_ = mappingLease.Close()
+		}
+		if udpMux != nil {
+			_ = udpMux.Close()
+		}
 		return nil, err
 	}
-	a := &attempt{pc: pc, opened: make(chan struct{}), failed: make(chan struct{})}
+	a := &attempt{pc: pc, allowRelay: len(o.ICEServers) != 0, udpMux: udpMux, mapping: mappingLease, mapped: mappingLease != nil, opened: make(chan struct{}), failed: make(chan struct{})}
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		switch state {
 		case webrtc.PeerConnectionStateDisconnected, webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
@@ -109,7 +164,49 @@ func (a *attempt) close() {
 			_ = stream.Close()
 		}
 		_ = a.pc.GracefulClose()
+		if a.udpMux != nil {
+			_ = a.udpMux.Close()
+		}
+		if a.mapping != nil {
+			_ = a.mapping.Close()
+		}
 	})
+}
+
+func newMappedUDPMux() (ice.UDPMux, *net.UDPConn, error) {
+	udp4, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	if err != nil {
+		return nil, nil, err
+	}
+	port := udp4.LocalAddr().(*net.UDPAddr).Port
+	muxes := []ice.UDPMux{ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: udp4})}
+	seen := map[string]bool{}
+	if addresses, listErr := net.InterfaceAddrs(); listErr == nil {
+		for _, value := range addresses {
+			if len(muxes) >= 9 {
+				break
+			}
+			prefix, parseErr := netip.ParsePrefix(value.String())
+			if parseErr != nil {
+				continue
+			}
+			ip := prefix.Addr().Unmap()
+			if !ip.Is6() || !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || seen[ip.String()] {
+				continue
+			}
+			seen[ip.String()] = true
+			udp6, listenErr := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IP(ip.AsSlice()), Port: port})
+			if listenErr == nil {
+				muxes = append(muxes, ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: udp6}))
+			}
+		}
+	}
+	return ice.NewMultiUDPMuxDefault(muxes...), udp4, nil
+}
+
+func usableMappedAddress(address netip.Addr) bool {
+	address = address.Unmap()
+	return address.IsValid() && address.Is4() && !address.IsUnspecified() && !address.IsLoopback() && !address.IsMulticast()
 }
 
 func (a *attempt) description(ctx context.Context, offer bool, budget time.Duration) (string, string) {
@@ -162,7 +259,7 @@ func (a *attempt) description(ctx context.Context, offer bool, budget time.Durat
 		return "", "udp_unavailable"
 	}
 	result := strings.Join(kept, "\r\n")
-	if err = validateSDP(result); err != nil {
+	if err = validateSDP(result, a.allowRelay); err != nil {
 		return "", "rtc_unavailable"
 	}
 	return result, ""
@@ -170,7 +267,7 @@ func (a *attempt) description(ctx context.Context, offer bool, budget time.Durat
 
 // Validate before handing untrusted signaling to Pion. Fingerprints are
 // authenticated by base's E2E encryption; Pion performs DTLS verification.
-func validateSDP(raw string) error {
+func validateSDP(raw string, allowRelay bool) error {
 	if len(raw) == 0 || len(raw) > maxSDP {
 		return errors.New("invalid SDP size")
 	}
@@ -194,8 +291,9 @@ func validateSDP(raw string) error {
 			if err != nil {
 				return fmt.Errorf("invalid ICE candidate: %w", err)
 			}
-			if !c.NetworkType().IsUDP() || (c.Type() != ice.CandidateTypeHost && c.Type() != ice.CandidateTypeServerReflexive) || net.ParseIP(c.Address()) == nil || c.Component() != 1 {
-				return errors.New("only host/srflx UDP IP candidates are allowed")
+			allowedType := c.Type() == ice.CandidateTypeHost || c.Type() == ice.CandidateTypeServerReflexive || allowRelay && c.Type() == ice.CandidateTypeRelay
+			if !c.NetworkType().IsUDP() || !allowedType || net.ParseIP(c.Address()) == nil || c.Component() != 1 {
+				return errors.New("only authorized UDP ICE candidates are allowed")
 			}
 		case "fingerprint":
 			fields := strings.Fields(attr.Value)
@@ -215,30 +313,69 @@ func validateSDP(raw string) error {
 	return nil
 }
 
-func (a *attempt) ready(ctx context.Context) (*dataConn, string) {
+func (a *attempt) ready(ctx context.Context, allowRelay bool) (*dataConn, Info) {
 	select {
 	case <-a.opened:
 	case <-a.failed:
-		return nil, "ice_failed"
+		return nil, Info{Reason: "ice_failed"}
 	case <-ctx.Done():
-		return nil, "ice_timeout"
+		return nil, Info{Reason: "ice_timeout"}
 	}
 	select {
 	case <-a.failed:
-		return nil, "ice_failed"
+		return nil, Info{Reason: "ice_failed"}
 	default:
 	}
 	pair, err := a.pc.SCTP().Transport().ICETransport().GetSelectedCandidatePair()
-	if err != nil || pair == nil || pair.Local.Protocol != webrtc.ICEProtocolUDP || pair.Remote.Protocol != webrtc.ICEProtocolUDP || !directCandidate(pair.Local.Typ) || !directCandidate(pair.Remote.Typ) {
-		return nil, "ice_failed"
+	if err != nil || pair == nil || pair.Local.Protocol != webrtc.ICEProtocolUDP || pair.Remote.Protocol != webrtc.ICEProtocolUDP || !usableCandidate(pair.Local.Typ, allowRelay) || !usableCandidate(pair.Remote.Typ, allowRelay) {
+		return nil, Info{Reason: "ice_failed"}
+	}
+	info := Info{Mode: "p2p", Reason: "udp_direct"}
+	if pair.Local.Typ == webrtc.ICECandidateTypeRelay || pair.Remote.Typ == webrtc.ICECandidateTypeRelay {
+		info = Info{Mode: "udp-relay", Reason: "turn_udp"}
+	} else if isIPv6Candidate(pair.Local.Address) && isIPv6Candidate(pair.Remote.Address) {
+		info.Reason = "ipv6_direct"
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.stream, ""
+	return a.stream, info
 }
 
-func directCandidate(t webrtc.ICECandidateType) bool {
+func usableCandidate(t webrtc.ICECandidateType, allowRelay bool) bool {
 	// ICE can discover a peer-reflexive pair while probing signaled host/srflx
-	// candidates. It is still direct UDP; relay candidates are never permitted.
-	return t == webrtc.ICECandidateTypeHost || t == webrtc.ICECandidateTypeSrflx || t == webrtc.ICECandidateTypePrflx
+	// candidates. It is still direct UDP. Relay is permitted only when a
+	// session-bound TURN policy was delivered by the authenticated relay.
+	return t == webrtc.ICECandidateTypeHost || t == webrtc.ICECandidateTypeSrflx || t == webrtc.ICECandidateTypePrflx || allowRelay && t == webrtc.ICECandidateTypeRelay
+}
+
+func isIPv6Candidate(address string) bool {
+	ip := net.ParseIP(strings.Trim(address, "[]"))
+	return ip != nil && ip.To4() == nil
+}
+
+// endpointDependentMapping reports the common symmetric-NAT signature: the
+// same local UDP endpoint received different public ports from multiple STUN
+// destinations. Without UPnP/PCP or TURN, waiting the full ICE timeout cannot
+// make that candidate reachable and only delays the TCP fallback.
+func endpointDependentMapping(raw string) bool {
+	ports := map[string]map[int]bool{}
+	for _, line := range strings.Split(raw, "\r\n") {
+		if !strings.HasPrefix(line, "a=candidate:") {
+			continue
+		}
+		candidate, err := ice.UnmarshalCandidate(strings.TrimPrefix(line, "a=candidate:"))
+		if err != nil || candidate.Type() != ice.CandidateTypeServerReflexive || candidate.RelatedAddress() == nil {
+			continue
+		}
+		related := candidate.RelatedAddress()
+		key := related.Address + ":" + fmt.Sprint(related.Port)
+		if ports[key] == nil {
+			ports[key] = map[int]bool{}
+		}
+		ports[key][candidate.Port()] = true
+		if len(ports[key]) > 1 {
+			return true
+		}
+	}
+	return false
 }

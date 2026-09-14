@@ -14,7 +14,7 @@ cp "$ROOT/go.mod" "$ROOT/go.sum" "$STAGE/"
 # native storage; gomobile resolves Replace.Dir to an absolute path in gobind.
 cp -a "$ROOT/third_party" "$STAGE/"
 # gomobile's temporary module tidy also follows dependency test imports.
-for package in approval identity relay protocol secureconn security stream peerpath; do
+for package in approval identity relay protocol secureconn security stream peerpath natmap; do
   cp -a "$ROOT/internal/$package" "$STAGE/internal/"
 done
 cp -a "$ROOT/mobile/core" "$STAGE/mobile/"

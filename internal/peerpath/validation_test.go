@@ -11,7 +11,7 @@ import (
 )
 
 func TestSDPBoundsAndDirectOnlyCandidates(t *testing.T) {
-	a, err := newAttempt(hostOptions(), 100*time.Millisecond)
+	a, err := newAttempt(context.Background(), hostOptions(), 100*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,19 +37,59 @@ func TestSDPBoundsAndDirectOnlyCandidates(t *testing.T) {
 		"media":           strings.ReplaceAll(raw, "m=application", "m=video"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := validateSDP(invalid); err == nil {
+			if err := validateSDP(invalid, false); err == nil {
 				t.Fatal("accepted invalid SDP")
 			}
 		})
 	}
 	fields := strings.Fields(candidate)
 	fields[4] = "2001:db8::1"
-	if err = validateSDP(strings.Replace(raw, candidate, strings.Join(fields, " "), 1)); err != nil {
+	if err = validateSDP(strings.Replace(raw, candidate, strings.Join(fields, " "), 1), false); err != nil {
 		t.Fatalf("IPv6 rejected: %v", err)
 	}
 	fields[4] = "untrusted.local"
-	if err = validateSDP(strings.Replace(raw, candidate, strings.Join(fields, " "), 1)); err == nil {
+	if err = validateSDP(strings.Replace(raw, candidate, strings.Join(fields, " "), 1), false); err == nil {
 		t.Fatal("accepted remote DNS candidate")
+	}
+}
+
+func TestEndpointDependentMappingDetection(t *testing.T) {
+	base := "v=0\r\na=candidate:1 1 udp 1694498815 203.0.113.10 41000 typ srflx raddr 192.168.1.8 rport 52000\r\n"
+	if endpointDependentMapping(base) {
+		t.Fatal("one mapped endpoint was classified as endpoint-dependent")
+	}
+	symmetric := base + "a=candidate:2 1 udp 1694498814 203.0.113.10 41001 typ srflx raddr 192.168.1.8 rport 52000\r\n"
+	if !endpointDependentMapping(symmetric) {
+		t.Fatal("different public ports for one local endpoint were not detected")
+	}
+	differentInterfaces := base + "a=candidate:3 1 udp 1694498813 203.0.113.10 41001 typ srflx raddr 192.168.2.8 rport 52000\r\n"
+	if endpointDependentMapping(differentInterfaces) {
+		t.Fatal("different local interfaces were misclassified as symmetric NAT")
+	}
+}
+
+func TestReadyStateCompatibilityAndV2Paths(t *testing.T) {
+	tests := []struct {
+		name   string
+		value  signal
+		pathV2 bool
+		valid  bool
+	}{
+		{name: "v1-direct", value: signal{Ready: true}, valid: true},
+		{name: "v1-fallback", value: signal{Info: Info{Reason: "ice_timeout"}}, valid: true},
+		{name: "v1-rejects-v2-label", value: signal{Ready: true, Info: Info{Mode: "p2p", Reason: "udp_direct"}}},
+		{name: "v2-ipv4", value: signal{Ready: true, Info: Info{Mode: "p2p", Reason: "udp_direct"}}, pathV2: true, valid: true},
+		{name: "v2-ipv6", value: signal{Ready: true, Info: Info{Mode: "p2p", Reason: "ipv6_direct"}}, pathV2: true, valid: true},
+		{name: "v2-turn-udp", value: signal{Ready: true, Info: Info{Mode: "udp-relay", Reason: "turn_udp"}}, pathV2: true, valid: true},
+		{name: "v2-rejects-false-ready-path", value: signal{Info: Info{Mode: "p2p", Reason: "udp_direct"}}, pathV2: true},
+		{name: "v2-rejects-unknown", value: signal{Ready: true, Info: Info{Mode: "quic", Reason: "unknown"}}, pathV2: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validReady(test.value, test.pathV2); got != test.valid {
+				t.Fatalf("validReady=%v want %v for %+v", got, test.valid, test.value)
+			}
+		})
 	}
 }
 

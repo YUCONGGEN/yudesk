@@ -1,14 +1,13 @@
 package cn.yucg.yudesk;
 
-/** Pure geometry shared by rendering and input. Letterbox margins are inert. */
+/** Full-frame geometry shared by rendering and input; no bars or cropped edges. */
 final class ScreenMapping {
     final float left, top, width, height;
     final int sourceWidth, sourceHeight;
     ScreenMapping(int viewWidth, int viewHeight, int imageWidth, int imageHeight) {
         sourceWidth = imageWidth; sourceHeight = imageHeight;
-        float scale = Math.min((float) viewWidth / Math.max(1, imageWidth), (float) viewHeight / Math.max(1, imageHeight));
-        width = imageWidth * scale; height = imageHeight * scale;
-        left = (viewWidth - width) / 2; top = (viewHeight - height) / 2;
+        width = Math.max(1, viewWidth); height = Math.max(1, viewHeight);
+        left = 0; top = 0;
     }
     boolean contains(float x, float y) { return width > 0 && height > 0 && x >= left && y >= top && x < left + width && y < top + height; }
     int x(float x) { return Math.max(0, Math.min(sourceWidth - 1, (int) ((x - left) * sourceWidth / Math.max(1, width)))); }

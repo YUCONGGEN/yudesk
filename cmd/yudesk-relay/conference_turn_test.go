@@ -130,3 +130,27 @@ func TestConferenceTURNCredentialAndPeerPolicyBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteTURNPolicyIsBoundToActiveSession(t *testing.T) {
+	const deviceID = "00112233445566778899AABB"
+	const sessionID = "00112233445566778899aabbccddeeff"
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	b := &broker{active: map[string]activeSession{deviceID: {agent: left, viewer: right, owner: "device:" + deviceID, id: sessionID}}}
+	m := &conferenceTURN{owner: b, config: conferenceTURNConfig{PublicAddress: "relay.example:8254", Realm: "yudesk"}, secret: []byte(strings.Repeat("remote-secret-", 3))}
+	policy := m.remotePolicy(deviceID, sessionID, "viewer", "stun:relay.example:8233", 3700)
+	if !policy.RelayEnabled || policy.DirectTimeoutMS != 3700 || len(policy.ICEServers) != 3 {
+		t.Fatalf("invalid remote policy: %+v", policy)
+	}
+	credential := policy.ICEServers[len(policy.ICEServers)-1]
+	if len(credential.URLs) != 1 || credential.URLs[0] != "turn:relay.example:8254?transport=udp" || !m.alive(credential.Username) {
+		t.Fatalf("remote TURN credential not active: %+v", credential)
+	}
+	b.Lock()
+	delete(b.active, deviceID)
+	b.Unlock()
+	if m.alive(credential.Username) {
+		t.Fatal("ended remote session retained TURN authorization")
+	}
+}

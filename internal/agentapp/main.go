@@ -239,7 +239,7 @@ func Main() {
 				return
 			}
 			a.setRelayStatus("已启动，正在等待控制端连接", false, "")
-			c, e := relay.DialWithContext(ctx, *relayAddr, options, relay.Hello{Role: "agent", ID: id.ID, Name: a.name, PIN: id.PIN, Token: *relayToken, Auth: *relayAuth, PublicKey: id.PrivateKey.Public().(ed25519.PublicKey)})
+			c, e := relay.DialWithContext(ctx, *relayAddr, options, relay.Hello{Role: "agent", ID: id.ID, Name: a.name, PIN: id.PIN, Token: *relayToken, Auth: *relayAuth, PublicKey: id.PrivateKey.Public().(ed25519.PublicKey), PeerPathV2: true})
 			if e != nil {
 				switch relay.RejectionCode(e) {
 				case "STOP", "DISABLED", "DELETED", "DENIED", "EXPIRED":
@@ -905,6 +905,7 @@ func tlsListen(addr string, config *tls.Config) (net.Listener, error) {
 
 func (a *agent) handle(raw net.Conn) {
 	defer raw.Close()
+	peerPolicy := relay.PeerRTCPolicy(raw)
 	if !a.authenticationAllowed() {
 		log.Printf("connection rejected: pairing temporarily locked")
 		return
@@ -1060,6 +1061,7 @@ func (a *agent) handle(raw net.Conn) {
 		if a.peerOptions != nil {
 			options = *a.peerOptions
 		}
+		options = options.WithRTCPolicy(peerPolicy)
 		next, route, err := peerpath.Negotiate(ctx, base, "agent", read, options)
 		if err != nil {
 			log.Printf("peer transport negotiation failed: %v", err)

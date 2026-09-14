@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -168,6 +169,53 @@ type brokerPeerpathResult struct {
 	conn *protocol.Conn
 	info peerpath.Info
 	err  error
+}
+
+func TestBrokerDeliversSessionBoundRemoteRTCPolicyToV2Peers(t *testing.T) {
+	f := newBrokerPeerpathFixture(t, true, 0)
+	f.b.Lock()
+	f.b.conferenceSTUN = "stun:relay.example:8233"
+	f.b.remoteDirectTimeoutMS = 3200
+	f.b.conferenceTURN = &conferenceTURN{owner: f.b, config: conferenceTURNConfig{PublicAddress: "relay.example:8254", Realm: "yudesk"}, secret: []byte("temporary-test-secret-which-is-long-enough")}
+	f.b.Unlock()
+	type dialResult struct {
+		conn   net.Conn
+		policy *relay.RTCPolicy
+		err    error
+	}
+	pending := make(chan dialResult, 2)
+	for _, role := range []string{"agent", "viewer"} {
+		go func() {
+			hello := f.hello(role)
+			hello.PeerPathV2 = true
+			conn, err := relay.DialWithContext(f.ctx, f.address, f.dial, hello)
+			if err != nil {
+				pending <- dialResult{err: err}
+				return
+			}
+			f.track(conn)
+			pending <- dialResult{conn: conn, policy: relay.PeerRTCPolicy(conn)}
+		}()
+	}
+	results := []dialResult{brokerPeerpathAwait(t, "first V2 relay policy", pending), brokerPeerpathAwait(t, "second V2 relay policy", pending)}
+	usernames := map[string]bool{}
+	for _, result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		defer result.conn.Close()
+		if result.policy == nil || !result.policy.RelayEnabled || result.policy.DirectTimeoutMS != 3200 || len(result.policy.ICEServers) != 3 {
+			t.Fatalf("missing remote RTC policy: %+v", result.policy)
+		}
+		turn := result.policy.ICEServers[len(result.policy.ICEServers)-1]
+		if len(turn.URLs) != 1 || !strings.Contains(turn.URLs[0], "transport=udp") || !f.b.conferenceTURN.alive(turn.Username) {
+			t.Fatalf("invalid session TURN policy: %+v", turn)
+		}
+		usernames[turn.Username] = true
+	}
+	if len(usernames) != 2 {
+		t.Fatal("agent and viewer received the same TURN identity")
+	}
 }
 
 func (f *brokerPeerpathFixture) hello(role string) relay.Hello {

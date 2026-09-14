@@ -171,31 +171,54 @@ func (m *conferenceTURN) password(username string) string {
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
-func (m *conferenceTURN) identity(username string) (room, participant string, ok bool) {
+type turnIdentity struct {
+	kind, scope, participant, session, role string
+}
+
+func (m *conferenceTURN) credentialIdentity(username string) (turnIdentity, bool) {
 	parts := strings.Split(username, ":")
-	if len(parts) != 3 || !relay.IsMeetingCode(parts[1]) || len(parts[2]) != 24 || strings.Trim(parts[2], "0123456789abcdef") != "" {
-		return "", "", false
+	now := time.Now().Unix()
+	if len(parts) < 3 {
+		return turnIdentity{}, false
 	}
 	expires, err := strconv.ParseInt(parts[0], 10, 64)
-	now := time.Now().Unix()
 	if err != nil || expires <= now || expires > now+int64(conferenceTURNCredentialLifetime/time.Second)+60 {
+		return turnIdentity{}, false
+	}
+	if len(parts) == 3 && relay.IsMeetingCode(parts[1]) && len(parts[2]) == 24 && strings.Trim(strings.ToLower(parts[2]), "0123456789abcdef") == "" {
+		return turnIdentity{kind: "conference", scope: parts[1], participant: strings.ToLower(parts[2])}, true
+	}
+	if len(parts) == 5 && parts[1] == "remote" && len(parts[2]) == 24 && strings.Trim(strings.ToLower(parts[2]), "0123456789abcdef") == "" &&
+		len(parts[3]) == 32 && strings.Trim(strings.ToLower(parts[3]), "0123456789abcdef") == "" && (parts[4] == "agent" || parts[4] == "viewer") {
+		return turnIdentity{kind: "remote", scope: strings.ToUpper(parts[2]), participant: parts[4], session: strings.ToLower(parts[3]), role: parts[4]}, true
+	}
+	return turnIdentity{}, false
+}
+
+func (m *conferenceTURN) identity(username string) (room, participant string, ok bool) {
+	identity, valid := m.credentialIdentity(username)
+	if !valid {
 		return "", "", false
 	}
-	return parts[1], parts[2], true
+	return identity.scope, identity.participant, true
 }
 
 func (m *conferenceTURN) alive(username string) bool {
-	roomCode, participantID, valid := m.identity(username)
+	identity, valid := m.credentialIdentity(username)
 	if !valid {
 		return false
 	}
 	m.owner.Lock()
 	defer m.owner.Unlock()
-	room, exists := m.owner.meetings[roomCode]
+	if identity.kind == "remote" {
+		session, exists := m.owner.active[identity.scope]
+		return exists && session.id == identity.session && ((identity.role == "agent" && session.agent != nil) || (identity.role == "viewer" && session.viewer != nil))
+	}
+	room, exists := m.owner.meetings[identity.scope]
 	if !exists || room.conference == nil || !room.expires.After(time.Now()) {
 		return false
 	}
-	participant := room.conference.participants[participantID]
+	participant := room.conference.participants[identity.participant]
 	if participant == nil {
 		return false
 	}
@@ -205,6 +228,15 @@ func (m *conferenceTURN) alive(username string) bool {
 	default:
 		return true
 	}
+}
+
+func appendUniqueICEServer(servers []relay.ICEServer, server relay.ICEServer) []relay.ICEServer {
+	for _, existing := range servers {
+		if len(existing.URLs) == len(server.URLs) && strings.Join(existing.URLs, "\x00") == strings.Join(server.URLs, "\x00") && existing.Username == server.Username {
+			return servers
+		}
+	}
+	return append(servers, server)
 }
 
 func (m *conferenceTURN) policy(room, participant string, roomExpiry time.Time, stunURL string, directTimeoutMS int) *relay.RTCPolicy {
@@ -222,6 +254,31 @@ func (m *conferenceTURN) policy(room, participant string, roomExpiry time.Time, 
 			"turn:" + m.config.PublicAddress + "?transport=udp",
 			"turn:" + m.config.PublicAddress + "?transport=tcp",
 		},
+		Username: username, Credential: m.password(username),
+	})
+	policy.RelayEnabled = true
+	return policy
+}
+
+// remotePolicy is delivered only after both desktop endpoints have passed the
+// relay's account/device checks. The credential is also tied to activeSession.id,
+// so reconnecting or an administrator disconnect immediately revokes it.
+func (m *conferenceTURN) remotePolicy(deviceID, sessionID, role, stunURL string, directTimeoutMS int) *relay.RTCPolicy {
+	if directTimeoutMS < 500 || directTimeoutMS > 10000 {
+		directTimeoutMS = 4500
+	}
+	policy := &relay.RTCPolicy{DirectTimeoutMS: directTimeoutMS}
+	if strings.HasPrefix(stunURL, "stun:") {
+		policy.ICEServers = appendUniqueICEServer(policy.ICEServers, relay.ICEServer{URLs: []string{stunURL}})
+	}
+	// A second destination port lets ICE detect endpoint-dependent mappings
+	// without depending on a public third-party STUN service. TURN listeners
+	// answer unauthenticated STUN binding requests as required by RFC 8656.
+	policy.ICEServers = appendUniqueICEServer(policy.ICEServers, relay.ICEServer{URLs: []string{"stun:" + m.config.PublicAddress}})
+	expires := time.Now().Add(conferenceTURNCredentialLifetime)
+	username := fmt.Sprintf("%d:remote:%s:%s:%s", expires.Unix(), strings.ToLower(deviceID), strings.ToLower(sessionID), role)
+	policy.ICEServers = append(policy.ICEServers, relay.ICEServer{
+		URLs:     []string{"turn:" + m.config.PublicAddress + "?transport=udp"},
 		Username: username, Credential: m.password(username),
 	})
 	policy.RelayEnabled = true
@@ -252,11 +309,11 @@ func (m *conferenceTURN) permission(_ net.Addr, ip net.IP) bool {
 func (m *conferenceTURN) Validate() error { return m.generator.Validate() }
 
 func (m *conferenceTURN) AllocatePacketConn(config turn.AllocateListenerConfig) (net.PacketConn, net.Addr, error) {
-	room, participant, valid := m.identity(config.UserID)
+	identity, valid := m.credentialIdentity(config.UserID)
 	if !valid {
 		return nil, nil, errors.New("invalid conference relay identity")
 	}
-	user := room + ":" + participant
+	user := identity.kind + ":" + identity.scope + ":" + identity.participant + ":" + identity.session
 	if config.RequestedPort != 0 && (config.RequestedPort < m.config.RelayMinPort || config.RequestedPort > m.config.RelayMaxPort) {
 		return nil, nil, errors.New("requested conference relay port outside configured range")
 	}

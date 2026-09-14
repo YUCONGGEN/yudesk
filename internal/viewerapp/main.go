@@ -510,7 +510,7 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 	var raw net.Conn
 	var err error
 	if config.relayAddr != "" {
-		raw, err = relay.DialWithContext(sessionCtx, config.relayAddr, relay.DialOptions{TLS: config.relayTLS, CAFile: config.relayCA, Fingerprint: config.relayFingerprint, Insecure: config.relayInsecure}, relay.Hello{Role: "viewer", ID: config.deviceID, Token: config.relayToken, Auth: config.relayAuth})
+		raw, err = relay.DialWithContext(sessionCtx, config.relayAddr, relay.DialOptions{TLS: config.relayTLS, CAFile: config.relayCA, Fingerprint: config.relayFingerprint, Insecure: config.relayInsecure}, relay.Hello{Role: "viewer", ID: config.deviceID, Token: config.relayToken, Auth: config.relayAuth, PeerPathV2: true})
 	} else {
 		raw, err = (&tls.Dialer{NetDialer: &net.Dialer{Timeout: 8 * time.Second, KeepAlive: 30 * time.Second}, Config: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}}).DialContext(sessionCtx, "tcp", config.agentAddr)
 	}
@@ -529,7 +529,7 @@ func runViewerSession(config viewerConfig, viewerDirectory, accessToken string) 
 		mode = "control"
 	}
 	var wire *measuredConn
-	pathOptions := peerpath.DefaultOptions()
+	pathOptions := peerpath.DefaultOptions().WithRTCPolicy(relay.PeerRTCPolicy(raw))
 	pathOptions.Wrap = func(conn net.Conn) net.Conn { wire = &measuredConn{Conn: conn}; return wire }
 	pc, authResponse, route, err := peerpath.Authenticate(sessionCtx, secured, map[string]any{"pin": config.pin, "mode": mode, "meeting": config.meeting, "audio": config.audio, "audioOnDemand": true, "interleaveV1": true, "p2pV1": config.relayAddr != ""}, pathOptions)
 	if err != nil {

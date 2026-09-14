@@ -19,6 +19,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 	"github.com/yudesk/yudesk/internal/protocol"
+	"github.com/yudesk/yudesk/internal/relay"
 	"github.com/yudesk/yudesk/internal/secureconn"
 )
 
@@ -28,21 +29,44 @@ type outcome struct {
 	err  error
 }
 
+func TestAuthenticatedRTCPolicyMergesMultiSTUNAndUDPRelay(t *testing.T) {
+	o := DefaultOptions().WithRTCPolicy(&relay.RTCPolicy{
+		ICEServers: []relay.ICEServer{
+			{URLs: []string{"stun:relay.example:8233"}},
+			{URLs: []string{"turn:relay.example:8254?transport=udp"}, Username: "temporary", Credential: "password"},
+		},
+		DirectTimeoutMS: 3900,
+		RelayEnabled:    true,
+	})
+	if o.Timeout != 3900*time.Millisecond || len(o.STUNURLs) < 2 || !containsString(o.STUNURLs, "stun:relay.example:8233") || len(o.ICEServers) != 1 {
+		t.Fatalf("policy not merged: %+v", o)
+	}
+	a, err := newAttempt(context.Background(), o, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("valid UDP TURN policy rejected: %v", err)
+	}
+	a.close()
+	o.ICEServers[0].URLs = []string{"turn:relay.example:8254?transport=tcp"}
+	if _, err := newAttempt(context.Background(), o, 100*time.Millisecond); err == nil {
+		t.Fatal("TURN/TCP unexpectedly accepted in low-latency path")
+	}
+}
+
 func hostOptions() Options {
 	return Options{STUNURLs: []string{}, Timeout: 2 * time.Second, configure: func(s *webrtc.SettingEngine) { s.SetIncludeLoopbackCandidate(true) }}
 }
 
 func TestLocalSDPIsValid(t *testing.T) {
-	a, err := newAttempt(hostOptions(), 200*time.Millisecond)
+	a, err := newAttempt(context.Background(), hostOptions(), 200*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.close()
 	raw, reason := a.description(context.Background(), true, 200*time.Millisecond)
 	if raw == "" {
-		t.Fatalf("SDP generation %s: %v\n%s", reason, validateSDP(a.pc.LocalDescription().SDP), a.pc.LocalDescription().SDP)
+		t.Fatalf("SDP generation %s: %v\n%s", reason, validateSDP(a.pc.LocalDescription().SDP, false), a.pc.LocalDescription().SDP)
 	}
-	if err := validateSDP(raw); err != nil {
+	if err := validateSDP(raw, false); err != nil {
 		t.Fatal(err)
 	}
 }

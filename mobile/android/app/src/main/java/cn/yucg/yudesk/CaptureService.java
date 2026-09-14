@@ -48,7 +48,7 @@ public final class CaptureService extends Service {
         @Override public void onDisplayRemoved(int id){}
         @Override public void onDisplayChanged(int id){if(Build.VERSION.SDK_INT<34&&id==android.view.Display.DEFAULT_DISPLAY){DisplayMetrics m=metrics();resize(m.widthPixels,m.heightPixels);}}
     };
-    @Override public void onCreate(){super.onCreate();app=(YuDeskApp)getApplication();NotificationManager nm=getSystemService(NotificationManager.class);nm.createNotificationChannel(new NotificationChannel(CAPTURE,"屏幕共享状态",NotificationManager.IMPORTANCE_LOW));nm.createNotificationChannel(new NotificationChannel(REQUEST,"远程连接请求",NotificationManager.IMPORTANCE_HIGH));}
+    @Override public void onCreate(){super.onCreate();MulticastLease.acquire(this);app=(YuDeskApp)getApplication();NotificationManager nm=getSystemService(NotificationManager.class);nm.createNotificationChannel(new NotificationChannel(CAPTURE,"屏幕共享状态",NotificationManager.IMPORTANCE_LOW));nm.createNotificationChannel(new NotificationChannel(REQUEST,"远程连接请求",NotificationManager.IMPORTANCE_HIGH));}
     private PendingIntent open(){return PendingIntent.getActivity(this,1,new Intent(this,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);}
     private Notification notification(){PendingIntent stop=PendingIntent.getService(this,2,new Intent(this,CaptureService.class).setAction(STOP),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);return new Notification.Builder(this,CAPTURE).setSmallIcon(R.drawable.ic_notification).setContentTitle("YuDesk · 屏幕共享已授权").setContentText("获准连接后发送屏幕；点击查看，随时停止。").setContentIntent(open()).setOngoing(true).addAction(new Notification.Action.Builder(null,"停止共享",stop).build()).build();}
     @Override public int onStartCommand(Intent intent,int flags,int startId){
@@ -116,7 +116,7 @@ public final class CaptureService extends Service {
         if(displayListenerRegistered){FailureBoundary.runQuietly(()->getSystemService(DisplayManager.class).unregisterDisplayListener(displayChanges));displayListenerRegistered=false;}
         getSystemService(NotificationManager.class).cancel(8);
         if(capture!=null){capture.removeCallbacksAndMessages(null);capture.post(()->{if(display!=null){FailureBoundary.runQuietly(display::release);display=null;}if(reader!=null){FailureBoundary.runQuietly(reader::close);reader=null;}if(projection!=null){FailureBoundary.runQuietly(projection::stop);projection=null;}recycle();if(captureThread!=null)captureThread.quitSafely();});}
-        stopForeground(STOP_FOREGROUND_REMOVE);super.onDestroy();
+        stopForeground(STOP_FOREGROUND_REMOVE);MulticastLease.release();super.onDestroy();
     }
     @Override public IBinder onBind(Intent intent){return null;}
 

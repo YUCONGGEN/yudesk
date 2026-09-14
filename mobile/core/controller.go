@@ -109,7 +109,7 @@ func (e *Engine) connect(code, pin string, control, meeting bool) (*Session, err
 	if targetID == e.identity.ID {
 		return nil, errors.New("不能连接本机")
 	}
-	raw, err := relay.DialWithContext(ctx, relayAddress, relayOptions, relay.Hello{Role: "viewer", ID: targetID})
+	raw, err := relay.DialWithContext(ctx, relayAddress, relayOptions, relay.Hello{Role: "viewer", ID: targetID, PeerPathV2: true})
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +126,7 @@ func (e *Engine) connect(code, pin string, control, meeting bool) (*Session, err
 	if e.peerOptions != nil {
 		options = *e.peerOptions
 	}
+	options = options.WithRTCPolicy(relay.PeerRTCPolicy(raw))
 	s, err := openSessionWithMode(ctx, secured, pin, control, meeting, options)
 	if err != nil {
 		return nil, err

@@ -33,11 +33,12 @@ import (
 )
 
 type waiting struct {
-	conn    net.Conn
-	role    string
-	owner   string
-	ready   chan net.Conn
-	signals *waitingSignals
+	conn       net.Conn
+	role       string
+	owner      string
+	ready      chan net.Conn
+	signals    *waitingSignals
+	peerPathV2 bool
 }
 
 // Serialize WAIT/PING/OK so signalling can never follow the final OK into the
@@ -49,7 +50,17 @@ type waitingSignals struct {
 type activeSession struct {
 	agent, viewer net.Conn
 	owner         string
+	id            string
 }
+
+func newRemoteSessionID() string {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(raw)
+}
+
 type broker struct {
 	sync.Mutex
 	devices                   map[string]waiting
@@ -68,6 +79,7 @@ type broker struct {
 	conferenceTURN            *conferenceTURN
 	conferenceSTUN            string
 	conferenceDirectTimeoutMS int
+	remoteDirectTimeoutMS     int
 	portMaps                  map[string]*serverPortMap
 	portByNumber              map[int]string
 	portMapServer             string
@@ -105,6 +117,7 @@ func main() {
 	conferenceTURNRelayMin := flag.Int("conference-turn-relay-min-port", 20200, "first conference TURN UDP relay port")
 	conferenceTURNRelayMax := flag.Int("conference-turn-relay-max-port", 20295, "last conference TURN UDP relay port")
 	conferenceDirectTimeout := flag.Int("conference-direct-timeout-ms", 3000, "P2P conference timeout before TURN fallback")
+	remoteDirectTimeout := flag.Int("remote-direct-timeout-ms", 4500, "adaptive remote desktop ICE budget including UDP relay fallback")
 	frpPublic := flag.String("frp-public", "", "public FRP control address; empty disables managed port mappings")
 	frpPluginHTTP := flag.String("frp-plugin-http", "127.0.0.1:8236", "loopback HTTP address used only by the local frps authorization plugin")
 	frpCertFile := flag.String("frp-cert", "", "PEM certificate used by frps; required with -frp-public")
@@ -118,6 +131,9 @@ func main() {
 	}
 	if *conferenceDirectTimeout < 1000 || *conferenceDirectTimeout > 30000 {
 		log.Fatal("-conference-direct-timeout-ms must be 1000-30000")
+	}
+	if *remoteDirectTimeout < 1000 || *remoteDirectTimeout > 10000 {
+		log.Fatal("-remote-direct-timeout-ms must be 1000-10000")
 	}
 	if *conferenceTURNListen != "" && (*conferenceTURNPublic == "" || *conferenceTURNSecret == "") {
 		log.Fatal("-conference-turn-public and -conference-turn-secret-file are required with -conference-turn")
@@ -199,7 +215,7 @@ func main() {
 		}
 		portMapCertificate = string(certificate)
 	}
-	b := &broker{devices: map[string]waiting{}, active: map[string]activeSession{}, stopRequests: map[string]string{}, token: *token, accounts: store, deviceLicenses: *deviceLicenses, autoActivate: autoActivate, conferenceSTUN: conferenceSTUN, conferenceDirectTimeoutMS: *conferenceDirectTimeout, portMaps: map[string]*serverPortMap{}, portByNumber: map[int]string{}, portMapServer: *frpPublic, portMapCertificate: portMapCertificate, portMapHook: *frpPortHook}
+	b := &broker{devices: map[string]waiting{}, active: map[string]activeSession{}, stopRequests: map[string]string{}, token: *token, accounts: store, deviceLicenses: *deviceLicenses, autoActivate: autoActivate, conferenceSTUN: conferenceSTUN, conferenceDirectTimeoutMS: *conferenceDirectTimeout, remoteDirectTimeoutMS: *remoteDirectTimeout, portMaps: map[string]*serverPortMap{}, portByNumber: map[int]string{}, portMapServer: *frpPublic, portMapCertificate: portMapCertificate, portMapHook: *frpPortHook}
 	if *frpPublic != "" {
 		if cleanupErr := b.cleanupPortMapPorts(); cleanupErr != nil {
 			log.Printf("cannot clean every stale managed port; FRP authorization still rejects them: %v", cleanupErr)
@@ -422,7 +438,7 @@ func (b *broker) handle(c net.Conn) {
 		old, ok := b.devices[h.ID]
 		if !ok {
 			signals.Lock()
-			b.devices[h.ID] = waiting{conn: c, role: h.Role, owner: owner, ready: ready, signals: signals}
+			b.devices[h.ID] = waiting{conn: c, role: h.Role, owner: owner, ready: ready, signals: signals, peerPathV2: h.PeerPathV2}
 			b.Unlock()
 			b.accounts.Audit(account.AuditEntry{Username: owner, Action: "relay_wait", DeviceID: h.ID, RemoteAddr: c.RemoteAddr().String(), Detail: h.Role})
 			_, _ = fmt.Fprintln(c, "WAIT")
@@ -439,7 +455,7 @@ func (b *broker) handle(c net.Conn) {
 			if b.active == nil {
 				b.active = map[string]activeSession{}
 			}
-			active := activeSession{owner: owner}
+			active := activeSession{owner: owner, id: newRemoteSessionID()}
 			if h.Role == "agent" {
 				active.agent, active.viewer = c, old.conn
 			} else {
@@ -447,15 +463,34 @@ func (b *broker) handle(c net.Conn) {
 			}
 			b.active[h.ID] = active
 			b.Unlock()
+			oldResponse, currentResponse := "OK", "OK"
+			if old.peerPathV2 && h.PeerPathV2 && b.conferenceTURN != nil && active.id != "" {
+				responses := map[string]string{}
+				valid := true
+				for _, role := range []string{"agent", "viewer"} {
+					policy := b.conferenceTURN.remotePolicy(h.ID, active.id, role, b.conferenceSTUN, b.remoteDirectTimeoutMS)
+					encoded, encodeErr := relay.EncodeRTCPolicy(policy)
+					if encodeErr != nil {
+						log.Printf("remote ICE policy encoding failed for %s: %v", h.ID, encodeErr)
+						valid = false
+						break
+					}
+					responses[role] = "OK " + encoded
+				}
+				if valid {
+					oldResponse = responses[old.role]
+					currentResponse = responses[h.Role]
+				}
+			}
 			if old.signals != nil {
 				old.signals.Lock()
 				old.signals.paired = true
 			}
-			_, _ = fmt.Fprintln(old.conn, "OK")
+			_, _ = fmt.Fprintln(old.conn, oldResponse)
 			if old.signals != nil {
 				old.signals.Unlock()
 			}
-			_, _ = fmt.Fprintln(c, "OK")
+			_, _ = fmt.Fprintln(c, currentResponse)
 			old.ready <- c
 			b.accounts.Audit(account.AuditEntry{Username: owner, Action: "relay_paired", DeviceID: h.ID, RemoteAddr: c.RemoteAddr().String()})
 			paired = true

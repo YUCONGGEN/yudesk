@@ -31,7 +31,7 @@ func (e *Engine) agentLoop(ctx context.Context, generation uint64) {
 	}()
 	backoff := time.Second
 	for ctx.Err() == nil {
-		raw, err := relay.DialWithContext(ctx, relayAddress, relayOptions, relay.Hello{Role: "agent", ID: e.identity.ID, Name: e.name, PublicKey: e.identity.PrivateKey.Public().(ed25519.PublicKey)})
+		raw, err := relay.DialWithContext(ctx, relayAddress, relayOptions, relay.Hello{Role: "agent", ID: e.identity.ID, Name: e.name, PublicKey: e.identity.PrivateKey.Public().(ed25519.PublicKey), PeerPathV2: true})
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -130,6 +130,7 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	defer raw.Close()
+	peerPolicy := relay.PeerRTCPolicy(raw)
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	defer stop()
 	_ = raw.SetDeadline(time.Now().Add(10 * time.Second))
@@ -241,6 +242,7 @@ func (e *Engine) serveAgent(parent context.Context, raw net.Conn) {
 		if e.peerOptions != nil {
 			options = *e.peerOptions
 		}
+		options = options.WithRTCPolicy(peerPolicy)
 		next, _, err := peerpath.Negotiate(ctx, base, "agent", read, options)
 		if err != nil {
 			return
